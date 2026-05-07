@@ -506,7 +506,7 @@ function BurnRatePanel({ events, sessions, totalSessions, limitHits, range, wind
   for (const k of Object.keys(series)) allRates = allRates.concat(series[k].vals);
   for (const s of sessionData) allRates.push(s.out_per_h);
   allRates = allRates.filter(v => v > 0);
-  const yMin = Math.max(100, Math.min(...allRates) * 0.3);
+  const yMin = Math.max(1, Math.min(...allRates) * 0.3);
   const yMax = Math.max(...allRates) * 3;
   const logYMin = Math.log10(yMin), logYMax = Math.log10(yMax);
   const xScale = ts => padL + ((ts - range.start) / (range.end - range.start)) * plotW;
