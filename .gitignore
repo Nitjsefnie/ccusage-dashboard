@@ -1,0 +1,38 @@
+# scratch / build artefacts
+node_modules/
+dist/
+build/
+.cache/
+*.log
+*.pid
+
+# python venv (auxiliary plot scripts)
+.venv/
+__pycache__/
+*.pyc
+
+# fixtures: keep README + small samples; ignore anything big
+fixtures/large/
+fixtures/*.zip
+fixtures/*.jsonl
+!fixtures/sample-*.jsonl
+
+# editor
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# secrets — never commit
+.env
+.env.local
+.env.*.local
+!.env.example
+secrets/
+*.token
+
+# Backend artifacts
+backend/__pycache__/
+__pycache__/
+.pytest_cache/
+*.pyc

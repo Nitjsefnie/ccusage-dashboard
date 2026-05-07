@@ -1,0 +1,2 @@
+{"type":"assistant","timestamp":"2026-05-07T10:00:01Z","uuid":"u-r","requestId":"req-r","sessionId":"sess-7","message":{"role":"assistant","model":"claude-sonnet-4-5","content":[{"type":"text","text":"x"}],"usage":{"input_tokens":10,"output_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}
+{"type":"system","timestamp":"2026-05-07T10:00:02Z","subtype":"info","content":"Claude usage limit reached. Reset at 14:00."}

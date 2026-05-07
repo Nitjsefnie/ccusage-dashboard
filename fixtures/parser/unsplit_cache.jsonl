@@ -1,0 +1,1 @@
+{"type":"assistant","timestamp":"2026-05-07T10:00:01Z","uuid":"u-unsplit","requestId":"req-u","sessionId":"sess-5","message":{"role":"assistant","model":"claude-sonnet-4-5","content":[{"type":"text","text":"r"}],"usage":{"input_tokens":0,"output_tokens":0,"cache_creation_input_tokens":1000000,"cache_read_input_tokens":0}}}
