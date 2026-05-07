@@ -157,18 +157,33 @@ def run_ingest(trigger: str) -> dict:
                         ),
                     },
                 )
+                # tool_uses cascades from files; explicit DELETE so a
+                # reparse doesn't leave stale rows behind.
+                cur.execute(
+                    "DELETE FROM tool_uses WHERE file_key = %s", (obj.key,)
+                )
+                if parsed.get("tool_uses"):
+                    cur.executemany(
+                        """
+                        INSERT INTO tool_uses (file_key, line_num, idx, ts, tool_name)
+                        VALUES (%(file_key)s, %(line_num)s, %(idx)s, %(ts)s, %(tool_name)s)
+                        """,
+                        parsed["tool_uses"],
+                    )
                 if parsed["records"]:
                     cur.executemany(
                         """
                         INSERT INTO records (file_key, line_num, uuid,
                           request_id, ts, model, fresh_tokens,
                           cache_creation_tokens, cache_read_tokens,
-                          output_tokens, eph5_tokens, eph1h_tokens, cost_usd)
+                          output_tokens, eph5_tokens, eph1h_tokens, cost_usd,
+                          text_chars)
                         VALUES (%(file_key)s, %(line_num)s, %(uuid)s,
                           %(request_id)s, %(ts)s, %(model)s,
                           %(fresh_tokens)s, %(cache_creation_tokens)s,
                           %(cache_read_tokens)s, %(output_tokens)s,
-                          %(eph5_tokens)s, %(eph1h_tokens)s, %(cost_usd)s)
+                          %(eph5_tokens)s, %(eph1h_tokens)s, %(cost_usd)s,
+                          %(text_chars)s)
                         """,
                         parsed["records"],
                     )

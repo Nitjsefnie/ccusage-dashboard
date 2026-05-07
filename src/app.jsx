@@ -137,6 +137,7 @@ function App() {
   const [projects, setProjects] = useState(null);
   const [activeProject, setActiveProject] = useState('');
   const [activeRange, setActiveRange] = useState('all');
+  const [models, setModels] = useState(null);
   // Server injects window.IS_GUEST into index.html so the very first
   // render already hides guest-restricted UI — no flash of the
   // Sessions/Inspector tabs before /api/me resolves.
@@ -165,6 +166,16 @@ function App() {
       .then(b => setProjects(b.projects || []))
       .catch(err => console.error('projects fetch failed', err));
   }, [backendOn, isGuest]);
+
+  // Model list — distinct raw model strings + counts. Frontend dedups
+  // by short name (e.g. claude-opus-4-7-* → opus-4-7).
+  useEffect(() => {
+    if (!backendOn) return;
+    fetch('/api/models', { credentials: 'same-origin' })
+      .then(r => r.json())
+      .then(b => setModels(b.models || []))
+      .catch(err => console.error('models fetch failed', err));
+  }, [backendOn]);
 
   // Fetch dashboard whenever the active project / range / nonce change.
   // `dashNonce` is a counter bumped by the SSE listener below to trigger
@@ -327,7 +338,7 @@ function App() {
       {backendOn && (
         <RangePicker active={activeRange} onChange={setActiveRange} />
       )}
-      {route === 'dashboard' && dashData && <Dashboard synth={dashData} dataLabel={dataLabel} />}
+      {route === 'dashboard' && dashData && <Dashboard synth={dashData} dataLabel={dataLabel} models={models} backendOn={backendOn} activeProject={activeProject} activeRange={activeRange} dashNonce={dashNonce} />}
       {route === 'sessions' && dashData && (
         <SessionsList
           synth={dashData}
@@ -335,6 +346,43 @@ function App() {
         />
       )}
       {route === 'session' && <SessionView tx={tx} loadFile={loadFile} />}
+    </div>
+  );
+}
+
+function ModelPicker({ models, active, onChange }) {
+  // Dedup by short name (claude-opus-4-7-20251101 → opus-4-7), sum
+  // counts. Lets a single "opus-4-7" choice cover both date-suffixed
+  // and bare model strings via the backend's LIKE %model% filter.
+  const grouped = {};
+  for (const m of models || []) {
+    const key = window.shortModelName ? window.shortModelName(m.model) : m.model;
+    if (key === '<synthetic>' || key === 'synthetic') continue;
+    grouped[key] = (grouped[key] || 0) + (m.n || 0);
+  }
+  const opts = Object.entries(grouped)
+    .sort((a, b) => b[1] - a[1])
+    .map(([k, n]) => ({ key: k, n }));
+  return (
+    <div className="project-picker" style={{ borderTop: '1px solid #2a2a4a' }}>
+      <span style={{ color: '#9090b0', fontFamily: 'monospace', fontSize: 11, marginRight: 8 }}>model:</span>
+      <select
+        value={active}
+        onChange={e => onChange(e.target.value)}
+        style={{
+          background: '#16172e', color: '#e6e8f0',
+          border: '1px solid #2a2c44', borderRadius: 4,
+          padding: '4px 8px', fontFamily: 'monospace', fontSize: 12,
+          cursor: 'pointer',
+        }}
+      >
+        <option value="">All ({Object.values(grouped).reduce((s, n) => s + n, 0).toLocaleString()})</option>
+        {opts.map(o => (
+          <option key={o.key} value={o.key}>
+            {o.key} ({o.n.toLocaleString()})
+          </option>
+        ))}
+      </select>
     </div>
   );
 }
@@ -434,6 +482,7 @@ function backendDashToShape(b) {
       session_id: s.session_id,
       requests: s.requests,
       model: s.model || 'unknown',
+      models_used: s.models_used || [],
       turns: s.turns || [],
     };
   });
@@ -444,6 +493,8 @@ function backendDashToShape(b) {
     mainWUsage: b.main_w_usage,
     mainEmpty: b.main_empty,
     subagentFiles: b.subagent_files,
+    responseSizes: b.response_sizes || [],
+    ctxTraces: b.ctx_traces || [],
   };
 }
 
@@ -500,8 +551,8 @@ function computeSessions(events) {
   return { sessions, windowBoundaries };
 }
 
-function Dashboard({ synth, dataLabel }) {
-  const { events, limitHits, range, costByModel: backendByModel, sessionsOverride, totalSessions, mainWUsage, mainEmpty, subagentFiles } = synth;
+function Dashboard({ synth, dataLabel, models, backendOn, activeProject, activeRange, dashNonce }) {
+  const { events, limitHits, range, costByModel: backendByModel, sessionsOverride, totalSessions, mainWUsage, mainEmpty, subagentFiles, responseSizes, ctxTraces } = synth;
   const hasBackendByModel = backendByModel && Object.keys(backendByModel).length > 0;
   const computed = useMemo(() => computeSessions(events), [events]);
   const sessions = (sessionsOverride && sessionsOverride.length)
@@ -546,16 +597,40 @@ function Dashboard({ synth, dataLabel }) {
   // (legacy SDK rows that didn't carry the ephemeral_* split) is
   // bucketed under "Cache Create (unsplit)" so it stays visible.
   const ccUnsplit = Math.max(0, totals.cc - totals.eph5 - totals.eph1h);
+
+  // Per-token-type cost — sum tokens × per-model rate over hourly
+  // events using the shared rate table from parser.js. Lets the Token
+  // Breakdown panel show "{tokens} ({tok%}), ${cost} ({cost%})" per row.
+  const costByType = useMemo(() => {
+    const c = { input: 0, output: 0, eph5: 0, eph1h: 0, ccUnsplit: 0, cr: 0, total: 0 };
+    if (!window.rateForModel) return c;
+    for (const e of events) {
+      const r = window.rateForModel(e.model);
+      const unsplit = Math.max(0, (e.cache_create || 0) - (e.ephemeral_5m || 0) - (e.ephemeral_1h || 0));
+      c.input     += (e.input_tokens   || 0) * r.fresh;
+      c.output    += (e.output_tokens  || 0) * r.out;
+      c.eph5      += (e.ephemeral_5m   || 0) * r.c5;
+      c.eph1h     += (e.ephemeral_1h   || 0) * r.c1h;
+      c.ccUnsplit += unsplit                  * r.c5;  // unsplit at 5m rate
+      c.cr        += (e.cache_read     || 0) * r.read;
+    }
+    for (const k of Object.keys(c)) c[k] = c[k] / 1_000_000;
+    c.total = c.input + c.output + c.eph5 + c.eph1h + c.ccUnsplit + c.cr;
+    return c;
+  }, [events]);
+
   const tokenBreakdown = [
-    { label: 'Input',             value: totals.input,  color: window.dashboardCol.inputTokens },
-    { label: 'Output',            value: totals.output, color: window.dashboardCol.outputTokens },
-    { label: 'Cache Create (5m)', value: totals.eph5,   color: window.dashboardCol.cacheCreateTokens },
-    { label: 'Cache Create (1h)', value: totals.eph1h,  color: '#d488ff' },
+    { label: 'Input',             value: totals.input,  cost: costByType.input,     color: window.dashboardCol.inputTokens },
+    { label: 'Output',            value: totals.output, cost: costByType.output,    color: window.dashboardCol.outputTokens },
+    { label: 'Cache Create (5m)', value: totals.eph5,   cost: costByType.eph5,      color: window.dashboardCol.cacheCreateTokens },
+    { label: 'Cache Create (1h)', value: totals.eph1h,  cost: costByType.eph1h,     color: '#d488ff' },
     ...(ccUnsplit > 0
-      ? [{ label: 'Cache Create (unsplit)', value: ccUnsplit, color: '#7733aa' }]
+      ? [{ label: 'Cache Create (unsplit)', value: ccUnsplit, cost: costByType.ccUnsplit, color: '#7733aa' }]
       : []),
-    { label: 'Cache Read',        value: totals.cr,     color: window.dashboardCol.cacheReadTokens },
-  ].filter(r => r.value > 0).sort((a, b) => b.value - a.value);
+    { label: 'Cache Read',        value: totals.cr,     cost: costByType.cr,        color: window.dashboardCol.cacheReadTokens },
+  ].filter(r => r.value > 0).sort((a, b) => b.cost - a.cost);
+  const tokenBreakdownTotal = totals.total || 1;
+  const tokenBreakdownCostTotal = costByType.total || 1;
 
   const costByModel = Object.entries(totals.byModel)
     .filter(([, v]) => v > 0)
@@ -599,19 +674,43 @@ function Dashboard({ synth, dataLabel }) {
           title="Cost by Model"
           rows={costByModel}
           fixedColors={window.modelColors}
-          fmt={r => '$' + r.value.toFixed(2)} />
-        <window.HBar
-          title="Token Breakdown"
-          rows={tokenBreakdown}
-          totalForPct={totals.total} />
+          fmt={r => window.humanCurrency(r.value)} />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <window.HBar
+            title="Token Breakdown — by tokens"
+            rows={[...tokenBreakdown].sort((a, b) => b.value - a.value)}
+            fmt={r => `${window.humanFmt(r.value)} (${(r.value / tokenBreakdownTotal * 100).toFixed(1)}%)`} />
+          <window.HBar
+            title="Token Breakdown — by cost"
+            rows={[...tokenBreakdown]
+              .map(r => ({ ...r, value: r.cost }))
+              .sort((a, b) => b.value - a.value)}
+            fmt={r => `${window.humanCurrency(r.value)} (${(r.value / tokenBreakdownCostTotal * 100).toFixed(1)}%)`} />
+        </div>
       </div>
 
       <div className="dash-ttl">
         <window.CacheTTLPanel events={events} range={range} binMs={binMs} />
       </div>
 
+      {responseSizes && responseSizes.length > 0 && (
+        <div className="dash-resp">
+          <window.ResponseSizesPanel data={responseSizes} />
+        </div>
+      )}
+
+      {backendOn && (
+        <div className="dash-tools">
+          <window.ToolUsagePanel
+            models={models}
+            project={activeProject}
+            range={activeRange}
+            nonce={dashNonce} />
+        </div>
+      )}
+
       <div className="dash-context">
-        <window.ContextGrowthPanel events={events} realSessions={sessionsOverride} />
+        <window.ContextGrowthPanel events={events} realSessions={sessionsOverride} ctxTraces={ctxTraces} />
       </div>
 
       <div className="dash-burn">
@@ -623,6 +722,79 @@ function Dashboard({ synth, dataLabel }) {
           windowBoundaries={windowBoundaries} />
       </div>
 
+    </div>
+  );
+}
+
+// Small-multiples token breakdown — replaces an HBar where Cache Read
+// (typically 98%+ of tokens) made every other row visually invisible.
+// Each cell: color stripe, type label, big tokens value with %, cost
+// with %. Sorted by cost (the question the reader actually has).
+function TokenBreakdownPanel({ rows, tokenTotal, costTotal }) {
+  return (
+    <div style={{
+      background: '#16213e',
+      border: '1px solid #2a2a4a',
+      borderRadius: 4,
+      padding: '14px 16px 16px',
+    }}>
+      <div style={{
+        textAlign: 'center', color: '#e0e0e0',
+        fontFamily: 'monospace', fontSize: 13, fontWeight: 700,
+        marginBottom: 12,
+      }}>Token Breakdown</div>
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+        gap: 10,
+      }}>
+        {rows.map((r) => {
+          const tokPct  = (r.value / tokenTotal * 100);
+          const costPct = (r.cost  / costTotal  * 100);
+          return (
+            <div key={r.label} style={{
+              background: '#0f1428',
+              borderLeft: `3px solid ${r.color}`,
+              borderRadius: 2,
+              padding: '8px 12px',
+            }}>
+              <div style={{
+                color: r.color, fontFamily: 'monospace',
+                fontSize: 10.5, fontWeight: 700,
+                letterSpacing: 0.5, marginBottom: 6,
+                whiteSpace: 'nowrap', overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              }}>{r.label}</div>
+              <div style={{
+                display: 'flex', justifyContent: 'space-between',
+                alignItems: 'baseline', gap: 8,
+              }}>
+                <span style={{
+                  fontFamily: 'monospace', fontSize: 16,
+                  fontWeight: 600, color: '#e0e0e0',
+                }}>{window.humanFmt(r.value)}</span>
+                <span style={{
+                  fontFamily: 'monospace', fontSize: 10,
+                  color: '#7e84a3',
+                }}>{tokPct.toFixed(1)}%</span>
+              </div>
+              <div style={{
+                display: 'flex', justifyContent: 'space-between',
+                alignItems: 'baseline', gap: 8, marginTop: 2,
+              }}>
+                <span style={{
+                  fontFamily: 'monospace', fontSize: 13,
+                  fontWeight: 600, color: '#ffdd00',
+                }}>{window.humanCurrency(r.cost)}</span>
+                <span style={{
+                  fontFamily: 'monospace', fontSize: 10,
+                  color: '#7e84a3',
+                }}>{costPct.toFixed(1)}%</span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -725,7 +897,7 @@ function SessionsList({ synth, onOpen }) {
             </div>
             <div className="num mono">{r.reqs}</div>
             <div className="num mono">{window.humanFmt(r.total)}</div>
-            <div className="num mono">${r.cost.toFixed(2)}</div>
+            <div className="num mono">{window.humanCurrency(r.cost)}</div>
             <div className="num"><button className="open-btn" onClick={() => onOpen(r.id)}>open ›</button></div>
           </div>
         ))}
@@ -840,7 +1012,7 @@ function SessionHeader({ stats }) {
       <Stat label="duration"   value={dur < 60 ? dur.toFixed(0)+'m' : (dur/60).toFixed(1)+'h'} />
       <Stat label="output tokens" value={window.humanFmt(stats.output)} />
       <Stat label="cache hit %" value={stats.hitRate.toFixed(1) + '%'} />
-      <Stat label="est. cost"  value={'$' + stats.cost.toFixed(2)} highlight />
+      <Stat label="est. cost"  value={window.humanCurrency(stats.cost)} highlight />
     </div>
   );
 }

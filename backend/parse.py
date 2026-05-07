@@ -67,6 +67,7 @@ def parse_file(file_key: str, blob: bytes) -> dict:
     records_in_order: list[dict] = []
     user_text_lines: list[int] = []
     rate_limit_hits: list[dict] = []
+    tool_uses: list[dict] = []
 
     for line_num, raw in enumerate(blob.splitlines(), 1):
         if not raw:
@@ -120,6 +121,33 @@ def parse_file(file_key: str, blob: bytes) -> dict:
         if not usage:
             continue
 
+        # Visible-response size: sum character lengths of `text` blocks
+        # in the assistant message. Per analyst (2026-05-07), thinking
+        # tokens roll into output_tokens undifferentiated, so token-based
+        # response-size metrics conflate "size" with "how much the model
+        # thought". Character count of text content blocks is the clean
+        # measure of visible response size.
+        # Also extract every `tool_use` block — the `name` field is what
+        # the canonical parser exposes via --tools. Stored later as one
+        # row per tool call in the `tool_uses` table for the per-tool
+        # ratio panel.
+        msg_content = msg.get("content")
+        text_chars = 0
+        msg_tool_uses: list[dict] = []
+        if isinstance(msg_content, list):
+            for idx, blk in enumerate(msg_content):
+                if not isinstance(blk, dict):
+                    continue
+                btype = blk.get("type")
+                if btype == "text":
+                    text_chars += len(str(blk.get("text", "")))
+                elif btype == "tool_use":
+                    name = str(blk.get("name", "") or "")
+                    if name:
+                        msg_tool_uses.append({"idx": idx, "tool_name": name})
+        elif isinstance(msg_content, str):
+            text_chars = len(msg_content)
+
         req_id = obj.get("requestId", "") or ""
         ev = {
             "line_num": line_num,
@@ -128,14 +156,31 @@ def parse_file(file_key: str, blob: bytes) -> dict:
             "ts": obj.get("timestamp", "") or "",
             "model": msg.get("model") or "(unknown)",
             "usage": dict(usage),
+            "text_chars": text_chars,
         }
         if req_id and req_id in seen_request:
             existing = seen_request[req_id]
             existing["usage"] = _merge_usage_max(existing["usage"], usage)
+            # Same Phase 1 max-merge for text_chars: streaming responses
+            # log incrementally; the largest sample is the final size.
+            if text_chars > existing.get("text_chars", 0):
+                existing["text_chars"] = text_chars
         else:
             if req_id:
                 seen_request[req_id] = ev
             records_in_order.append(ev)
+            # Tool calls: record only on the FIRST occurrence of a
+            # requestId — streaming dupes carry the same tool_use blocks
+            # and shouldn't be double-counted. Captured with the line's
+            # ts so the tool-ratio panel can bucket by time.
+            for tu in msg_tool_uses:
+                tool_uses.append({
+                    "file_key": file_key,
+                    "line_num": line_num,
+                    "idx": tu["idx"],
+                    "ts": _to_dt(obj.get("timestamp", "") or ""),
+                    "tool_name": tu["tool_name"],
+                })
 
     # Project usage → token columns + cost; drop the raw 'usage' dict.
     records: list[dict] = []
@@ -166,6 +211,7 @@ def parse_file(file_key: str, blob: bytes) -> dict:
             "cache_creation_tokens": create,
             "cache_read_tokens": read,
             "output_tokens": output,
+            "text_chars": int(ev.get("text_chars", 0)),
             "eph5_tokens": eph5,
             "eph1h_tokens": eph1h,
             "cost_usd": round(cost, 6),
@@ -216,4 +262,5 @@ def parse_file(file_key: str, blob: bytes) -> dict:
         "ctx_turns": ctx_turns,
         "turn_count": len(ctx_turns),
         "rate_limit_hits": rate_limit_hits,
+        "tool_uses": tool_uses,
     }

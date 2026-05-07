@@ -41,6 +41,20 @@ function humanFmt(v, isCurrency) {
   return prefix + out;
 }
 
+// Currency formatter that scales precision with magnitude — Schwabish:
+// drop decimals readers can't act on. $11357.99 → $11.4K; $789.62 → $790;
+// $5.32 → $5.32. Cents kept only when the amount is small enough that
+// they actually matter.
+function humanCurrency(v) {
+  const abs = Math.abs(v);
+  if (abs >= 1e9) return '$' + (v / 1e9).toFixed(1).replace(/\.0$/, '') + 'B';
+  if (abs >= 1e6) return '$' + (v / 1e6).toFixed(2).replace(/\.?0+$/, '') + 'M';
+  if (abs >= 1e3) return '$' + (v / 1e3).toFixed(1).replace(/\.0$/, '') + 'K';
+  if (abs >= 100) return '$' + Math.round(v);
+  if (abs >= 10)  return '$' + v.toFixed(1).replace(/\.0$/, '');
+  return '$' + v.toFixed(2);
+}
+
 function fmtDate(ts, opts = {}) {
   const d = new Date(ts);
   const M = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -688,4 +702,5 @@ window.dashboardTheme = TH;
 window.dashboardCol = COL;
 window.modelColors = MODEL_COLORS;
 window.humanFmt = humanFmt;
+window.humanCurrency = humanCurrency;
 window.fmtDate = fmtDate;

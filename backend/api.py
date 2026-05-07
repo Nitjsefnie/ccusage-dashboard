@@ -38,6 +38,64 @@ async def me(request: Request) -> dict:
     }
 
 
+@router.get("/tool-usage")
+async def tool_usage(
+    range: str = Query("30d"),
+    project: str | None = Query(None),
+    model: str | None = Query(None),
+) -> dict:
+    """Daily-bucketed tool-call counts. Frontend stacks to 100% and
+    promotes any tool that ever cracked top-N at any bucket. Tools
+    that never make the cut land in 'Other'.
+
+    `model=opus-4-7` filters to tool calls emitted by an assistant
+    message whose record matches the model substring (joined on
+    file_key + line_num)."""
+    delta = _parse_range(range)
+    since = datetime.now(timezone.utc) - delta
+    # Args must match the order parameters appear in the SQL string:
+    # model_join's LIKE first (it sits in the JOIN, before WHERE),
+    # then since (in WHERE), then project (after).
+    args: list[Any] = []
+    model_join = ""
+    if model:
+        model_join = (
+            "JOIN records r ON r.file_key = tu.file_key "
+            "AND r.line_num = tu.line_num AND r.model LIKE %s"
+        )
+        args.append(f"%{model}%")
+    args.append(since)
+    proj_filter = ""
+    if project:
+        proj_filter = "AND f.project_id = %s"
+        args.append(project)
+
+    with db.viz_conn() as c:
+        rows = c.execute(
+            f"""
+            SELECT date_trunc('day', tu.ts) AS bucket,
+                   tu.tool_name             AS tool,
+                   COUNT(*)                 AS n
+            FROM tool_uses tu
+            JOIN files f ON f.file_key = tu.file_key
+            {model_join}
+            WHERE tu.ts >= %s {proj_filter}
+            GROUP BY 1, 2
+            ORDER BY 1, 2
+            """,
+            args,
+        ).fetchall()
+
+    return {
+        "range": range,
+        "project": project,
+        "buckets": [
+            {"ts": _iso(b), "tool": t, "n": int(n or 0)}
+            for (b, t, n) in rows
+        ],
+    }
+
+
 @router.get("/events")
 async def event_stream(request: Request):
     """Server-Sent Events stream. Currently emits one event:
@@ -97,6 +155,24 @@ async def event_stream(request: Request):
     )
 
 
+@router.get("/models")
+async def list_models() -> dict:
+    """All distinct (real, non-synthetic) model strings ever recorded,
+    with counts. Frontend canonicalizes via shortModelName for the
+    dropdown."""
+    with db.viz_conn() as c:
+        rows = c.execute(
+            """
+            SELECT model, COUNT(*) AS n
+            FROM records
+            WHERE model <> '' AND model <> '<synthetic>'
+            GROUP BY model
+            ORDER BY 2 DESC
+            """
+        ).fetchall()
+    return {"models": [{"model": m, "n": int(n)} for (m, n) in rows]}
+
+
 @router.get("/projects")
 async def list_projects() -> dict:
     """Per-project rollup: file_count, total_cost, derived from files+records."""
@@ -149,6 +225,7 @@ def _parse_range(s: str) -> timedelta:
 async def cache_view(
     range: str = Query("30d"),
     project: str | None = Query(None),
+    model: str | None = Query(None),
 ) -> dict:
     """Literal replica of parse_session.py --cache output.
 
@@ -170,24 +247,29 @@ async def cache_view(
     delta = _parse_range(range)
     since = datetime.now(timezone.utc) - delta
     proj_filter = ""
-    args: list[Any] = [since]
+    model_filter = ""
+    leg_args: list[Any] = [since]
     if project:
         proj_filter = "AND f.project_id = %s"
-        args.append(project)
-    args2 = args + args  # filters applied twice (one per UNION leg)
+        leg_args.append(project)
+    if model:
+        model_filter = "AND r.model LIKE %s"
+        leg_args.append(f"%{model}%")
+    args = list(leg_args)
+    args2 = leg_args + leg_args  # filters applied twice (one per UNION leg)
 
     base_cte = f"""
     WITH deduped AS (
       (SELECT DISTINCT ON (r.uuid) r.*
        FROM records r
        JOIN files f ON f.file_key = r.file_key
-       WHERE r.ts >= %s {proj_filter} AND r.uuid IS NOT NULL
+       WHERE r.ts >= %s {proj_filter} {model_filter} AND r.uuid IS NOT NULL
        ORDER BY r.uuid, r.file_key)
       UNION ALL
       (SELECT r.*
        FROM records r
        JOIN files f ON f.file_key = r.file_key
-       WHERE r.ts >= %s {proj_filter} AND r.uuid IS NULL)
+       WHERE r.ts >= %s {proj_filter} {model_filter} AND r.uuid IS NULL)
     )
     """
 
@@ -531,37 +613,46 @@ def _iso(v) -> str | None:
 async def dashboard(
     range: str = Query("30d"),
     project: str | None = Query(None),
+    model: str | None = Query(None),
     fresh: int = Query(0),
 ) -> dict:
     """Hourly aggregates + per-session burns + per-session ctx_lines.
 
     Cross-file uuid dedup at query time via DISTINCT ON; legacy NULL-uuid
-    rows are kept verbatim. Frontend's backendDashToShape() consumes only
-    `hourly`; burns + ctx_lines are populated for parity / future panels.
-    """
+    rows are kept verbatim. `model=opus-4-7` filters the deduped CTE
+    so every CTE-derived panel (hourly, cost_by_model, response_sizes,
+    sessions, ctx_traces) is constrained to records matching the model
+    substring."""
     delta = _parse_range(range)
     since = datetime.now(timezone.utc) - delta
     proj_filter = ""
-    args: list[Any] = [since]
+    model_filter = ""
+    leg_args: list[Any] = [since]
     if project:
         proj_filter = "AND f.project_id = %s"
-        args.append(project)
-    args2 = args + args  # filters applied twice (one per UNION leg)
+        leg_args.append(project)
+    if model:
+        model_filter = "AND r.model LIKE %s"
+        leg_args.append(f"%{model}%")
+    args = list(leg_args)
+    args2 = leg_args + leg_args  # filters applied twice (one per UNION leg)
 
     base_cte = f"""
     WITH deduped AS (
       (SELECT DISTINCT ON (r.uuid)
          r.file_key, r.line_num, r.uuid, r.request_id, r.ts, r.model,
          r.fresh_tokens, r.cache_creation_tokens, r.cache_read_tokens,
-         r.output_tokens, r.eph5_tokens, r.eph1h_tokens, r.cost_usd
+         r.output_tokens, r.eph5_tokens, r.eph1h_tokens, r.cost_usd,
+         r.text_chars
        FROM records r
        JOIN files f ON f.file_key = r.file_key
-       WHERE r.ts >= %s {proj_filter} AND r.uuid IS NOT NULL
+       WHERE r.ts >= %s {proj_filter} {model_filter} AND r.uuid IS NOT NULL
        ORDER BY r.uuid, r.file_key)
       UNION ALL
       (SELECT r.file_key, r.line_num, r.uuid, r.request_id, r.ts, r.model,
               r.fresh_tokens, r.cache_creation_tokens, r.cache_read_tokens,
-              r.output_tokens, r.eph5_tokens, r.eph1h_tokens, r.cost_usd
+              r.output_tokens, r.eph5_tokens, r.eph1h_tokens, r.cost_usd,
+              r.text_chars
        FROM records r
        JOIN files f ON f.file_key = r.file_key
        WHERE r.ts >= %s {proj_filter} AND r.uuid IS NULL)
@@ -654,7 +745,18 @@ async def dashboard(
                        WHERE d.model <> '' AND d.model <> '<synthetic>'
                      ),
                      MODE() WITHIN GROUP (ORDER BY NULLIF(d.model, ''))
-                   ) AS model
+                   ) AS model,
+                   -- Every distinct (real, non-synthetic) model the
+                   -- session actually used — lets per-model panels
+                   -- include a session even when the model isn't the
+                   -- dominant one (e.g. a session that used opus-4-5
+                   -- only briefly still gets counted under opus-4-5).
+                   ARRAY_REMOVE(
+                     ARRAY_AGG(DISTINCT NULLIF(d.model, '')) FILTER (
+                       WHERE d.model <> '' AND d.model <> '<synthetic>'
+                     ),
+                     NULL
+                   ) AS models_used
             FROM deduped d
             JOIN files f ON f.file_key = d.file_key
             WHERE d.ts IS NOT NULL
@@ -665,7 +767,33 @@ async def dashboard(
             args2,
         ).fetchall()
 
+        # Response-size time series per model — daily-bucketed
+        # text_chars median and p90 of VISIBLE response content (text
+        # blocks only). Per analyst (2026-05-07), output_tokens
+        # silently includes thinking — and per-model thinking shares
+        # vary 0.7%–25%, so token-based percentiles conflate "longer
+        # responses" with "more thinking". Character count of text
+        # content blocks is the clean, model-fair "visible response
+        # size" measure.
+        response_sizes_rows = c.execute(
+            base_cte + """
+            SELECT date_trunc('day', d.ts) AS bucket,
+                   COALESCE(NULLIF(d.model, ''), 'unknown') AS model,
+                   COUNT(*) AS n,
+                   PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY d.text_chars) AS p50,
+                   PERCENTILE_CONT(0.90) WITHIN GROUP (ORDER BY d.text_chars) AS p90
+            FROM deduped d
+            WHERE d.text_chars > 0 AND d.ts IS NOT NULL
+            GROUP BY 1, 2
+            ORDER BY 1, 2
+            """,
+            args2,
+        ).fetchall()
+
         ctx_turns_args = list(args)
+        # ctx_turns for the parent-session (main) files only — used to
+        # join into per-folder `sessions_out` rows for the burn-rate
+        # tooltip's ctx_at_end and the burn dot scaling.
         ctx_turns_rows = c.execute(
             f"""
             SELECT f.session_id, f.ctx_turns
@@ -675,6 +803,36 @@ async def dashboard(
               AND jsonb_array_length(f.ctx_turns) > 0
             """,
             ctx_turns_args,
+        ).fetchall()
+
+        # Per-FILE ctx traces — one row per main file AND per sub-agent
+        # file with usage. The "Per-Session Context Growth" panel
+        # treats each file as its own conversation, so a sub-agent
+        # invocation surfaces under whatever model it ran on, even if
+        # there's no main session file on disk.
+        ctx_traces_args = list(args)
+        ctx_traces_rows = c.execute(
+            f"""
+            WITH file_models AS (
+              SELECT r.file_key,
+                     COALESCE(
+                       MODE() WITHIN GROUP (ORDER BY r.model) FILTER (
+                         WHERE r.model <> '' AND r.model <> '<synthetic>'
+                       ),
+                       MODE() WITHIN GROUP (ORDER BY NULLIF(r.model, ''))
+                     ) AS model
+              FROM records r
+              GROUP BY r.file_key
+            )
+            SELECT f.file_key, f.session_id, f.is_main,
+                   COALESCE(fm.model, '') AS model,
+                   f.ctx_turns
+            FROM files f
+            LEFT JOIN file_models fm ON fm.file_key = f.file_key
+            WHERE f.r2_last_modified >= %s {proj_filter}
+              AND jsonb_array_length(f.ctx_turns) > 0
+            """,
+            ctx_traces_args,
         ).fetchall()
 
         burn_args = list(args)
@@ -797,7 +955,7 @@ async def dashboard(
     ctx_turns_by_session = {sid: turns for (sid, turns) in ctx_turns_rows}
     sessions_out = []
     for row in sessions_rows:
-        (sid, st, et, reqs, inp, out, cc, cr, cost, dom) = row
+        (sid, st, et, reqs, inp, out, cc, cr, cost, dom, models_used) = row
         raw_turns = ctx_turns_by_session.get(sid) or []
         # Project to {t, ctx} (input is total ctx-window: input+cc+cr).
         turns_proj = [
@@ -817,6 +975,7 @@ async def dashboard(
             "cache_read_tokens": int(cr or 0),
             "cost_usd": float(cost or 0),
             "model": dom or "",
+            "models_used": list(models_used or []),
             "ctx_at_end": ctx_at_end,
             "turns": turns_proj,
         })
@@ -844,6 +1003,30 @@ async def dashboard(
         "main_w_usage": main_w_usage,
         "main_empty": main_empty,
         "subagent_files": subagent_files,
+        "ctx_traces": [
+            {
+                "file_key": fk,
+                "session_id": sid,
+                "is_main": bool(is_main),
+                "model": model or "",
+                "turns": [
+                    {"t": i, "ctx": int(t.get("input", 0) or 0)}
+                    for i, t in enumerate(turns or [])
+                    if isinstance(t, dict)
+                ],
+            }
+            for (fk, sid, is_main, model, turns) in ctx_traces_rows
+        ],
+        "response_sizes": [
+            {
+                "ts": _iso(bucket),
+                "model": m,
+                "n": int(n or 0),
+                "p50": float(p50 or 0),
+                "p90": float(p90 or 0),
+            }
+            for (bucket, m, n, p50, p90) in response_sizes_rows
+        ],
         "ctx_lines": ctx_lines,
     }
 

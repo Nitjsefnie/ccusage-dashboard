@@ -261,6 +261,35 @@ window.parseTranscript = function parseTranscript(text, opts) {
 };
 
 // Compute session-level stats
+// Mirrors backend/pricing.py — order matters (most-specific first
+// so 'claude-opus-4-7' doesn't misroute to 'claude-opus-4').
+// Single source of truth for in-browser cost computation; both the
+// Inspector (computeSessionStats below) and the Token Breakdown panel
+// (app.jsx) read these via window.modelRates / window.rateForModel.
+window.modelRates = {
+  'claude-opus-4-7':   { fresh: 5,    c5: 6.25,  c1h: 10,   read: 0.5,  out: 25 },
+  'claude-opus-4-6':   { fresh: 5,    c5: 6.25,  c1h: 10,   read: 0.5,  out: 25 },
+  'claude-opus-4-5':   { fresh: 5,    c5: 6.25,  c1h: 10,   read: 0.5,  out: 25 },
+  'claude-opus-4-1':   { fresh: 15,   c5: 18.75, c1h: 30,   read: 1.5,  out: 75 },
+  'claude-opus-4':     { fresh: 15,   c5: 18.75, c1h: 30,   read: 1.5,  out: 75 },
+  'claude-sonnet-4-6': { fresh: 3,    c5: 3.75,  c1h: 6,    read: 0.3,  out: 15 },
+  'claude-sonnet-4-5': { fresh: 3,    c5: 3.75,  c1h: 6,    read: 0.3,  out: 15 },
+  'claude-sonnet-4':   { fresh: 3,    c5: 3.75,  c1h: 6,    read: 0.3,  out: 15 },
+  'claude-haiku-4-5':  { fresh: 1,    c5: 1.25,  c1h: 2,    read: 0.1,  out: 5 },
+  'claude-3-7-sonnet-':{ fresh: 3,    c5: 3.75,  c1h: 6,    read: 0.3,  out: 15 },
+  'claude-3-5-sonnet-':{ fresh: 3,    c5: 3.75,  c1h: 6,    read: 0.3,  out: 15 },
+  'claude-3-5-haiku-': { fresh: 0.8,  c5: 1.0,   c1h: 1.6,  read: 0.08, out: 4 },
+  'claude-3-opus-':    { fresh: 15,   c5: 18.75, c1h: 30,   read: 1.5,  out: 75 },
+  'claude-3-haiku-':   { fresh: 0.25, c5: 0.30,  c1h: 0.50, read: 0.03, out: 1.25 },
+};
+window.rateForModel = function rateForModel(model) {
+  const m = String(model || '');
+  for (const k of Object.keys(window.modelRates)) {
+    if (m.includes(k)) return window.modelRates[k];
+  }
+  return window.modelRates['claude-opus-4-7'];
+};
+
 window.computeSessionStats = function (events, meta) {
   const stats = {
     firstTs: null, lastTs: null,
@@ -298,27 +327,8 @@ window.computeSessionStats = function (events, meta) {
     }
   }
 
-  // Mirrors backend/pricing.py — order matters (most-specific first
-  // so 'claude-opus-4-7' doesn't misroute to 'claude-opus-4').
-  const RATES = {
-    'claude-opus-4-7':   { fresh: 5,    c5: 6.25,  c1h: 10,   read: 0.5,  out: 25 },
-    'claude-opus-4-6':   { fresh: 5,    c5: 6.25,  c1h: 10,   read: 0.5,  out: 25 },
-    'claude-opus-4-5':   { fresh: 5,    c5: 6.25,  c1h: 10,   read: 0.5,  out: 25 },
-    'claude-opus-4-1':   { fresh: 15,   c5: 18.75, c1h: 30,   read: 1.5,  out: 75 },
-    'claude-opus-4':     { fresh: 15,   c5: 18.75, c1h: 30,   read: 1.5,  out: 75 },
-    'claude-sonnet-4-6': { fresh: 3,    c5: 3.75,  c1h: 6,    read: 0.3,  out: 15 },
-    'claude-sonnet-4-5': { fresh: 3,    c5: 3.75,  c1h: 6,    read: 0.3,  out: 15 },
-    'claude-sonnet-4':   { fresh: 3,    c5: 3.75,  c1h: 6,    read: 0.3,  out: 15 },
-    'claude-haiku-4-5':  { fresh: 1,    c5: 1.25,  c1h: 2,    read: 0.1,  out: 5 },
-    'claude-3-7-sonnet-':{ fresh: 3,    c5: 3.75,  c1h: 6,    read: 0.3,  out: 15 },
-    'claude-3-5-sonnet-':{ fresh: 3,    c5: 3.75,  c1h: 6,    read: 0.3,  out: 15 },
-    'claude-3-5-haiku-': { fresh: 0.8,  c5: 1.0,   c1h: 1.6,  read: 0.08, out: 4 },
-    'claude-3-opus-':    { fresh: 15,   c5: 18.75, c1h: 30,   read: 1.5,  out: 75 },
-    'claude-3-haiku-':   { fresh: 0.25, c5: 0.30,  c1h: 0.50, read: 0.03, out: 1.25 },
-  };
   function rate(model) {
-    for (const k of Object.keys(RATES)) if (model.includes(k)) return RATES[k];
-    return RATES['claude-opus-4-7'];
+    return window.rateForModel(model);
   }
 
   for (const m of meta) {

@@ -43,13 +43,30 @@ CREATE TABLE IF NOT EXISTS records (
   eph5_tokens             BIGINT NOT NULL DEFAULT 0,
   eph1h_tokens            BIGINT NOT NULL DEFAULT 0,
   cost_usd                NUMERIC(12,6) NOT NULL DEFAULT 0,
+  text_chars              BIGINT NOT NULL DEFAULT 0,
   PRIMARY KEY (file_key, line_num)
 );
+
+-- Idempotent migration for existing DBs.
+ALTER TABLE records ADD COLUMN IF NOT EXISTS
+  text_chars BIGINT NOT NULL DEFAULT 0;
 
 CREATE INDEX IF NOT EXISTS records_uuid_idx ON records (uuid) WHERE uuid IS NOT NULL;
 CREATE INDEX IF NOT EXISTS records_ts_idx ON records (ts);
 CREATE INDEX IF NOT EXISTS records_model_idx ON records (model);
 CREATE INDEX IF NOT EXISTS records_request_idx ON records (request_id) WHERE request_id <> '';
+
+CREATE TABLE IF NOT EXISTS tool_uses (
+  file_key   TEXT NOT NULL REFERENCES files(file_key) ON DELETE CASCADE,
+  line_num   INT  NOT NULL,
+  idx        INT  NOT NULL,            -- index within the assistant msg's content[]
+  ts         TIMESTAMPTZ,
+  tool_name  TEXT NOT NULL,
+  PRIMARY KEY (file_key, line_num, idx)
+);
+
+CREATE INDEX IF NOT EXISTS tool_uses_ts_idx   ON tool_uses (ts);
+CREATE INDEX IF NOT EXISTS tool_uses_tool_idx ON tool_uses (tool_name);
 
 CREATE TABLE IF NOT EXISTS ingest_runs (
   id              BIGSERIAL PRIMARY KEY,

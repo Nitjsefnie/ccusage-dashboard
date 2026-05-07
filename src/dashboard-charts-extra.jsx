@@ -380,7 +380,8 @@ function buildSessionTurns(events) {
 }
 
 function perTurnStats(sessions) {
-  if (!sessions || !sessions.length) return { turns: [], median: [], p90: [], count: [], maxT: 0 };
+  const empty = { turns: [], median: [], p25: [], p75: [], p90: [], count: [], maxT: 0 };
+  if (!sessions || !sessions.length) return empty;
   const byTurn = new Map();
   for (const s of sessions) {
     for (const p of s.seq) {
@@ -389,23 +390,27 @@ function perTurnStats(sessions) {
       byTurn.get(p.t).push(p.ctx);
     }
   }
-  if (!byTurn.size) return { turns: [], median: [], p90: [], count: [], maxT: 0 };
+  if (!byTurn.size) return empty;
   const maxT = Math.max(...byTurn.keys());
-  const turns = [], median = [], p90 = [], count = [];
+  const turns = [], median = [], p25 = [], p75 = [], p90 = [], count = [];
+  const pick = (arr, q) => arr[Math.min(arr.length - 1, Math.floor(arr.length * q))];
   for (let t = 0; t <= maxT; t++) {
     const vals = byTurn.get(t);
     if (!vals || vals.length < 1) {
-      turns.push(t); median.push(null); p90.push(null); count.push(0);
+      turns.push(t);
+      median.push(null); p25.push(null); p75.push(null); p90.push(null);
+      count.push(0);
       continue;
     }
     vals.sort((a, b) => a - b);
     turns.push(t);
     median.push(vals[Math.floor(vals.length / 2)]);
-    const p90idx = Math.min(vals.length - 1, Math.floor(vals.length * 0.9));
-    p90.push(vals[p90idx]);
+    p25.push(pick(vals, 0.25));
+    p75.push(pick(vals, 0.75));
+    p90.push(pick(vals, 0.9));
     count.push(vals.length);
   }
-  return { turns, median, p90, count, maxT };
+  return { turns, median, p25, p75, p90, count, maxT };
 }
 
 function ContextSubPanel({ title, sessions, color, cap, w, h }) {
@@ -416,7 +421,7 @@ function ContextSubPanel({ title, sessions, color, cap, w, h }) {
   const plotW = Math.max(10, w - padL - padR);
   const plotH = Math.max(10, h - padT - padB);
 
-  const { turns, median, p90, count, maxT } = React.useMemo(() => perTurnStats(sessions), [sessions]);
+  const { turns, median, p25, p75, p90, count, maxT } = React.useMemo(() => perTurnStats(sessions), [sessions]);
   const nSess = sessions.length;
   const longest = sessions.reduce((m, s) => Math.max(m, s.seq.length), 0);
   let maxCtx = 0;
@@ -467,15 +472,19 @@ function ContextSubPanel({ title, sessions, color, cap, w, h }) {
     const turn = Math.round(((mx - padL) / plotW) * xMax);
     if (turn < 0 || turn > xMax) { setTip(null); return; }
     const med = median[turn];
-    const p9 = p90[turn];
+    const q1  = p25[turn];
+    const q3  = p75[turn];
+    const p9  = p90[turn];
+    const fmtV = v => v !== null && v !== undefined ? humanFmt_X(v) : '—';
     const liveCount = count[turn] || 0;
     setTip({
       x: mx, y: my,
       title: `turn ${turn}`,
       accent: color,
       lines: [
-        ['median ctx', med !== null && med !== undefined ? humanFmt_X(med) : '—'],
-        ['p90 ctx',    p9 !== null && p9 !== undefined  ? humanFmt_X(p9)  : '—'],
+        ['median ctx', fmtV(med)],
+        ['p25–p75',    `${fmtV(q1)}–${fmtV(q3)}`],
+        ['p90 ctx',    fmtV(p9)],
         ['sessions @ turn', `${liveCount} / ${nSess}`],
         ['cap',        humanFmt_X(cap)],
       ],
@@ -508,8 +517,8 @@ function ContextSubPanel({ title, sessions, color, cap, w, h }) {
           <text x={70} y={7} fontSize="8.5" fill={TH_X.textDim} fontFamily="monospace">sessions</text>
           <line x1={108} x2={122} y1={4} y2={4} stroke="#fff" strokeWidth="1.8" />
           <text x={126} y={7} fontSize="8.5" fill={TH_X.text} fontFamily="monospace">median</text>
-          <line x1={158} x2={172} y1={4} y2={4} stroke="#c8ccd9" strokeWidth="1" strokeDasharray="3,3" />
-          <text x={176} y={7} fontSize="8.5" fill={TH_X.textDim} fontFamily="monospace">p90</text>
+          <rect x={158} y={1} width={14} height={6} fill={color} fillOpacity="0.4" />
+          <text x={176} y={7} fontSize="8.5" fill={TH_X.textDim} fontFamily="monospace">p25–p75</text>
         </g>
 
         {/* Y grid */}
@@ -546,17 +555,19 @@ function ContextSubPanel({ title, sessions, color, cap, w, h }) {
           );
         })}
 
-        {/* p90 line */}
+        {/* p25–p75 IQR ribbon (filled, model-colored, semi-transparent).
+            Schwabish: show spread, not just upper-tail summary. */}
         {(() => {
-          const pts = [];
+          const top = [], bot = [];
           for (let i = 0; i < turns.length; i++) {
-            if (p90[i] === null || p90[i] === undefined) continue;
-            pts.push(`${xScale(turns[i])},${yScale(Math.min(p90[i], yMax))}`);
+            const lo = p25[i], hi = p75[i];
+            if (lo == null || hi == null) continue;
+            top.push(`${xScale(turns[i])},${yScale(Math.min(hi, yMax))}`);
+            bot.push(`${xScale(turns[i])},${yScale(Math.min(lo, yMax))}`);
           }
-          return pts.length > 1 ? (
-            <polyline points={pts.join(' ')} stroke="#c8ccd9" strokeWidth="1.8"
-              strokeDasharray="4,3" fill="none" />
-          ) : null;
+          if (top.length < 2) return null;
+          const ribbon = `M ${top.join(' L ')} L ${bot.reverse().join(' L ')} Z`;
+          return <path d={ribbon} fill={color} fillOpacity="0.35" stroke="none" />;
         })()}
 
         {/* Median line */}
@@ -610,7 +621,7 @@ function shortModelName(m) {
   return s;
 }
 
-function ContextGrowthPanel({ events, realSessions }) {
+function ContextGrowthPanel({ events, realSessions, ctxTraces }) {
   const ref = React.useRef(null);
   const [w, setW] = React.useState(1200);
 
@@ -627,22 +638,46 @@ function ContextGrowthPanel({ events, realSessions }) {
   // resampling row from the parser, not a real model.
   const byModel = React.useMemo(() => {
     const dropKey = (k) => k === '<synthetic>' || k === 'synthetic';
+    // Preferred path: per-FILE ctx traces. Each file (main session OR
+    // sub-agent invocation) is its own conversation with its own
+    // dominant model. This makes models that only appear in sub-agent
+    // calls (auto-compact, prompt-suggestion) visible in the panel
+    // even when no main session JSONL exists.
+    if (ctxTraces && ctxTraces.length) {
+      const out = {};
+      for (const t of ctxTraces) {
+        if (!t.turns || !t.turns.length) continue;
+        const key = shortModelName(t.model);
+        if (dropKey(key)) continue;
+        if (!out[key]) out[key] = [];
+        out[key].push({ id: t.file_key || t.session_id, seq: t.turns });
+      }
+      return out;
+    }
     if (realSessions && realSessions.length) {
       const out = {};
       for (const s of realSessions) {
         const turns = (s.turns || []).map(t => ({ t: t.t, ctx: t.ctx }));
         if (!turns.length) continue;
-        const key = shortModelName(s.model);
-        if (dropKey(key)) continue;
-        if (!out[key]) out[key] = [];
-        out[key].push({ id: s.session_id, seq: turns });
+        const used = (s.models_used && s.models_used.length)
+          ? s.models_used
+          : [s.model];
+        const seenKeys = new Set();
+        for (const m of used) {
+          const key = shortModelName(m);
+          if (dropKey(key)) continue;
+          if (seenKeys.has(key)) continue;
+          seenKeys.add(key);
+          if (!out[key]) out[key] = [];
+          out[key].push({ id: s.session_id, seq: turns });
+        }
       }
       return out;
     }
     const m = buildSessionTurns(events);
     for (const k of Object.keys(m)) if (dropKey(k)) delete m[k];
     return m;
-  }, [events, realSessions]);
+  }, [events, realSessions, ctxTraces]);
 
   // Models present, sorted by session count desc. This drives both the
   // checkbox row and the per-model sub-panels.
@@ -822,7 +857,6 @@ function ComparisonRow({ models, byModel, w, h }) {
     for (const s of series) {
       const live = s.stats.count[turn] || 0;
       lines.push([`${s.model} median`, fmt(s.stats.median[turn])]);
-      lines.push([`${s.model} p90`,    fmt(s.stats.p90[turn])]);
       lines.push([`${s.model} active`, `${live} / ${s.count}`]);
     }
     setTip({ x: mx, y: my, title: `turn ${turn}`, accent: '#ffffff', lines });
@@ -831,8 +865,8 @@ function ComparisonRow({ models, byModel, w, h }) {
   const titleText = series.length === 0
     ? 'select models above to compare'
     : series.length === 1
-      ? `${series[0].model}  ·  median + p90 per turn`
-      : series.map(s => s.model).join(' vs ') + '  ·  median + p90 per turn';
+      ? `${series[0].model}  ·  median per turn`
+      : series.map(s => s.model).join(' vs ') + '  ·  median per turn';
 
   return (
     <div ref={ref} style={{ position: 'relative', borderBottom: `1px solid ${TH_X.border}` }}
@@ -861,8 +895,6 @@ function ComparisonRow({ models, byModel, w, h }) {
                 <text x={108} y={9} fontSize="9.5" fill={TH_X.text} fontFamily="monospace">
                   median ({s.count} sess)
                 </text>
-                <line x1={210} x2={226} y1={5} y2={5} stroke={c} strokeWidth="1" strokeDasharray="3,3" />
-                <text x={232} y={9} fontSize="9.5" fill={TH_X.textDim} fontFamily="monospace">p90</text>
               </g>
             );
           });
@@ -881,14 +913,10 @@ function ComparisonRow({ models, byModel, w, h }) {
         <text x={padL - 6} y={yScale(cap) + 3} fontSize="9"
           fill="#ff5577" textAnchor="end" fontFamily="monospace">{humanFmt_X(cap)}</text>
 
-        {/* Lines — p90 dashed under, median solid on top, per checked model */}
-        {series.map(s => {
-          const c = (window.modelColors && window.modelColors[s.model]) || '#888';
-          return (
-            <polyline key={'p90-'+s.model} points={buildLine(s.stats.turns, s.stats.p90)}
-              stroke={c} strokeWidth="2" strokeDasharray="4,3" fill="none" />
-          );
-        })}
+        {/* Median line per checked model. p90 dropped — overlapping
+            dashed lines for 2+ models read as noise, and per-model
+            spread is already shown in the sub-panels below as IQR
+            ribbons. */}
         {series.map(s => {
           const c = (window.modelColors && window.modelColors[s.model]) || '#888';
           return (
@@ -985,7 +1013,696 @@ function DashTooltip({ tip }) {
   );
 }
 
+// ──────────────────────────────────────────────────────────────────────
+// Response Sizes panel — visible-text-character daily-bucketed time
+// series per model. Each line = that model's daily median chars in
+// `text` content blocks; dashed line = p90. Log y-axis (response
+// sizes span 4+ orders of magnitude). Chars (not output_tokens)
+// because output_tokens silently includes thinking, and per-model
+// thinking shares vary 0.7%–25% — token-based percentiles would
+// conflate "longer responses" with "more thinking".
+// ──────────────────────────────────────────────────────────────────────
+function ResponseSizesPanel({ data }) {
+  const ref = React.useRef(null);
+  const [w, setW] = React.useState(1200);
+  const [tip, setTip] = React.useState(null);
+  React.useEffect(() => {
+    if (!ref.current) return;
+    const ro = new ResizeObserver(es => setW(es[0].contentRect.width));
+    ro.observe(ref.current);
+    return () => ro.disconnect();
+  }, []);
+
+  // Build per-model series (sorted by ts ascending). Drop <synthetic>.
+  const series = React.useMemo(() => {
+    const drop = (k) => k === '<synthetic>' || k === 'synthetic';
+    const out = new Map();
+    for (const d of data || []) {
+      if (!(d.n > 0)) continue;
+      const key = shortModelName(d.model);
+      if (drop(key)) continue;
+      const ts = Date.parse(d.ts);
+      if (isNaN(ts)) continue;
+      if (!out.has(key)) out.set(key, []);
+      out.get(key).push({ ts, n: d.n, p50: d.p50, p90: d.p90 });
+    }
+    const result = [];
+    for (const [key, points] of out) {
+      points.sort((a, b) => a.ts - b.ts);
+      const n = points.reduce((s, p) => s + p.n, 0);
+      result.push({ key, points, n });
+    }
+    result.sort((a, b) => b.n - a.n);
+    return result;
+  }, [data]);
+
+  // All models on by default, user can toggle any off.
+  const [overrides, setOverrides] = React.useState({});
+  const sel = React.useMemo(() => {
+    const s = new Set(series.map(m => m.key));
+    for (const [k, on] of Object.entries(overrides)) {
+      if (on) s.add(k); else s.delete(k);
+    }
+    return s;
+  }, [series, overrides]);
+  function toggle(k) {
+    setOverrides(prev => ({ ...prev, [k]: !sel.has(k) }));
+  }
+  const visible = series.filter(m => sel.has(m.key));
+
+  // X-domain: union of all visible timestamps. Y-domain: log of p90 max.
+  let tMin = Infinity, tMax = -Infinity, yMaxRaw = 1;
+  for (const s of visible) {
+    for (const p of s.points) {
+      if (p.ts < tMin) tMin = p.ts;
+      if (p.ts > tMax) tMax = p.ts;
+      if (p.p90 > yMaxRaw) yMaxRaw = p.p90;
+    }
+  }
+  if (!isFinite(tMin) || !isFinite(tMax) || tMin === tMax) {
+    tMin = Date.now() - 24 * 3600 * 1000;
+    tMax = Date.now();
+  }
+  const yMin = 1;
+  const yMax = Math.max(10, yMaxRaw * 1.2);
+  const logYMin = Math.log10(yMin);
+  const logYMax = Math.log10(yMax);
+
+  const padL = 56, padR = 30, padT = 16, padB = 30;
+  const h = 280;
+  const plotW = Math.max(20, w - padL - padR);
+  const plotH = h - padT - padB;
+  const xScale = ts => padL + ((ts - tMin) / Math.max(1, tMax - tMin)) * plotW;
+  const yScale = v => padT + plotH - ((Math.log10(Math.max(yMin, v)) - logYMin) / (logYMax - logYMin)) * plotH;
+
+  // Y-axis decade ticks.
+  const yTicks = [];
+  for (let p = Math.ceil(logYMin); p <= Math.floor(logYMax); p++) yTicks.push(Math.pow(10, p));
+
+  // X-axis: month labels (UTC).
+  const xTicks = [];
+  const startD = new Date(tMin);
+  let mn = startD.getUTCMonth(), yr = startD.getUTCFullYear();
+  for (let it = 0; it < 36; it++) {
+    const t = Date.UTC(yr, mn, 1);
+    if (t > tMin && t < tMax) xTicks.push(t);
+    mn++; if (mn > 11) { mn = 0; yr++; }
+  }
+
+  function onMove(e) {
+    // Use the SVG's own bounding rect — the panel wraps the SVG in a
+    // nested div, so the outer container ref would offset by header +
+    // checkbox row heights and break the hit-test entirely.
+    const rect = e.currentTarget.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    if (mx < padL || mx > w - padR || my < padT || my > padT + plotH) {
+      setTip(null); return;
+    }
+    // Hit-test against the LINES (not just discrete day points) so
+    // hovering between two daily buckets snaps to the model's
+    // interpolated value at the cursor's x. Linear interp in log-y
+    // space matches what's drawn (the polyline between two log-mapped
+    // points is a straight line in screen space).
+    let best = null, bestD = 1e9, bestKey = null;
+    for (const s of visible) {
+      const pts = s.points;
+      if (!pts.length) continue;
+      // Skip this model entirely when the cursor is outside its real
+      // data x-range (the polyline only spans first→last point — past
+      // those, the line doesn't exist, so we shouldn't hover it).
+      const firstX = xScale(pts[0].ts);
+      const lastX  = xScale(pts[pts.length - 1].ts);
+      if (mx < firstX - 2 || mx > lastX + 2) continue;
+      // Find the segment whose x-range contains mx.
+      let i = 0;
+      while (i < pts.length - 1 && xScale(pts[i + 1].ts) < mx) i++;
+      const a = pts[i];
+      const b = pts[Math.min(i + 1, pts.length - 1)];
+      const ax = xScale(a.ts), bx = xScale(b.ts);
+      const t = (a === b || bx === ax) ? 0 : Math.max(0, Math.min(1, (mx - ax) / (bx - ax)));
+      const ts   = a.ts  + t * (b.ts  - a.ts);
+      const lerpLog = (av, bv) => {
+        const la = Math.log10(Math.max(1, av));
+        const lb = Math.log10(Math.max(1, bv));
+        return Math.pow(10, la + t * (lb - la));
+      };
+      const p50 = lerpLog(a.p50, b.p50);
+      const p90 = lerpLog(a.p90, b.p90);
+      const n   = Math.round(a.n + t * (b.n - a.n));
+      const py = yScale(p50);
+      const d = Math.abs(py - my);  // X is exactly at cursor, so just Y distance
+      if (d < bestD) {
+        bestD = d;
+        bestKey = s.key;
+        best = { ts, p50, p90, n };
+      }
+    }
+    if (!best || bestD > 32) { setTip(null); return; }
+    const fmt = window.humanFmt;
+    setTip({
+      x: mx, y: my,
+      title: bestKey + ' · ' + new Date(best.ts).toISOString().slice(0, 10),
+      accent: (window.modelColors && window.modelColors[bestKey]) || '#888',
+      lines: [
+        ['responses', best.n.toLocaleString()],
+        ['median',    fmt(Math.round(best.p50))],
+        ['p90',       fmt(Math.round(best.p90))],
+      ],
+    });
+  }
+
+  return (
+    <div ref={ref} style={{
+      background: TH_X.bgAxes, border: `1px solid ${TH_X.border}`,
+      borderRadius: 4, padding: 0, position: 'relative',
+    }}>
+      <div style={{ padding: '10px 14px 4px', borderBottom: `1px solid ${TH_X.border}` }}>
+        <div style={{ color: TH_X.text, fontFamily: 'monospace', fontWeight: 700, fontSize: 14 }}>
+          Response Sizes by Model
+        </div>
+        <div style={{ color: TH_X.textDim, fontFamily: 'monospace', fontSize: 10, marginTop: 2 }}>
+          daily median + p90 of visible response characters (text blocks; thinking excluded) · log y-axis · solid = median, dashed = p90
+        </div>
+      </div>
+
+      <div style={{
+        padding: '8px 14px', borderBottom: `1px solid ${TH_X.border}`,
+        display: 'flex', flexWrap: 'wrap', gap: '6px 14px',
+        fontFamily: 'monospace', fontSize: 11, color: TH_X.textDim,
+      }}>
+        <span>show:</span>
+        {series.map(m => {
+          const c = (window.modelColors && window.modelColors[m.key]) || '#888';
+          const checked = sel.has(m.key);
+          return (
+            <label key={m.key} style={{
+              display: 'inline-flex', alignItems: 'center', gap: 5,
+              cursor: 'pointer', userSelect: 'none',
+              opacity: checked ? 1 : 0.6,
+            }}>
+              <input type="checkbox" checked={checked} onChange={() => toggle(m.key)}
+                style={{ accentColor: c, margin: 0 }} />
+              <span style={{ width: 10, height: 10, background: c, display: 'inline-block', borderRadius: 2 }} />
+              <span style={{ color: TH_X.text, fontWeight: 600 }}>{m.key}</span>
+              <span style={{ color: TH_X.textDim }}>({m.n.toLocaleString()})</span>
+            </label>
+          );
+        })}
+        {!series.length && <span>no responses in range</span>}
+      </div>
+
+      <div style={{ position: 'relative' }} onMouseMove={onMove} onMouseLeave={() => setTip(null)}>
+        <svg width={w} height={h} style={{ display: 'block' }}>
+          {/* Y grid */}
+          {yTicks.map((v, i) => (
+            <line key={'g'+i} x1={padL} x2={w - padR}
+              y1={yScale(v)} y2={yScale(v)}
+              stroke={TH_X.grid} strokeOpacity="0.25" />
+          ))}
+
+          {/* Lines per visible model — p90 dashed underneath, median on top */}
+          {visible.map(s => {
+            const c = (window.modelColors && window.modelColors[s.key]) || '#888';
+            const ptsP90 = s.points
+              .filter(p => p.p90 > 0)
+              .map(p => `${xScale(p.ts)},${yScale(p.p90)}`).join(' ');
+            return (
+              <polyline key={'p90-'+s.key} points={ptsP90}
+                stroke={c} strokeWidth="1.1" strokeDasharray="4,3"
+                strokeOpacity="0.7" fill="none" />
+            );
+          })}
+          {visible.map(s => {
+            const c = (window.modelColors && window.modelColors[s.key]) || '#888';
+            const ptsP50 = s.points
+              .filter(p => p.p50 > 0)
+              .map(p => `${xScale(p.ts)},${yScale(p.p50)}`).join(' ');
+            return (
+              <polyline key={'p50-'+s.key} points={ptsP50}
+                stroke={c} strokeWidth="1.8" fill="none" />
+            );
+          })}
+
+          {/* Crosshair */}
+          {tip && (
+            <line x1={tip.x} x2={tip.x} y1={padT} y2={padT + plotH}
+              stroke="#fff" strokeOpacity="0.3" strokeDasharray="2,3" />
+          )}
+
+          {/* Y labels */}
+          {yTicks.map((v, i) => (
+            <text key={'yl'+i} x={padL - 6} y={yScale(v) + 3}
+              fontSize="9" fill={TH_X.textDim} textAnchor="end" fontFamily="monospace">
+              {window.humanFmt(v)}
+            </text>
+          ))}
+          {/* X labels (month) */}
+          {xTicks.map((t, i) => (
+            <text key={'xl'+i} x={xScale(t)} y={h - padB + 14}
+              fontSize="9" fill={TH_X.textDim} textAnchor="middle" fontFamily="monospace">
+              {fmtDate_X(t, { month: true })}
+            </text>
+          ))}
+          <text x={14} y={padT + plotH/2} fontSize="9" fill={TH_X.textDim}
+            textAnchor="middle" fontFamily="monospace"
+            transform={`rotate(-90 14 ${padT + plotH/2})`}>visible chars (log)</text>
+        </svg>
+        {tip && <window.DashTooltip tip={tip} />}
+      </div>
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Tool Usage panel — daily-bucketed share-of-total tool-call ratios
+// per tool, stacked to 100%. A tool is promoted to its own band if
+// it ever cracked top-N at any single bucket (so a newcomer that
+// ramped recently gets visibility, not buried in "Other"). User can
+// override per-tool via checkboxes. Hovering "Other" shows the full
+// per-bin breakdown of the unpromoted tools.
+// ──────────────────────────────────────────────────────────────────────
+
+// Stable color picker — hash a tool name to a hue. Avoids manually
+// curating a palette for ~80 tools while keeping each tool's color
+// stable across reloads and panels.
+function _toolColor(name) {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) | 0;
+  const hue = ((h % 360) + 360) % 360;
+  return `hsl(${hue}, 60%, 55%)`;
+}
+const _OTHER_COLOR = '#5a627a';
+
+function ToolUsagePanel({ models, project, range, nonce }) {
+  const ref = React.useRef(null);
+  const [w, setW] = React.useState(1200);
+  const [tip, setTip] = React.useState(null);
+  const [data, setData] = React.useState([]);
+  // Per-panel model filter — separate from any global picker so the
+  // user can drill into "what does opus-4-7 use Bash for?" without
+  // affecting other panels.
+  const [activeModel, setActiveModel] = React.useState('');
+
+  React.useEffect(() => {
+    if (!ref.current) return;
+    const ro = new ResizeObserver(es => setW(es[0].contentRect.width));
+    ro.observe(ref.current);
+    return () => ro.disconnect();
+  }, []);
+
+  React.useEffect(() => {
+    const q = (project ? `&project=${encodeURIComponent(project)}` : '')
+            + (activeModel ? `&model=${encodeURIComponent(activeModel)}` : '');
+    fetch(`/api/tool-usage?range=${range || 'all'}${q}`, { credentials: 'same-origin' })
+      .then(r => r.json())
+      .then(b => setData(b.buckets || []))
+      .catch(err => console.error('tool-usage fetch failed', err));
+  }, [project, range, activeModel, nonce]);
+
+  // Dedup model list by short name for the select.
+  const modelOpts = React.useMemo(() => {
+    const grouped = {};
+    for (const m of models || []) {
+      const key = window.shortModelName ? window.shortModelName(m.model) : m.model;
+      if (key === '<synthetic>' || key === 'synthetic') continue;
+      grouped[key] = (grouped[key] || 0) + (m.n || 0);
+    }
+    return Object.entries(grouped)
+      .sort((a, b) => b[1] - a[1])
+      .map(([k, n]) => ({ key: k, n }));
+  }, [models]);
+
+  const TOP_N = 7;
+
+  // 1) Pivot data into a Map<bucketTs, Map<tool, count>> + bucket totals.
+  // 2) Compute per-tool overall count.
+  // 3) Determine "promoted" tools: top-N at any single bucket.
+  const { buckets, perBucket, totalsByTool, promoted } = React.useMemo(() => {
+    const perBucket = new Map();      // ts -> Map<tool, n>
+    const totalsByTool = new Map();   // tool -> total n across all buckets
+    for (const r of data || []) {
+      const t = Date.parse(r.ts);
+      if (isNaN(t)) continue;
+      if (!perBucket.has(t)) perBucket.set(t, new Map());
+      const cur = perBucket.get(t).get(r.tool) || 0;
+      perBucket.get(t).set(r.tool, cur + r.n);
+      totalsByTool.set(r.tool, (totalsByTool.get(r.tool) || 0) + r.n);
+    }
+    const buckets = [...perBucket.keys()].sort((a, b) => a - b);
+    // Per-bucket top-N → union → promoted set.
+    const promoted = new Set();
+    for (const ts of buckets) {
+      const entries = [...perBucket.get(ts).entries()].sort((a, b) => b[1] - a[1]);
+      for (const [tool] of entries.slice(0, TOP_N)) promoted.add(tool);
+    }
+    return { buckets, perBucket, totalsByTool, promoted };
+  }, [data]);
+
+  // Sorted promoted-tool list (largest overall first → big bands at bottom).
+  const promotedList = React.useMemo(
+    () => [...promoted].sort((a, b) => (totalsByTool.get(b) || 0) - (totalsByTool.get(a) || 0)),
+    [promoted, totalsByTool]
+  );
+  const otherTools = React.useMemo(
+    () => [...totalsByTool.keys()]
+      .filter(t => !promoted.has(t))
+      .sort((a, b) => (totalsByTool.get(b) || 0) - (totalsByTool.get(a) || 0)),
+    [totalsByTool, promoted]
+  );
+
+  // Per-tool checkbox overrides — start with all promoted shown.
+  // Treat the literal key "__OTHER__" the same way so the user can
+  // toggle the Other band off when it's not interesting.
+  const [overrides, setOverrides] = React.useState({});
+  const sel = React.useMemo(() => {
+    const s = new Set(promotedList);
+    s.add('__OTHER__');
+    for (const [k, on] of Object.entries(overrides)) {
+      if (on) s.add(k); else s.delete(k);
+    }
+    return s;
+  }, [promotedList, overrides]);
+  function toggle(k) {
+    setOverrides(prev => ({ ...prev, [k]: !sel.has(k) }));
+  }
+  // Bands actually drawn (in stacking order, largest at bottom).
+  const bands = [...sel].filter(k => k !== '__OTHER__')
+    .sort((a, b) => (totalsByTool.get(b) || 0) - (totalsByTool.get(a) || 0));
+  const showOther = otherTools.length > 0 && sel.has('__OTHER__');
+
+  // Build per-bucket share series. Each bucket's *displayed* bands +
+  // optional Other rescale to sum to 1.0 — so unchecking a tool
+  // redistributes the remaining bands across the full 0-100% height
+  // (relative ratios among what's shown), not just leaves a hole.
+  // Tooltip still has access to the absolute bucket total.
+  const grid = React.useMemo(() => {
+    const shares = new Map();
+    bands.forEach(t => shares.set(t, []));
+    const other = [];
+    const totalCalls = [];
+    for (const ts of buckets) {
+      const counts = perBucket.get(ts);
+      let bucketTotal = 0;
+      for (const v of counts.values()) bucketTotal += v;
+      totalCalls.push(bucketTotal);
+      let bandSum = 0;
+      for (const t of bands) bandSum += counts.get(t) || 0;
+      let otherSum = 0;
+      if (showOther) for (const t of otherTools) otherSum += counts.get(t) || 0;
+      const denom = bandSum + (showOther ? otherSum : 0);
+      for (const t of bands) {
+        const v = counts.get(t) || 0;
+        shares.get(t).push(denom > 0 ? v / denom : 0);
+      }
+      other.push(showOther && denom > 0 ? otherSum / denom : 0);
+    }
+    return { ts: buckets, shares, other, totalCalls };
+  }, [buckets, perBucket, bands, showOther, otherTools]);
+
+  // Geometry
+  const padL = 56, padR = 30, padT = 16, padB = 30;
+  const h = 320;
+  const plotW = Math.max(20, w - padL - padR);
+  const plotH = h - padT - padB;
+  const tMin = grid.ts[0] || (Date.now() - 24 * 3600 * 1000);
+  const tMax = grid.ts[grid.ts.length - 1] || Date.now();
+  const xScale = ts => padL + ((ts - tMin) / Math.max(1, tMax - tMin)) * plotW;
+  const yScale = frac => padT + plotH - frac * plotH;
+
+  // Buckets where the displayed bands+Other sum to 0 carry no data
+  // FOR THE CURRENT FILTER — interpolate across them instead of
+  // collapsing to baseline (which reads as a hard "data ends here").
+  const liveIdx = React.useMemo(() => {
+    const out = [];
+    for (let i = 0; i < grid.ts.length; i++) {
+      let total = showOther ? grid.other[i] : 0;
+      for (const t of bands) total += grid.shares.get(t)[i];
+      if (total > 0) out.push(i);
+    }
+    return out;
+  }, [grid, bands, showOther]);
+
+  // Stacked-area paths. Bottom-up: largest band first, "Other" last.
+  // Path walks `liveIdx` only — gaps are bridged by linear segments
+  // between adjacent live buckets.
+  const stackPaths = React.useMemo(() => {
+    const out = [];
+    if (!liveIdx.length) return out;
+    const cum = new Array(grid.ts.length).fill(0);
+    const layers = [...bands.map(t => ({ tool: t, color: _toolColor(t), shares: grid.shares.get(t) }))];
+    if (showOther) layers.push({ tool: '__OTHER__', color: _OTHER_COLOR, shares: grid.other });
+    for (const layer of layers) {
+      const top = [], bot = [];
+      for (const i of liveIdx) {
+        const baseY = yScale(cum[i]);
+        const topY  = yScale(cum[i] + layer.shares[i]);
+        bot.push(`${xScale(grid.ts[i])},${baseY}`);
+        top.push(`${xScale(grid.ts[i])},${topY}`);
+        cum[i] += layer.shares[i];
+      }
+      const d = `M ${top.join(' L ')} L ${bot.reverse().join(' L ')} Z`;
+      out.push({ tool: layer.tool, color: layer.color, d });
+    }
+    return out;
+  }, [grid, bands, showOther, liveIdx, plotW, plotH, tMin, tMax]);
+
+  // Y-axis ticks at 0/25/50/75/100%.
+  const yTicks = [0, 0.25, 0.5, 0.75, 1.0];
+  // X-axis: month labels.
+  const xTicks = [];
+  if (isFinite(tMin) && isFinite(tMax)) {
+    const startD = new Date(tMin);
+    let mn = startD.getUTCMonth(), yr = startD.getUTCFullYear();
+    for (let it = 0; it < 36; it++) {
+      const t = Date.UTC(yr, mn, 1);
+      if (t > tMin && t < tMax) xTicks.push(t);
+      mn++; if (mn > 11) { mn = 0; yr++; }
+    }
+  }
+
+  function onMove(e) {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    if (mx < padL || mx > w - padR || my < padT || my > padT + plotH) {
+      setTip(null); return;
+    }
+    if (!grid.ts.length) { setTip(null); return; }
+    // Snap to nearest bucket on x.
+    let bIdx = 0, bestD = 1e9;
+    for (let i = 0; i < grid.ts.length; i++) {
+      const d = Math.abs(xScale(grid.ts[i]) - mx);
+      if (d < bestD) { bestD = d; bIdx = i; }
+    }
+    const cursorFrac = 1 - (my - padT) / plotH;
+    // Identify which band the cursor is in (bottom-up cumulative).
+    let cum = 0, hovered = null;
+    for (const t of bands) {
+      const sh = grid.shares.get(t)[bIdx];
+      if (cursorFrac >= cum && cursorFrac < cum + sh) { hovered = t; break; }
+      cum += sh;
+    }
+    if (!hovered && showOther && cursorFrac >= cum && cursorFrac < cum + grid.other[bIdx]) {
+      hovered = '__OTHER__';
+    }
+    if (!hovered) { setTip(null); return; }
+    const ts = grid.ts[bIdx];
+    const totalCalls = grid.totalCalls[bIdx];
+    const dateStr = new Date(ts).toISOString().slice(0, 10);
+    const lines = [];
+    // Denom = sum across what's actually displayed in this bucket
+    // (matches the chart's rescaled share %).
+    const counts = perBucket.get(ts);
+    let bandSum = 0;
+    for (const t of bands) bandSum += counts.get(t) || 0;
+    let otherSum = 0;
+    if (showOther) for (const t of otherTools) otherSum += counts.get(t) || 0;
+    const shownDenom = Math.max(1, bandSum + (showOther ? otherSum : 0));
+    if (hovered === '__OTHER__') {
+      const otherEntries = otherTools
+        .map(t => ({ tool: t, n: counts.get(t) || 0 }))
+        .filter(e => e.n > 0)
+        .sort((a, b) => b.n - a.n);
+      const otherTotal = otherEntries.reduce((s, e) => s + e.n, 0);
+      lines.push(['Other share',  (otherTotal / shownDenom * 100).toFixed(1) + '% of shown']);
+      lines.push(['Other calls',  otherTotal.toLocaleString() + ' (bucket total: ' + totalCalls.toLocaleString() + ')']);
+      for (const e of otherEntries) {
+        lines.push([
+          e.tool,
+          `${(e.n / shownDenom * 100).toFixed(1)}% (${e.n.toLocaleString()})`,
+        ]);
+      }
+      setTip({
+        x: mx, y: my,
+        title: `Other · ${dateStr}`,
+        accent: _OTHER_COLOR,
+        lines,
+      });
+    } else {
+      const n = counts.get(hovered) || 0;
+      setTip({
+        x: mx, y: my,
+        title: `${hovered} · ${dateStr}`,
+        accent: _toolColor(hovered),
+        lines: [
+          ['share',     (n / shownDenom * 100).toFixed(1) + '% of shown'],
+          ['absolute',  (n / Math.max(1, totalCalls) * 100).toFixed(1) + '% of bucket'],
+          ['calls',     n.toLocaleString() + ' / ' + totalCalls.toLocaleString()],
+        ],
+      });
+    }
+  }
+
+  return (
+    <div ref={ref} style={{
+      background: TH_X.bgAxes, border: `1px solid ${TH_X.border}`,
+      borderRadius: 4, padding: 0, position: 'relative',
+    }}>
+      <div style={{ padding: '10px 14px 4px', borderBottom: `1px solid ${TH_X.border}`, display: 'flex', alignItems: 'center', gap: 16 }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ color: TH_X.text, fontFamily: 'monospace', fontWeight: 700, fontSize: 14 }}>
+            Tool Usage Ratio over Time
+          </div>
+          <div style={{ color: TH_X.textDim, fontFamily: 'monospace', fontSize: 10, marginTop: 2 }}>
+            stacked share of tool calls per day · top-{TOP_N}-at-any-bucket promoted to own band · {showOther ? `${otherTools.length} smaller tools collapsed into Other (hover to expand)` : 'no Other bucket'}
+          </div>
+        </div>
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontFamily: 'monospace', fontSize: 11, color: TH_X.textDim }}>
+          <button
+            type="button"
+            onClick={() => {
+              const next = {};
+              for (const t of promotedList) next[t] = false;
+              next['__OTHER__'] = false;
+              setOverrides(next);
+            }}
+            style={{
+              background: 'transparent', color: TH_X.textDim,
+              border: `1px solid ${TH_X.border}`, borderRadius: 3,
+              padding: '2px 8px', fontFamily: 'monospace', fontSize: 11,
+              cursor: 'pointer',
+            }}
+          >none</button>
+          <button
+            type="button"
+            onClick={() => {
+              const next = {};
+              for (const t of promotedList) next[t] = true;
+              next['__OTHER__'] = true;
+              setOverrides(next);
+            }}
+            style={{
+              background: 'transparent', color: TH_X.textDim,
+              border: `1px solid ${TH_X.border}`, borderRadius: 3,
+              padding: '2px 8px', fontFamily: 'monospace', fontSize: 11,
+              cursor: 'pointer',
+            }}
+          >all</button>
+          <span style={{ marginLeft: 8 }}>model:</span>
+          <select
+            value={activeModel}
+            onChange={e => setActiveModel(e.target.value)}
+            style={{
+              background: '#16172e', color: TH_X.text,
+              border: `1px solid ${TH_X.border}`, borderRadius: 4,
+              padding: '3px 6px', fontFamily: 'monospace', fontSize: 11,
+              cursor: 'pointer',
+            }}
+          >
+            <option value="">All</option>
+            {modelOpts.map(o => (
+              <option key={o.key} value={o.key}>{o.key} ({o.n.toLocaleString()})</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      <div style={{
+        padding: '8px 14px', borderBottom: `1px solid ${TH_X.border}`,
+        display: 'flex', flexWrap: 'wrap', gap: '6px 14px',
+        fontFamily: 'monospace', fontSize: 11, color: TH_X.textDim,
+      }}>
+        <span>show:</span>
+        {promotedList.map(tool => {
+          const c = _toolColor(tool);
+          const checked = sel.has(tool);
+          return (
+            <label key={tool} style={{
+              display: 'inline-flex', alignItems: 'center', gap: 5,
+              cursor: 'pointer', userSelect: 'none',
+              opacity: checked ? 1 : 0.6,
+            }}>
+              <input type="checkbox" checked={checked} onChange={() => toggle(tool)}
+                style={{ accentColor: c, margin: 0 }} />
+              <span style={{ width: 10, height: 10, background: c, display: 'inline-block', borderRadius: 2 }} />
+              <span style={{ color: TH_X.text, fontWeight: 600 }}>{tool}</span>
+              <span style={{ color: TH_X.textDim }}>({(totalsByTool.get(tool) || 0).toLocaleString()})</span>
+            </label>
+          );
+        })}
+        {otherTools.length > 0 && (() => {
+          const checked = sel.has('__OTHER__');
+          return (
+            <label style={{
+              display: 'inline-flex', alignItems: 'center', gap: 5,
+              cursor: 'pointer', userSelect: 'none',
+              opacity: checked ? 1 : 0.6,
+            }}>
+              <input type="checkbox" checked={checked} onChange={() => toggle('__OTHER__')}
+                style={{ accentColor: _OTHER_COLOR, margin: 0 }} />
+              <span style={{ width: 10, height: 10, background: _OTHER_COLOR, display: 'inline-block', borderRadius: 2 }} />
+              <span style={{ color: TH_X.text, fontWeight: 600 }}>Other</span>
+              <span style={{ color: TH_X.textDim }}>({otherTools.length} tools)</span>
+            </label>
+          );
+        })()}
+        {!promotedList.length && <span>no tool data in range</span>}
+      </div>
+
+      <div style={{ position: 'relative' }} onMouseMove={onMove} onMouseLeave={() => setTip(null)}>
+        <svg width={w} height={h} style={{ display: 'block' }}>
+          {/* Y grid */}
+          {yTicks.map((v, i) => (
+            <line key={'g'+i} x1={padL} x2={w - padR}
+              y1={yScale(v)} y2={yScale(v)}
+              stroke={TH_X.grid} strokeOpacity="0.25" />
+          ))}
+
+          {/* Stacked bands */}
+          {stackPaths.map(layer => (
+            <path key={layer.tool} d={layer.d}
+              fill={layer.color} fillOpacity="0.85" stroke="none" />
+          ))}
+
+          {/* Y labels */}
+          {yTicks.map((v, i) => (
+            <text key={'yl'+i} x={padL - 6} y={yScale(v) + 3}
+              fontSize="9" fill={TH_X.textDim} textAnchor="end" fontFamily="monospace">
+              {(v * 100).toFixed(0)}%
+            </text>
+          ))}
+          {/* X labels (month) */}
+          {xTicks.map((t, i) => (
+            <text key={'xl'+i} x={xScale(t)} y={h - padB + 14}
+              fontSize="9" fill={TH_X.textDim} textAnchor="middle" fontFamily="monospace">
+              {fmtDate_X(t, { month: true })}
+            </text>
+          ))}
+          {tip && (
+            <line x1={tip.x} x2={tip.x} y1={padT} y2={padT + plotH}
+              stroke="#fff" strokeOpacity="0.3" strokeDasharray="2,3" />
+          )}
+        </svg>
+        {tip && <window.DashTooltip tip={tip} />}
+      </div>
+    </div>
+  );
+}
+
 window.CacheTTLPanel = CacheTTLPanel;
 window.ContextGrowthPanel = ContextGrowthPanel;
 window.DashTooltip = DashTooltip;
 window.shortModelName = shortModelName;
+window.ResponseSizesPanel = ResponseSizesPanel;
+window.ToolUsagePanel = ToolUsagePanel;
