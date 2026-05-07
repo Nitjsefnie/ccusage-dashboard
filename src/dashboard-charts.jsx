@@ -511,7 +511,10 @@ function BurnRatePanel({ events, sessions, totalSessions, limitHits, range, wind
   const logYMin = Math.log10(yMin), logYMax = Math.log10(yMax);
   const xScale = ts => padL + ((ts - range.start) / (range.end - range.start)) * plotW;
   const yScale = v => {
-    const cv = Math.max(yMin * 0.1, v);
+    // Clamp to [yMin, yMax] so out-of-range sessions sit on the plot
+    // edge instead of leaking out the bottom into the legend strip
+    // (`yMin * 0.1` floor caused the negative-fraction overshoot).
+    const cv = Math.max(yMin, Math.min(yMax, v));
     return padT + plotH - ((Math.log10(cv) - logYMin) / (logYMax - logYMin)) * plotH;
   };
 
