@@ -19,6 +19,20 @@ import orjson
 from backend import pricing
 
 
+_INSTRUMENTATION_USER_PREFIXES = (
+    "<bash-input>",
+    "<bash-stdout>",
+    "<bash-stderr>",
+    "<local-command-caveat>",
+    "<local-command-stdout>",
+    "<local-command-stderr>",
+    "<command-name>",
+    "<command-message>",
+    "<command-args>",
+)
+_INTERRUPT_MARKER = "[Request interrupted by user"
+
+
 def _merge_usage_max(existing, incoming):
     if existing is None:
         return incoming
@@ -68,6 +82,13 @@ def parse_file(file_key: str, blob: bytes) -> dict:
     user_text_lines: list[int] = []
     rate_limit_hits: list[dict] = []
     tool_uses: list[dict] = []
+    # Reply-latency anchor: last NON-instrumentation, NON-interrupt user
+    # message timestamp. Cleared when consumed by an assistant message,
+    # an interrupt marker, or superseded by a fresher user message.
+    # Mirrors compute_reply_latency() in parse_session.py at the
+    # message granularity (we treat the assistant message line as the
+    # terminator since all assistant content blocks share its ts).
+    last_user_ts: datetime | None = None
 
     for line_num, raw in enumerate(blob.splitlines(), 1):
         if not raw:
@@ -112,7 +133,21 @@ def parse_file(file_key: str, blob: bytes) -> dict:
         if role == "user":
             content = msg.get("content")
             if isinstance(content, str) and content.strip():
-                user_text_lines.append(line_num)
+                text = content.lstrip()
+                # Instrumentation user msgs (bash IO + caveat) are
+                # explicitly "DO NOT respond" and never anchor a
+                # reply-latency window. Interrupt markers terminate
+                # an open window without anchoring a new one. Plain
+                # user text supersedes any existing anchor with its ts.
+                if any(text.startswith(p) for p in _INSTRUMENTATION_USER_PREFIXES):
+                    pass
+                elif text.startswith(_INTERRUPT_MARKER):
+                    last_user_ts = None
+                else:
+                    user_text_lines.append(line_num)
+                    ts_dt = _to_dt(obj.get("timestamp", "") or "")
+                    if ts_dt is not None:
+                        last_user_ts = ts_dt
             continue
 
         if role != "assistant":
@@ -141,7 +176,10 @@ def parse_file(file_key: str, blob: bytes) -> dict:
                 btype = blk.get("type")
                 if btype == "text":
                     text_chars += len(str(blk.get("text", "")))
-                elif btype == "tool_use":
+                elif btype in ("tool_use", "server_tool_use"):
+                    # server_tool_use = model invoked an Anthropic-hosted
+                    # tool (e.g. WebSearch). Same shape as tool_use; treat
+                    # both as tool calls in the panel.
                     name = str(blk.get("name", "") or "")
                     if name:
                         msg_tool_uses.append({"idx": idx, "tool_name": name})
@@ -149,6 +187,24 @@ def parse_file(file_key: str, blob: bytes) -> dict:
             text_chars = len(msg_content)
 
         req_id = obj.get("requestId", "") or ""
+        # Reply latency: gap from last anchored user-message ts to
+        # this assistant message's ts. NULL when there's no preceding
+        # anchored user message (session start, or every recent user
+        # msg was instrumentation/interrupt) OR when delta is
+        # negative (analyst 2026-05-07: negative deltas are
+        # session-restore / compaction replay artifacts where the
+        # assistant message came from a prior, re-emitted state and
+        # isn't actually a reply to the visually-preceding user msg).
+        # Clamping to 0 would pollute the p0/p50 distribution; drop
+        # the measurement instead.
+        reply_latency_s: float | None = None
+        if last_user_ts is not None:
+            assistant_dt = _to_dt(obj.get("timestamp", "") or "")
+            if assistant_dt is not None:
+                delta_s = (assistant_dt - last_user_ts).total_seconds()
+                if delta_s >= 0:
+                    reply_latency_s = delta_s
+        last_user_ts = None  # anchor consumed by this assistant reply
         ev = {
             "line_num": line_num,
             "uuid": obj.get("uuid") or None,
@@ -157,6 +213,7 @@ def parse_file(file_key: str, blob: bytes) -> dict:
             "model": msg.get("model") or "(unknown)",
             "usage": dict(usage),
             "text_chars": text_chars,
+            "reply_latency_s": reply_latency_s,
         }
         if req_id and req_id in seen_request:
             existing = seen_request[req_id]
@@ -212,6 +269,7 @@ def parse_file(file_key: str, blob: bytes) -> dict:
             "cache_read_tokens": read,
             "output_tokens": output,
             "text_chars": int(ev.get("text_chars", 0)),
+            "reply_latency_s": ev.get("reply_latency_s"),
             "eph5_tokens": eph5,
             "eph1h_tokens": eph1h,
             "cost_usd": round(cost, 6),

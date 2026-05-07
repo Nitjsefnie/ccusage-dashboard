@@ -50,6 +50,8 @@ CREATE TABLE IF NOT EXISTS records (
 -- Idempotent migration for existing DBs.
 ALTER TABLE records ADD COLUMN IF NOT EXISTS
   text_chars BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE records ADD COLUMN IF NOT EXISTS
+  reply_latency_s NUMERIC(10,3);
 
 CREATE INDEX IF NOT EXISTS records_uuid_idx ON records (uuid) WHERE uuid IS NOT NULL;
 CREATE INDEX IF NOT EXISTS records_ts_idx ON records (ts);

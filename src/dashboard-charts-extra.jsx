@@ -47,28 +47,27 @@ function CacheTTLPanel({ events, range, binMs }) {
     return { start: dMin - pad, end: dMax + pad };
   }, [events, range.start, range.end]);
 
-  // Auto pick bin size: aim for ~70 bins across whatever range we plot.
-  // Falls back to dashboard-wide binMs when that's denser. Daily / 6h / 1h
-  // / 15m steps, snapped to clean boundaries.
+  // Bucketing rule (matches backend _bucket_seconds + dashboard binMs):
+  // pick the LARGEST bin in [60s, 1d] that yields ≥100 bins. Never
+  // coarser than the dashboard-wide binMs.
   const adaptiveBin = React.useMemo(() => {
-    const span = dataRange.end - dataRange.start;
-    const target = span / 70;
+    const span = Math.max(1, dataRange.end - dataRange.start);
     const stepMs = [
+      60_000,                // 1m
+      5 * 60_000,            // 5m
       15 * 60_000,           // 15m
       30 * 60_000,           // 30m
       60 * 60_000,           // 1h
-      3 * 60 * 60_000,       // 3h
       6 * 60 * 60_000,       // 6h
       12 * 60 * 60_000,      // 12h
       24 * 60 * 60_000,      // 1d
-      3 * 24 * 60 * 60_000,  // 3d
-      7 * 24 * 60 * 60_000,  // 7d
     ];
-    let chosen = stepMs[stepMs.length - 1];
+    let chosen = stepMs[0];
     for (const s of stepMs) {
-      if (s >= target) { chosen = s; break; }
+      if (span / s < 100) break;
+      chosen = s;
     }
-    return Math.min(chosen, binMs); // never coarser than dashboard binMs
+    return Math.min(chosen, binMs);
   }, [dataRange.start, dataRange.end, binMs]);
 
   const useRange = dataRange;
@@ -262,18 +261,34 @@ function CacheTTLPanel({ events, range, binMs }) {
 
         {/* Share strip: one continuous line+area that linearly
             interpolates across empty bins (no cache_create activity)
-            so sparse data still reads as a single trace. */}
+            so sparse data still reads as a single trace. The line is
+            also extended half a bucket past each end with a linear
+            extrapolation of the share value, so the visual reaches
+            the full plot width. */}
         {(() => {
           const valid = [];
           for (let i = 0; i < bins.length; i++) {
             const v = sharePct[i];
-            if (v !== null) valid.push({ x: xScale(bins[i].start) + barW / 2, y: shareY(v) });
+            if (v !== null) valid.push({ ts: bins[i].start, share: v });
           }
           if (valid.length < 2) return null;
-          const fill = `M ${valid[0].x},${shareBot} ` +
-            valid.map(p => `L ${p.x},${p.y}`).join(' ') +
-            ` L ${valid[valid.length-1].x},${shareBot} Z`;
-          const line = `M ` + valid.map(p => `${p.x},${p.y}`).join(' L ');
+          const binDur = bins[0].end - bins[0].start;
+          const half = binDur / 2;
+          const f = valid[0], s = valid[1];
+          const l = valid[valid.length - 1], p2 = valid[valid.length - 2];
+          const clampPct = v => Math.max(0, Math.min(100, v));
+          const extended = [
+            { ts: f.ts - half, share: clampPct(1.5 * f.share - 0.5 * s.share) },
+            ...valid,
+            { ts: l.ts + half, share: clampPct(1.5 * l.share - 0.5 * p2.share) },
+          ];
+          const xy = extended.map(p =>
+            ({ x: xScale(p.ts) + barW / 2, y: shareY(p.share) })
+          );
+          const fill = `M ${xy[0].x},${shareBot} ` +
+            xy.map(p => `L ${p.x},${p.y}`).join(' ') +
+            ` L ${xy[xy.length-1].x},${shareBot} Z`;
+          const line = `M ` + xy.map(p => `${p.x},${p.y}`).join(' L ');
           return (
             <g>
               <path d={fill} fill={COL_X.inputTokens} fillOpacity="0.20" />
@@ -369,10 +384,16 @@ function buildSessionTurns(events) {
     for (const e of evs) counts[e.model] = (counts[e.model] || 0) + 1;
     let dom = 'unknown', max = 0;
     for (const [m, c] of Object.entries(counts)) if (c > max) { max = c; dom = m; }
-    const seq = evs.map((e, i) => ({
-      t: e.turn_index != null ? e.turn_index : i,
-      ctx: (e.input_tokens || 0) + (e.cache_create || 0) + (e.cache_read || 0),
-    }));
+    // Default behavior: every session has an implicit (turn 0, ctx 0)
+    // origin. Real turns are 1-indexed off that.
+    const seq = [{ t: 0, ctx: 0 }];
+    evs.forEach((e, i) => {
+      const t = (e.turn_index != null ? e.turn_index : i) + 1;
+      seq.push({
+        t,
+        ctx: (e.input_tokens || 0) + (e.cache_create || 0) + (e.cache_read || 0),
+      });
+    });
     if (!out[dom]) out[dom] = [];
     out[dom].push({ id: sid, seq });
   }
@@ -417,7 +438,8 @@ function ContextSubPanel({ title, sessions, color, cap, w, h }) {
   const ref = React.useRef(null);
   const [tip, setTip] = React.useState(null);
 
-  const padL = 50, padR = 16, padT = 38, padB = 24;
+  // Legend now sits below the plot, so padB grows (x-ticks + legend).
+  const padL = 50, padR = 16, padT = 38, padB = 50;
   const plotW = Math.max(10, w - padL - padR);
   const plotH = Math.max(10, h - padT - padB);
 
@@ -485,7 +507,7 @@ function ContextSubPanel({ title, sessions, color, cap, w, h }) {
         ['median ctx', fmtV(med)],
         ['p25–p75',    `${fmtV(q1)}–${fmtV(q3)}`],
         ['p90 ctx',    fmtV(p9)],
-        ['sessions @ turn', `${liveCount} / ${nSess}`],
+        ['files @ turn', `${liveCount} / ${nSess}`],
         ['cap',        humanFmt_X(cap)],
       ],
     });
@@ -499,18 +521,22 @@ function ContextSubPanel({ title, sessions, color, cap, w, h }) {
   }
 
   return (
-    <div ref={ref} style={{ position: 'relative', flex: 1, minWidth: 0 }}
+    <div ref={ref} style={{
+      position: 'relative', flex: 1, minWidth: 0,
+      border: `1px solid ${TH_X.border}`, borderRadius: 4,
+      background: TH_X.bgAxes,
+    }}
       onMouseMove={onMove} onMouseLeave={() => setTip(null)}>
       <svg width={w} height={h} style={{ display: 'block' }}>
         <text x={padL} y={18} fontSize="11" fontWeight="bold" fill={color}
           fontFamily="monospace">{title}</text>
         <text x={padL} y={32} fontSize="9" fill={TH_X.textDim}
           fontFamily="monospace">
-          {nSess} sessions · longest: {longest} · max ctx: {humanFmt_X(maxCtx)}
+          {nSess.toLocaleString()} agent files · longest: {longest} · max ctx: {humanFmt_X(maxCtx)}
         </text>
 
-        {/* Mini legend (top-right of panel) */}
-        <g transform={`translate(${w - padR - 190}, 14)`}>
+        {/* Mini legend, BELOW the plot */}
+        <g transform={`translate(${padL}, ${h - 14})`}>
           <rect x={0} y={0} width={14} height={8} fill={color} fillOpacity="0.18" />
           <text x={18} y={7} fontSize="8.5" fill={TH_X.textDim} fontFamily="monospace">active</text>
           <line x1={52} x2={66} y1={4} y2={4} stroke={color} strokeWidth="0.7" strokeOpacity="0.6" />
@@ -542,7 +568,6 @@ function ContextSubPanel({ title, sessions, color, cap, w, h }) {
 
         {/* Per-session traces */}
         {sessions.map((s, i) => {
-          if (s.seq.length < 2) return null;
           const pts = [];
           for (const p of s.seq) {
             if (p.t >= CTX_TURN_CAP) break;
@@ -609,6 +634,51 @@ function ContextSubPanel({ title, sessions, color, cap, w, h }) {
   );
 }
 
+// Backend bucket projections center on bucket midpoint, so a polyline
+// or band that just walks those midpoints leaves a half-bucket visual
+// gap at each end (the data extends through [midpoint - N/2, midpoint
+// + N/2) but the polyline only reaches the midpoint). This helper
+// prepends + appends a virtual point half-a-bucket past each end with
+// LINEARLY EXTRAPOLATED values (slope from the two adjacent points)
+// so the rendered line/band fully covers the bucket extent.
+//
+// `valueKeys` lists the numeric fields to extrapolate. `log = true`
+// extrapolates in log10 space (right for latency / response chars
+// where the y-axis is log). `min` clamps the extrapolated value
+// (default 0). Single-point series fall back to flat carry — no
+// slope info available.
+function extendBucketSeries(points, halfMs, valueKeys, options) {
+  if (!points || !points.length) return points;
+  const opts = options || {};
+  const inLog = opts.log === true;
+  const minY = opts.min !== undefined ? opts.min : 0;
+  if (points.length === 1) {
+    const p = points[0];
+    return [{ ...p, ts: p.ts - halfMs }, p, { ...p, ts: p.ts + halfMs }];
+  }
+  const first = points[0], second = points[1];
+  const last  = points[points.length - 1];
+  const penul = points[points.length - 2];
+  const lerp = (edge, neighbor) => {
+    if (inLog) {
+      const eps = 1e-9;
+      const le = Math.log10(Math.max(eps, edge));
+      const ln = Math.log10(Math.max(eps, neighbor));
+      return Math.pow(10, 1.5 * le - 0.5 * ln);
+    }
+    return 1.5 * edge - 0.5 * neighbor;
+  };
+  const projFirst = { ...first };
+  const projLast  = { ...last };
+  for (const k of valueKeys) {
+    projFirst[k] = Math.max(minY, lerp(first[k], second[k]));
+    projLast[k]  = Math.max(minY, lerp(last[k],  penul[k]));
+  }
+  projFirst.ts = first.ts - halfMs;
+  projLast.ts  = last.ts  + halfMs;
+  return [projFirst, ...points, projLast];
+}
+
 // Canonicalize backend model strings (e.g. "claude-opus-4-7-20251101") to
 // the short keys used by `window.modelColors` ("opus-4-7"). Falls back to
 // the original string when no canonical short name applies.
@@ -643,22 +713,35 @@ function ContextGrowthPanel({ events, realSessions, ctxTraces }) {
     // dominant model. This makes models that only appear in sub-agent
     // calls (auto-compact, prompt-suggestion) visible in the panel
     // even when no main session JSONL exists.
+    //
+    // Index shift: backend turns are 0-indexed (first response = t0).
+    // Re-index to 1-based and prepend an implicit (turn 0, ctx 0)
+    // origin so every trace — including single-turn sub-agent calls
+    // — has at least 2 points and renders as a polyline + contributes
+    // a value-0 anchor to the per-turn median/p25/p75/p90 stats.
     if (ctxTraces && ctxTraces.length) {
       const out = {};
       for (const t of ctxTraces) {
         if (!t.turns || !t.turns.length) continue;
         const key = shortModelName(t.model);
         if (dropKey(key)) continue;
+        const seq = [
+          { t: 0, ctx: 0 },
+          ...t.turns.map(p => ({ t: p.t + 1, ctx: p.ctx })),
+        ];
         if (!out[key]) out[key] = [];
-        out[key].push({ id: t.file_key || t.session_id, seq: t.turns });
+        out[key].push({ id: t.file_key || t.session_id, seq });
       }
       return out;
     }
     if (realSessions && realSessions.length) {
       const out = {};
       for (const s of realSessions) {
-        const turns = (s.turns || []).map(t => ({ t: t.t, ctx: t.ctx }));
-        if (!turns.length) continue;
+        if (!s.turns || !s.turns.length) continue;
+        const seq = [
+          { t: 0, ctx: 0 },
+          ...s.turns.map(p => ({ t: p.t + 1, ctx: p.ctx })),
+        ];
         const used = (s.models_used && s.models_used.length)
           ? s.models_used
           : [s.model];
@@ -669,7 +752,7 @@ function ContextGrowthPanel({ events, realSessions, ctxTraces }) {
           if (seenKeys.has(key)) continue;
           seenKeys.add(key);
           if (!out[key]) out[key] = [];
-          out[key].push({ id: s.session_id, seq: turns });
+          out[key].push({ id: s.session_id, seq });
         }
       }
       return out;
@@ -720,9 +803,10 @@ function ContextGrowthPanel({ events, realSessions, ctxTraces }) {
     <div ref={ref} style={{
       background: TH_X.bgAxes, border: `1px solid ${TH_X.border}`,
       borderRadius: 4, padding: 0, position: 'relative',
+      display: 'flex', flexDirection: 'column',
     }}>
       {/* Header */}
-      <div style={{ padding: '10px 14px 4px', borderBottom: `1px solid ${TH_X.border}` }}>
+      <div style={{ padding: '10px 14px 4px', borderBottom: `1px solid ${TH_X.border}`, order: 1 }}>
         <div style={{ color: TH_X.text, fontFamily: 'monospace', fontWeight: 700, fontSize: 14 }}>
           Per-Session Context Growth
         </div>
@@ -731,11 +815,14 @@ function ContextGrowthPanel({ events, realSessions, ctxTraces }) {
         </div>
       </div>
 
-      {/* Model checkbox row — defaults to top 2 by session count. */}
+      {/* Model checkbox row — directly below the comparison overlay
+          (order 3, between the comparison at order 2 and sub-panel
+          rows at default 0/4+). */}
       <div style={{
         padding: '8px 14px', borderBottom: `1px solid ${TH_X.border}`,
         display: 'flex', flexWrap: 'wrap', gap: '6px 14px',
         fontFamily: 'monospace', fontSize: 11, color: TH_X.textDim,
+        order: 3,
       }}>
         <span style={{ color: TH_X.textDim }}>compare:</span>
         {models.map(m => {
@@ -759,13 +846,18 @@ function ContextGrowthPanel({ events, realSessions, ctxTraces }) {
       </div>
 
       {/* Comparison overlay — driven by checked models */}
-      <ComparisonRow models={cmpModels} byModel={byModel} w={cmpW} h={cmpH} />
+      <div style={{ order: 2 }}>
+        <ComparisonRow models={cmpModels} byModel={byModel} w={cmpW} h={cmpH} />
+      </div>
 
-      {/* Per-model sub-panels (rows of 2) for every model with data */}
+      {/* Per-model sub-panels (rows of 2) for every model with data.
+          Each sub-panel renders its own border, so this just lays them
+          out as a 2-column grid with gaps between cells. */}
       {rows.map((rowModels, ri) => (
         <div key={ri} style={{
-          display: 'flex', gap: 0,
-          borderTop: ri > 0 ? `1px solid ${TH_X.border}` : 'none',
+          display: 'flex', gap: 12,
+          padding: ri === 0 ? '12px 12px 6px' : '6px 12px',
+          order: 4 + ri,
         }}>
           {rowModels.map(m => {
             const sessions = byModel[m.model] || [];
@@ -788,7 +880,9 @@ function ComparisonRow({ models, byModel, w, h }) {
   const ref = React.useRef(null);
   const [tip, setTip] = React.useState(null);
 
-  const padL = 60, padR = 30, padT = 50, padB = 24;
+  // Legend now sits BELOW the plot, so padT shrinks (just title) and
+  // padB grows (title-tick + legend).
+  const padL = 60, padR = 30, padT = 30, padB = 60;
   const plotW = Math.max(10, w - padL - padR);
   const plotH = Math.max(10, h - padT - padB);
 
@@ -877,23 +971,22 @@ function ComparisonRow({ models, byModel, w, h }) {
           {titleText}
         </text>
 
-        {/* Legend — one cluster per checked model. Wraps at edge. */}
+        {/* Legend — one cluster per checked model. Wraps at edge.
+            Sits BELOW the plot area now (was above the title). */}
         {(() => {
-          // Painted width per cluster: ~245px of glyphs + 25px gutter.
-          // Bumping from 230 prevents the next cluster's color swatch
-          // from overlapping the previous cluster's "p90" label.
           const clusterW = 270;
+          const legendBaseY = padT + plotH + 30;  // below x-tick labels
           return series.map((s, i) => {
             const c = (window.modelColors && window.modelColors[s.model]) || '#888';
             const x = padL + (i * clusterW) % Math.max(1, plotW);
-            const yRow = padT - 18 + Math.floor((i * clusterW) / Math.max(1, plotW)) * 14;
+            const yRow = legendBaseY + Math.floor((i * clusterW) / Math.max(1, plotW)) * 14;
             return (
               <g key={s.model} transform={`translate(${x}, ${yRow})`}>
                 <rect x={0} y={0} width={4} height={12} fill={c} />
                 <text x={9} y={9} fontSize="9.5" fontWeight="700" fill={c} fontFamily="monospace">{s.model}</text>
                 <line x1={86} x2={102} y1={5} y2={5} stroke={c} strokeWidth="2" />
                 <text x={108} y={9} fontSize="9.5" fill={TH_X.text} fontFamily="monospace">
-                  median ({s.count} sess)
+                  median ({s.count.toLocaleString()} files)
                 </text>
               </g>
             );
@@ -998,15 +1091,18 @@ function DashTooltip({ tip }) {
     whiteSpace: 'nowrap',
     boxShadow: '0 6px 20px rgba(0,0,0,0.6)',
     zIndex: 5,
-    maxWidth: 280,
+    maxWidth: 360,
   };
   return (
     <div ref={ref} style={style}>
       {tip.title && <div style={{ color: tip.accent || TH_X.text, fontWeight: 700, marginBottom: 4 }}>{tip.title}</div>}
       {(tip.lines || []).map((l, i) => (
         <div key={i} style={{ display: 'flex', gap: 12, justifyContent: 'space-between', lineHeight: 1.6 }}>
-          <span style={{ color: TH_X.textDim }}>{l[0]}</span>
-          <span style={{ color: l[2] || TH_X.text, fontWeight: 600 }}>{l[1]}</span>
+          <span style={{ color: TH_X.textDim, flexShrink: 0 }}>{l[0]}</span>
+          <span style={{
+            color: l[2] || TH_X.text, fontWeight: 600,
+            wordBreak: 'break-all', whiteSpace: 'normal', textAlign: 'right',
+          }}>{l[1]}</span>
         </div>
       ))}
     </div>
@@ -1022,7 +1118,7 @@ function DashTooltip({ tip }) {
 // thinking shares vary 0.7%–25% — token-based percentiles would
 // conflate "longer responses" with "more thinking".
 // ──────────────────────────────────────────────────────────────────────
-function ResponseSizesPanel({ data }) {
+function ResponseSizesPanel({ data, bucketS }) {
   const ref = React.useRef(null);
   const [w, setW] = React.useState(1200);
   const [tip, setTip] = React.useState(null);
@@ -1047,14 +1143,18 @@ function ResponseSizesPanel({ data }) {
       out.get(key).push({ ts, n: d.n, p50: d.p50, p90: d.p90 });
     }
     const result = [];
+    const halfMs = ((bucketS || 86400) * 1000) / 2;
     for (const [key, points] of out) {
       points.sort((a, b) => a.ts - b.ts);
       const n = points.reduce((s, p) => s + p.n, 0);
-      result.push({ key, points, n });
+      const extended = extendBucketSeries(
+        points, halfMs, ['p50', 'p90'], { log: true, min: 0 }
+      );
+      result.push({ key, points: extended, n });
     }
     result.sort((a, b) => b.n - a.n);
     return result;
-  }, [data]);
+  }, [data, bucketS]);
 
   // All models on by default, user can toggle any off.
   const [overrides, setOverrides] = React.useState({});
@@ -1176,6 +1276,7 @@ function ResponseSizesPanel({ data }) {
     <div ref={ref} style={{
       background: TH_X.bgAxes, border: `1px solid ${TH_X.border}`,
       borderRadius: 4, padding: 0, position: 'relative',
+      display: 'flex', flexDirection: 'column',
     }}>
       <div style={{ padding: '10px 14px 4px', borderBottom: `1px solid ${TH_X.border}` }}>
         <div style={{ color: TH_X.text, fontFamily: 'monospace', fontWeight: 700, fontSize: 14 }}>
@@ -1187,9 +1288,10 @@ function ResponseSizesPanel({ data }) {
       </div>
 
       <div style={{
-        padding: '8px 14px', borderBottom: `1px solid ${TH_X.border}`,
+        padding: '8px 14px', borderTop: `1px solid ${TH_X.border}`,
         display: 'flex', flexWrap: 'wrap', gap: '6px 14px',
         fontFamily: 'monospace', fontSize: 11, color: TH_X.textDim,
+        order: 99,
       }}>
         <span>show:</span>
         {series.map(m => {
@@ -1299,6 +1401,7 @@ function ToolUsagePanel({ models, project, range, nonce }) {
   const [w, setW] = React.useState(1200);
   const [tip, setTip] = React.useState(null);
   const [data, setData] = React.useState([]);
+  const [bucketMs, setBucketMs] = React.useState(86_400_000);
   // Per-panel model filter — separate from any global picker so the
   // user can drill into "what does opus-4-7 use Bash for?" without
   // affecting other panels.
@@ -1316,7 +1419,10 @@ function ToolUsagePanel({ models, project, range, nonce }) {
             + (activeModel ? `&model=${encodeURIComponent(activeModel)}` : '');
     fetch(`/api/tool-usage?range=${range || 'all'}${q}`, { credentials: 'same-origin' })
       .then(r => r.json())
-      .then(b => setData(b.buckets || []))
+      .then(b => {
+        setData(b.buckets || []);
+        if (b.bucket_s) setBucketMs(b.bucket_s * 1000);
+      })
       .catch(err => console.error('tool-usage fetch failed', err));
   }, [project, range, activeModel, nonce]);
 
@@ -1417,8 +1523,44 @@ function ToolUsagePanel({ models, project, range, nonce }) {
       }
       other.push(showOther && denom > 0 ? otherSum / denom : 0);
     }
+    // Extend the stacked-area by half a bucket on each end so the
+    // visual reaches the bucket edges (no half-bucket gap). Shares
+    // and Other are linearly extrapolated from the two adjacent
+    // buckets, clamped ≥ 0. Per-band sums at the new boundaries are
+    // then renormalized to 1.0 so the stack never overshoots 100%.
+    if (buckets.length >= 2 && bucketMs > 0) {
+      const halfMs = bucketMs / 2;
+      const extrap = (arr) => {
+        if (arr.length < 2) return [arr[0] || 0, ...arr, arr[arr.length - 1] || 0];
+        const first = Math.max(0, 1.5 * arr[0] - 0.5 * arr[1]);
+        const last  = Math.max(0, 1.5 * arr[arr.length - 1] - 0.5 * arr[arr.length - 2]);
+        return [first, ...arr, last];
+      };
+      const newShares = new Map();
+      for (const t of bands) newShares.set(t, extrap(shares.get(t)));
+      const newOther = extrap(other);
+      const newTotal = extrap(totalCalls);
+      // Renormalize boundary points so band sum + other = 1 there
+      // (independent extrapolation can drift the sum away from 1).
+      const fixIdx = (idx) => {
+        let sum = 0;
+        for (const t of bands) sum += newShares.get(t)[idx];
+        if (showOther) sum += newOther[idx];
+        if (sum <= 0) return;
+        for (const t of bands) newShares.get(t)[idx] = newShares.get(t)[idx] / sum;
+        if (showOther) newOther[idx] = newOther[idx] / sum;
+      };
+      fixIdx(0);
+      fixIdx(newOther.length - 1);
+      return {
+        ts: [buckets[0] - halfMs, ...buckets, buckets[buckets.length - 1] + halfMs],
+        shares: newShares,
+        other: newOther,
+        totalCalls: newTotal,
+      };
+    }
     return { ts: buckets, shares, other, totalCalls };
-  }, [buckets, perBucket, bands, showOther, otherTools]);
+  }, [buckets, perBucket, bands, showOther, otherTools, bucketMs]);
 
   // Geometry
   const padL = 56, padR = 30, padT = 16, padB = 30;
@@ -1558,6 +1700,7 @@ function ToolUsagePanel({ models, project, range, nonce }) {
     <div ref={ref} style={{
       background: TH_X.bgAxes, border: `1px solid ${TH_X.border}`,
       borderRadius: 4, padding: 0, position: 'relative',
+      display: 'flex', flexDirection: 'column',
     }}>
       <div style={{ padding: '10px 14px 4px', borderBottom: `1px solid ${TH_X.border}`, display: 'flex', alignItems: 'center', gap: 16 }}>
         <div style={{ flex: 1 }}>
@@ -1612,16 +1755,17 @@ function ToolUsagePanel({ models, project, range, nonce }) {
           >
             <option value="">All</option>
             {modelOpts.map(o => (
-              <option key={o.key} value={o.key}>{o.key} ({o.n.toLocaleString()})</option>
+              <option key={o.key} value={o.key}>{o.key}</option>
             ))}
           </select>
         </div>
       </div>
 
       <div style={{
-        padding: '8px 14px', borderBottom: `1px solid ${TH_X.border}`,
+        padding: '8px 14px', borderTop: `1px solid ${TH_X.border}`,
         display: 'flex', flexWrap: 'wrap', gap: '6px 14px',
         fontFamily: 'monospace', fontSize: 11, color: TH_X.textDim,
+        order: 99,
       }}>
         <span>show:</span>
         {promotedList.map(tool => {
@@ -1700,9 +1844,370 @@ function ToolUsagePanel({ models, project, range, nonce }) {
   );
 }
 
+// ──────────────────────────────────────────────────────────────────────
+// Reply Latency panel — per-(bucket, model) p10–p90 band + median line,
+// plus scatter dots for top-1% slowest + bottom-1% fastest replies
+// per bucket (when bucket_n >= 100). Log y-axis (latency 0.5s–400s).
+// ──────────────────────────────────────────────────────────────────────
+function ReplyLatencyPanel({ project, range, nonce, models }) {
+  const ref = React.useRef(null);
+  const [w, setW] = React.useState(1200);
+  const [tip, setTip] = React.useState(null);
+  const [bands, setBands] = React.useState([]);
+  const [outliers, setOutliers] = React.useState([]);
+  const [bucketMs, setBucketMs] = React.useState(86_400_000);
+  const [activeModel, setActiveModel] = React.useState('');
+
+  React.useEffect(() => {
+    if (!ref.current) return;
+    const ro = new ResizeObserver(es => setW(es[0].contentRect.width));
+    ro.observe(ref.current);
+    return () => ro.disconnect();
+  }, []);
+
+  React.useEffect(() => {
+    const q = (project ? `&project=${encodeURIComponent(project)}` : '')
+            + (activeModel ? `&model=${encodeURIComponent(activeModel)}` : '');
+    fetch(`/api/reply-latency?range=${range || 'all'}${q}`, { credentials: 'same-origin' })
+      .then(r => r.json())
+      .then(b => {
+        setBands(b.bands || []);
+        setOutliers(b.outliers || []);
+        if (b.bucket_s) setBucketMs(b.bucket_s * 1000);
+      })
+      .catch(err => console.error('reply-latency fetch failed', err));
+  }, [project, range, activeModel, nonce]);
+
+  // Per-model series for the bands.
+  const series = React.useMemo(() => {
+    const drop = k => k === '<synthetic>' || k === 'synthetic';
+    const out = new Map();
+    for (const b of bands) {
+      const key = shortModelName(b.model);
+      if (drop(key)) continue;
+      const ts = Date.parse(b.ts);
+      if (isNaN(ts)) continue;
+      if (!out.has(key)) out.set(key, []);
+      out.get(key).push({ ts, n: b.n, p10: b.p10, p50: b.p50, p90: b.p90 });
+    }
+    const arr = [];
+    const half = bucketMs / 2;
+    for (const [key, points] of out) {
+      points.sort((a, b) => a.ts - b.ts);
+      const n = points.reduce((s, p) => s + p.n, 0);
+      // Log-space linear extrapolation by half a bucket on each end
+      // so the median + p10/p90 band visually span the full bucket
+      // extent without flat-carry artifacts.
+      const extended = extendBucketSeries(
+        points, half, ['p10', 'p50', 'p90'], { log: true, min: 0 }
+      );
+      arr.push({ key, points: extended, n });
+    }
+    arr.sort((a, b) => b.n - a.n);
+    return arr;
+  }, [bands, bucketMs]);
+
+  // All models on by default; uncheck individually.
+  const [overrides, setOverrides] = React.useState({});
+  const sel = React.useMemo(() => {
+    const s = new Set(series.map(m => m.key));
+    for (const [k, on] of Object.entries(overrides)) {
+      if (on) s.add(k); else s.delete(k);
+    }
+    return s;
+  }, [series, overrides]);
+  function toggle(k) {
+    setOverrides(prev => ({ ...prev, [k]: !sel.has(k) }));
+  }
+  const visible = series.filter(m => sel.has(m.key));
+
+  // Outlier dots filtered by visible models too.
+  const visibleKeys = React.useMemo(() => new Set(visible.map(s => s.key)), [visible]);
+  const visibleOutliers = React.useMemo(
+    () => outliers
+      .map(o => ({ ...o, key: shortModelName(o.model), tsMs: Date.parse(o.ts) }))
+      .filter(o => !isNaN(o.tsMs) && visibleKeys.has(o.key)),
+    [outliers, visibleKeys]
+  );
+
+  // Dedup model list for the model select.
+  const modelOpts = React.useMemo(() => {
+    const grouped = {};
+    for (const m of models || []) {
+      const key = window.shortModelName ? window.shortModelName(m.model) : m.model;
+      if (key === '<synthetic>' || key === 'synthetic') continue;
+      grouped[key] = (grouped[key] || 0) + (m.n || 0);
+    }
+    return Object.entries(grouped)
+      .sort((a, b) => b[1] - a[1])
+      .map(([k, n]) => ({ key: k, n }));
+  }, [models]);
+
+  // Geometry. Y log-scale, range from 0.1s to max p90 (clamped >= 10s).
+  let tMin = Infinity, tMax = -Infinity, yMaxRaw = 1;
+  for (const s of visible) {
+    for (const p of s.points) {
+      if (p.ts < tMin) tMin = p.ts;
+      if (p.ts > tMax) tMax = p.ts;
+      if (p.p90 > yMaxRaw) yMaxRaw = p.p90;
+    }
+  }
+  for (const o of visibleOutliers) {
+    if (o.tsMs < tMin) tMin = o.tsMs;
+    if (o.tsMs > tMax) tMax = o.tsMs;
+    if (o.latency_s > yMaxRaw) yMaxRaw = o.latency_s;
+  }
+  if (!isFinite(tMin) || !isFinite(tMax) || tMin === tMax) {
+    tMin = Date.now() - 24 * 3600 * 1000;
+    tMax = Date.now();
+  }
+  const yMin = 0.1;
+  const yMax = Math.max(10, yMaxRaw * 1.2);
+  const logYMin = Math.log10(yMin);
+  const logYMax = Math.log10(yMax);
+
+  const padL = 56, padR = 30, padT = 16, padB = 30;
+  const h = 320;
+  const plotW = Math.max(20, w - padL - padR);
+  const plotH = h - padT - padB;
+  const xScale = ts => padL + ((ts - tMin) / Math.max(1, tMax - tMin)) * plotW;
+  const yScale = v => padT + plotH - ((Math.log10(Math.max(yMin, v)) - logYMin) / (logYMax - logYMin)) * plotH;
+
+  // Y decade ticks.
+  const yTicks = [];
+  for (let p = Math.ceil(logYMin); p <= Math.floor(logYMax); p++) yTicks.push(Math.pow(10, p));
+
+  // X month labels.
+  const xTicks = [];
+  if (isFinite(tMin) && isFinite(tMax)) {
+    const startD = new Date(tMin);
+    let mn = startD.getUTCMonth(), yr = startD.getUTCFullYear();
+    for (let it = 0; it < 36; it++) {
+      const t = Date.UTC(yr, mn, 1);
+      if (t > tMin && t < tMax) xTicks.push(t);
+      mn++; if (mn > 11) { mn = 0; yr++; }
+    }
+  }
+
+  function fmtSecs(s) {
+    if (s < 1) return s.toFixed(2) + 's';
+    if (s < 60) return s.toFixed(1) + 's';
+    if (s < 3600) return (s / 60).toFixed(1) + 'm';
+    return (s / 3600).toFixed(1) + 'h';
+  }
+
+  function onMove(e) {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    if (mx < padL || mx > w - padR || my < padT || my > padT + plotH) {
+      setTip(null); return;
+    }
+    // Try outlier dots first (small targets, but exact times).
+    let bestO = null, bestOD = 1e9;
+    for (const o of visibleOutliers) {
+      const px = xScale(o.tsMs), py = yScale(o.latency_s);
+      const d = Math.hypot(px - mx, py - my);
+      if (d < bestOD) { bestOD = d; bestO = o; }
+    }
+    if (bestO && bestOD < 8) {
+      // file_key shape: <project>/<session_id>/<filename>.jsonl —
+      // drop the project segment, keep session/filename so the
+      // tooltip stays narrow but still uniquely identifies the line.
+      const fk = String(bestO.file_key || '');
+      const fileShort = fk.split('/').slice(-2).join('/');
+      setTip({
+        x: mx, y: my,
+        title: 'outlier · ' + bestO.key,
+        accent: (window.modelColors && window.modelColors[bestO.key]) || '#888',
+        lines: [
+          ['latency', fmtSecs(bestO.latency_s)],
+          ['when',    new Date(bestO.tsMs).toISOString().slice(0, 19) + 'Z'],
+          ['file',    fileShort],
+          ['line',    String(bestO.line || '')],
+        ],
+      });
+      return;
+    }
+    // Else: nearest median line (interpolated).
+    let best = null, bestD = 1e9, bestKey = null;
+    for (const s of visible) {
+      const pts = s.points;
+      if (!pts.length) continue;
+      const firstX = xScale(pts[0].ts);
+      const lastX  = xScale(pts[pts.length - 1].ts);
+      if (mx < firstX - 2 || mx > lastX + 2) continue;
+      let i = 0;
+      while (i < pts.length - 1 && xScale(pts[i + 1].ts) < mx) i++;
+      const a = pts[i];
+      const b = pts[Math.min(i + 1, pts.length - 1)];
+      const ax = xScale(a.ts), bx = xScale(b.ts);
+      const t = (a === b || bx === ax) ? 0 : Math.max(0, Math.min(1, (mx - ax) / (bx - ax)));
+      const ts = a.ts + t * (b.ts - a.ts);
+      const lerpLog = (av, bv) => {
+        const la = Math.log10(Math.max(yMin, av));
+        const lb = Math.log10(Math.max(yMin, bv));
+        return Math.pow(10, la + t * (lb - la));
+      };
+      const p10 = lerpLog(a.p10, b.p10);
+      const p50 = lerpLog(a.p50, b.p50);
+      const p90 = lerpLog(a.p90, b.p90);
+      const n   = Math.round(a.n + t * (b.n - a.n));
+      const py = yScale(p50);
+      const d = Math.abs(py - my);
+      if (d < bestD) {
+        bestD = d; bestKey = s.key; best = { ts, p10, p50, p90, n };
+      }
+    }
+    if (!best || bestD > 32) { setTip(null); return; }
+    setTip({
+      x: mx, y: my,
+      title: bestKey + ' · ' + new Date(best.ts).toISOString().slice(0, 10),
+      accent: (window.modelColors && window.modelColors[bestKey]) || '#888',
+      lines: [
+        ['replies', best.n.toLocaleString()],
+        ['p10',     fmtSecs(best.p10)],
+        ['median',  fmtSecs(best.p50)],
+        ['p90',     fmtSecs(best.p90)],
+      ],
+    });
+  }
+
+  return (
+    <div ref={ref} style={{
+      background: TH_X.bgAxes, border: `1px solid ${TH_X.border}`,
+      borderRadius: 4, padding: 0, position: 'relative',
+      display: 'flex', flexDirection: 'column',
+    }}>
+      <div style={{ padding: '10px 14px 4px', borderBottom: `1px solid ${TH_X.border}`, display: 'flex', alignItems: 'center', gap: 16 }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ color: TH_X.text, fontFamily: 'monospace', fontWeight: 700, fontSize: 14 }}>
+            Reply Latency over Time
+          </div>
+          <div style={{ color: TH_X.textDim, fontFamily: 'monospace', fontSize: 10, marginTop: 2 }}>
+            user msg → first assistant event · per-(bucket, model) p10–p90 band, median line, top/bottom-1% outlier dots (bucket n ≥ 100) · log y
+          </div>
+        </div>
+        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontFamily: 'monospace', fontSize: 11, color: TH_X.textDim }}>
+          model:
+          <select
+            value={activeModel}
+            onChange={e => setActiveModel(e.target.value)}
+            style={{
+              background: '#16172e', color: TH_X.text,
+              border: `1px solid ${TH_X.border}`, borderRadius: 4,
+              padding: '3px 6px', fontFamily: 'monospace', fontSize: 11,
+              cursor: 'pointer',
+            }}
+          >
+            <option value="">All</option>
+            {modelOpts.map(o => (
+              <option key={o.key} value={o.key}>{o.key}</option>
+            ))}
+          </select>
+        </label>
+      </div>
+
+      <div style={{
+        padding: '8px 14px', borderTop: `1px solid ${TH_X.border}`,
+        display: 'flex', flexWrap: 'wrap', gap: '6px 14px',
+        fontFamily: 'monospace', fontSize: 11, color: TH_X.textDim,
+        order: 99,
+      }}>
+        <span>show:</span>
+        {series.map(m => {
+          const c = (window.modelColors && window.modelColors[m.key]) || '#888';
+          const checked = sel.has(m.key);
+          return (
+            <label key={m.key} style={{
+              display: 'inline-flex', alignItems: 'center', gap: 5,
+              cursor: 'pointer', userSelect: 'none',
+              opacity: checked ? 1 : 0.6,
+            }}>
+              <input type="checkbox" checked={checked} onChange={() => toggle(m.key)}
+                style={{ accentColor: c, margin: 0 }} />
+              <span style={{ width: 10, height: 10, background: c, display: 'inline-block', borderRadius: 2 }} />
+              <span style={{ color: TH_X.text, fontWeight: 600 }}>{m.key}</span>
+              <span style={{ color: TH_X.textDim }}>({m.n.toLocaleString()})</span>
+            </label>
+          );
+        })}
+        {!series.length && <span>no reply-latency data in range</span>}
+      </div>
+
+      <div style={{ position: 'relative' }} onMouseMove={onMove} onMouseLeave={() => setTip(null)}>
+        <svg width={w} height={h} style={{ display: 'block' }}>
+          {yTicks.map((v, i) => (
+            <line key={'g'+i} x1={padL} x2={w - padR}
+              y1={yScale(v)} y2={yScale(v)}
+              stroke={TH_X.grid} strokeOpacity="0.25" />
+          ))}
+
+          {/* p10–p90 band per visible model */}
+          {visible.map(s => {
+            const c = (window.modelColors && window.modelColors[s.key]) || '#888';
+            const top = [], bot = [];
+            for (const p of s.points) {
+              if (!p.p90 || !p.p10) continue;
+              top.push(`${xScale(p.ts)},${yScale(p.p90)}`);
+              bot.push(`${xScale(p.ts)},${yScale(p.p10)}`);
+            }
+            if (top.length < 2) return null;
+            const ribbon = `M ${top.join(' L ')} L ${bot.reverse().join(' L ')} Z`;
+            return <path key={'band-'+s.key} d={ribbon} fill={c} fillOpacity="0.20" stroke="none" />;
+          })}
+
+          {/* Median lines */}
+          {visible.map(s => {
+            const c = (window.modelColors && window.modelColors[s.key]) || '#888';
+            const pts = s.points
+              .filter(p => p.p50 > 0)
+              .map(p => `${xScale(p.ts)},${yScale(p.p50)}`).join(' ');
+            return <polyline key={'med-'+s.key} points={pts}
+              stroke={c} strokeWidth="1.8" fill="none" />;
+          })}
+
+          {/* Outlier dots (top/bottom 1%) */}
+          {visibleOutliers.map((o, i) => {
+            const c = (window.modelColors && window.modelColors[o.key]) || '#888';
+            return <circle key={'o'+i} cx={xScale(o.tsMs)} cy={yScale(o.latency_s)}
+              r="2.5" fill={c} fillOpacity="0.6" stroke="none" />;
+          })}
+
+          {tip && (
+            <line x1={tip.x} x2={tip.x} y1={padT} y2={padT + plotH}
+              stroke="#fff" strokeOpacity="0.3" strokeDasharray="2,3" />
+          )}
+
+          {yTicks.map((v, i) => (
+            <text key={'yl'+i} x={padL - 6} y={yScale(v) + 3}
+              fontSize="9" fill={TH_X.textDim} textAnchor="end" fontFamily="monospace">
+              {v < 1 ? v.toFixed(1) + 's'
+               : v < 60 ? Math.round(v) + 's'
+               : v < 3600 ? (v/60).toFixed(v < 600 ? 1 : 0).replace(/\.0$/, '') + 'm'
+               : (v/3600).toFixed(v < 36000 ? 1 : 0).replace(/\.0$/, '') + 'h'}
+            </text>
+          ))}
+          {xTicks.map((t, i) => (
+            <text key={'xl'+i} x={xScale(t)} y={h - padB + 14}
+              fontSize="9" fill={TH_X.textDim} textAnchor="middle" fontFamily="monospace">
+              {fmtDate_X(t, { month: true })}
+            </text>
+          ))}
+          <text x={14} y={padT + plotH/2} fontSize="9" fill={TH_X.textDim}
+            textAnchor="middle" fontFamily="monospace"
+            transform={`rotate(-90 14 ${padT + plotH/2})`}>latency (log)</text>
+        </svg>
+        {tip && <window.DashTooltip tip={tip} />}
+      </div>
+    </div>
+  );
+}
+
 window.CacheTTLPanel = CacheTTLPanel;
 window.ContextGrowthPanel = ContextGrowthPanel;
 window.DashTooltip = DashTooltip;
 window.shortModelName = shortModelName;
 window.ResponseSizesPanel = ResponseSizesPanel;
 window.ToolUsagePanel = ToolUsagePanel;
+window.ReplyLatencyPanel = ReplyLatencyPanel;

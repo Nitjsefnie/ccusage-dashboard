@@ -161,7 +161,10 @@ function TimeSeriesPanel({ title, events, valueKey, color, isCurrency, range, bi
   }
 
   const maxBin = Math.max(1, ...bins.map(b => b.sum));
-  const cumPts = [];
+  // Cumulative line — start anchored at (range.start, 0) so the line
+  // visually originates at the left edge of the plot, not at the end
+  // of the first bin (the previous behavior left a leading gap).
+  const cumPts = [{ ts: range.start, v: 0, binIdx: -1 }];
   let ci = 0, runEv = 0;
   for (let k = 0; k < bins.length; k++) {
     const upTo = bins[k].end;
@@ -216,7 +219,7 @@ function TimeSeriesPanel({ title, events, valueKey, color, isCurrency, range, bi
     if (idx < 0) idx = 0;
     if (idx >= bins.length) idx = bins.length - 1;
     const b = bins[idx];
-    const cum = cumPts[idx];
+    const cum = cumPts[idx + 1];  // +1 to skip the leading (range.start, 0) anchor
     setTip({
       x: mx, y: my,
       title: `${fmtDate(b.start, {day:true})} – ${fmtDate(b.end, {day:true})}`,
@@ -397,7 +400,7 @@ function HBar({ title, rows, totalForPct, fmt, fixedColors }) {
 }
 
 // --- Burn rate panel ---
-function BurnRatePanel({ events, sessions, limitHits, range, windowBoundaries }) {
+function BurnRatePanel({ events, sessions, totalSessions, limitHits, range, windowBoundaries }) {
   const ref = React.useRef(null);
   const [size, setSize] = React.useState({ w: 1200, h: 360 });
   const [tip, setTip] = React.useState(null);
@@ -412,7 +415,8 @@ function BurnRatePanel({ events, sessions, limitHits, range, windowBoundaries })
     return () => ro.disconnect();
   }, []);
   const { w, h } = size;
-  const padL = 60, padR = 30, padT = 60, padB = 30;
+  // Top is just title (no legend); bottom has x-tick labels + the legend.
+  const padL = 60, padR = 30, padT = 30, padB = 56;
   const plotW = Math.max(10, w - padL - padR);
   const plotH = Math.max(10, h - padT - padB);
 
@@ -620,7 +624,7 @@ function BurnRatePanel({ events, sessions, limitHits, range, windowBoundaries })
       <svg width={w} height={h} style={{ display: 'block' }}>
         <text x={w/2} y={20} fontSize="14" fontWeight="bold" fill={TH.text}
           textAnchor="middle" fontFamily="monospace">
-          Session Burn Rate  |  {fmtDate(range.start, {day:true})} – {fmtDate(range.end, {day:true})}, {new Date(range.end).getUTCFullYear()} UTC  |  {events.reduce((s,e)=>s+(e.session_count||0),0) || sessions.length} sessions, {events.reduce((s,e)=>s+(e.requests==null?1:e.requests),0).toLocaleString()} requests
+          Session Burn Rate  |  {fmtDate(range.start, {day:true})} – {fmtDate(range.end, {day:true})}, {new Date(range.end).getUTCFullYear()} UTC  |  {(totalSessions != null ? totalSessions : (events.reduce((s,e)=>s+(e.session_count||0),0) || sessions.length)).toLocaleString()} sessions, {events.reduce((s,e)=>s+(e.requests==null?1:e.requests),0).toLocaleString()} requests
         </text>
         {windowBoundaries.map((wb, i) => (
           <line key={'wb'+i} x1={xScale(wb)} x2={xScale(wb)}
@@ -677,7 +681,7 @@ function BurnRatePanel({ events, sessions, limitHits, range, windowBoundaries })
           textAnchor="middle" fontFamily="monospace"
           transform={`rotate(-90 14 ${padT + plotH/2})`}>Tokens / hour (EMA)</text>
 
-        <g transform={`translate(${padL + 20}, ${padT - 30})`}>
+        <g transform={`translate(${padL + 20}, ${h - 22})`}>
           {Object.entries(series).map(([k, s], i) => (
             <g key={k} transform={`translate(${i * 130}, 0)`}>
               <line x1={0} x2={20} y1={6} y2={6} stroke={s.color} strokeWidth="2" />

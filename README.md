@@ -6,7 +6,8 @@ A FastAPI backend ingests transcripts from Cloudflare R2 (or a local
 transcripts to a React + in-browser-Babel frontend (no build step).
 
 The dashboard panel set — Session Burn Rate, Cost by Model, Token Breakdown,
-Prompt-Cache TTL Split, Per-Session Context Growth — is based on
+Prompt-Cache TTL Split, Per-Session Context Growth, Response Sizes,
+Tool Usage, Reply Latency — is based on
 [`nhz-io/ccusage-plot`](https://github.com/nhz-io/ccusage-plot). This repo
 ports those matplotlib-only offline visualizations into a hosted
 SVG/React app with multi-user auth, R2 ingest, and live updates.
@@ -17,24 +18,33 @@ SVG/React app with multi-user auth, R2 ingest, and live updates.
   cache-create TTL split (`ephemeral_5m` × 1.25× base, `ephemeral_1h` × 2× base).
 - **Token Breakdown** as paired sort-by-tokens / sort-by-cost bars
   over Input, Output, Cache Create (5m / 1h / unsplit), Cache Read.
-- **Prompt-Cache TTL Split** showing daily ephemeral_5m vs
-  ephemeral_1h cache_create volumes with a 5m-share-% trend strip.
-- **Response Sizes by Model** — daily median + p90 of *visible
-  response characters* (text content blocks; thinking excluded) on a
-  log y-axis, per-model checkboxes.
+- **Prompt-Cache TTL Split** showing adaptively-bucketed ephemeral_5m
+  vs ephemeral_1h cache_create volumes with a 5m-share-% trend strip.
+- **Response Sizes by Model** — adaptively-bucketed median + p90 of
+  *visible response characters* (text content blocks; thinking
+  excluded) on a log y-axis, per-model checkboxes.
 - **Per-Session Context Growth** — per-model sub-panels with a
   p25–p75 IQR ribbon under a median line plus faint per-session
   traces, a multi-model checkbox-driven comparison row, and
   per-FILE traces so sub-agent invocations surface under their own
-  model even when no main session JSONL exists.
+  model even when no main session JSONL exists. Each trace is
+  anchored at an implicit (turn 0, ctx 0) origin.
 - **Session burn rate** scatter with dot **area** scaling by
   end-of-session context size, model-coloured, plus EMA lines for
   output/input/cache-create/cache-read tokens-per-hour.
-- **Tool Usage Ratio over Time** — daily-bucketed
-  stacked-area-to-100% per tool with top-N-at-any-bucket band
+- **Tool Usage Ratio over Time** — adaptively-bucketed
+  stacked-area-to-100% per tool (bucket size = largest in [60s, 1d]
+  yielding ≥100 bins across the range) with top-N-at-any-bucket band
   promotion (so emerging tools don't get hidden in `Other`),
-  per-panel model select, and a per-bucket `Other` breakdown on
-  hover.
+  per-panel model select, a per-bucket `Other` breakdown on hover,
+  and `server_tool_use` blocks (e.g. WebSearch) counted alongside
+  client tool calls.
+- **Reply Latency over Time** — per-(bucket, model) p10–p90 ribbon
+  with a median line and top/bottom 1% outlier dots (only when the
+  bucket has ≥100 replies); log y-axis from 0.1s to max p90. Latency
+  is the gap from each anchored user message to its assistant reply,
+  computed at parse time (instrumentation/bash-IO and interrupt-marker
+  user messages don't anchor a window).
 - **Cross-file uuid dedup** at query time so sub-agent JSONLs roll
   into their parent session without double-counting.
 - **Rate-limit hit** detection (Claude Code's `out of extra usage`
@@ -55,13 +65,15 @@ Postgres `claude_viz`
   • projects     (project_id PK)
   • files        (file_key PK, ctx_turns JSONB, rate_limit_hits JSONB)
   • records      (file_key, line_num PK, per-request tokens + cost
-                  + text_chars for visible-response size)
+                  + text_chars for visible-response size
+                  + reply_latency_s for the user→assistant gap)
   • tool_uses    (file_key, line_num, idx PK, ts, tool_name)
   • ingest_runs  (audit log)
   ↓  on-demand
 FastAPI  →  /api/dashboard, /api/cache, /api/context-growth/*,
             /api/sessions, /api/sessions/{id}/transcript,
-            /api/tool-usage, /api/models, /api/events
+            /api/tool-usage, /api/reply-latency, /api/models,
+            /api/events
   ↓
 React + in-browser Babel  →  /  (served by FastAPI)
 ```

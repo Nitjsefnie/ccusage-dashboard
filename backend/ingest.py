@@ -177,13 +177,13 @@ def run_ingest(trigger: str) -> dict:
                           request_id, ts, model, fresh_tokens,
                           cache_creation_tokens, cache_read_tokens,
                           output_tokens, eph5_tokens, eph1h_tokens, cost_usd,
-                          text_chars)
+                          text_chars, reply_latency_s)
                         VALUES (%(file_key)s, %(line_num)s, %(uuid)s,
                           %(request_id)s, %(ts)s, %(model)s,
                           %(fresh_tokens)s, %(cache_creation_tokens)s,
                           %(cache_read_tokens)s, %(output_tokens)s,
                           %(eph5_tokens)s, %(eph1h_tokens)s, %(cost_usd)s,
-                          %(text_chars)s)
+                          %(text_chars)s, %(reply_latency_s)s)
                         """,
                         parsed["records"],
                     )

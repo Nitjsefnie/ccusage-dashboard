@@ -449,7 +449,11 @@ function backendDashToShape(b) {
   })).filter(e => !isNaN(e.ts));
   if (!events.length) return null;
   const start = events[0].ts;
-  const end = events[events.length - 1].ts;
+  // +1ms so the bin loop's strict `events[ci].ts < bEnd` includes the
+  // last event (its ts == range.end otherwise gets dropped, dropping
+  // ~1 bucket from the cumulative line and creating the $14.2K vs
+  // $15K mismatch with the summary stat).
+  const end = events[events.length - 1].ts + 1;
   const costByModel = (b.cost_by_model || []).reduce((acc, r) => {
     acc[r.model] = (acc[r.model] || 0) + (r.cost_usd || 0);
     return acc;
@@ -495,6 +499,7 @@ function backendDashToShape(b) {
     subagentFiles: b.subagent_files,
     responseSizes: b.response_sizes || [],
     ctxTraces: b.ctx_traces || [],
+    bucketS: b.bucket_s || 86400,
   };
 }
 
@@ -552,7 +557,7 @@ function computeSessions(events) {
 }
 
 function Dashboard({ synth, dataLabel, models, backendOn, activeProject, activeRange, dashNonce }) {
-  const { events, limitHits, range, costByModel: backendByModel, sessionsOverride, totalSessions, mainWUsage, mainEmpty, subagentFiles, responseSizes, ctxTraces } = synth;
+  const { events, limitHits, range, costByModel: backendByModel, sessionsOverride, totalSessions, mainWUsage, mainEmpty, subagentFiles, responseSizes, ctxTraces, bucketS } = synth;
   const hasBackendByModel = backendByModel && Object.keys(backendByModel).length > 0;
   const computed = useMemo(() => computeSessions(events), [events]);
   const sessions = (sessionsOverride && sessionsOverride.length)
@@ -695,13 +700,23 @@ function Dashboard({ synth, dataLabel, models, backendOn, activeProject, activeR
 
       {responseSizes && responseSizes.length > 0 && (
         <div className="dash-resp">
-          <window.ResponseSizesPanel data={responseSizes} />
+          <window.ResponseSizesPanel data={responseSizes} bucketS={bucketS} />
         </div>
       )}
 
       {backendOn && (
         <div className="dash-tools">
           <window.ToolUsagePanel
+            models={models}
+            project={activeProject}
+            range={activeRange}
+            nonce={dashNonce} />
+        </div>
+      )}
+
+      {backendOn && (
+        <div className="dash-latency">
+          <window.ReplyLatencyPanel
             models={models}
             project={activeProject}
             range={activeRange}
@@ -717,6 +732,7 @@ function Dashboard({ synth, dataLabel, models, backendOn, activeProject, activeR
         <window.BurnRatePanel
           events={events}
           sessions={sessions}
+          totalSessions={mainWUsage != null ? mainWUsage : (totalSessions != null ? totalSessions : null)}
           limitHits={limitHits}
           range={range}
           windowBoundaries={windowBoundaries} />

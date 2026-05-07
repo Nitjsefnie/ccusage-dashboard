@@ -44,15 +44,17 @@ async def tool_usage(
     project: str | None = Query(None),
     model: str | None = Query(None),
 ) -> dict:
-    """Daily-bucketed tool-call counts. Frontend stacks to 100% and
-    promotes any tool that ever cracked top-N at any bucket. Tools
-    that never make the cut land in 'Other'.
+    """Bucketed tool-call counts. Bucket size = largest in [60s, 1d]
+    that yields ≥100 bins across the range. Frontend stacks to 100%
+    and promotes any tool that ever cracked top-N at any bucket.
+    Tools that never make the cut land in 'Other'.
 
     `model=opus-4-7` filters to tool calls emitted by an assistant
     message whose record matches the model substring (joined on
     file_key + line_num)."""
     delta = _parse_range(range)
     since = datetime.now(timezone.utc) - delta
+    bucket_s = _bucket_seconds(delta)
     # Args must match the order parameters appear in the SQL string:
     # model_join's LIKE first (it sits in the JOIN, before WHERE),
     # then since (in WHERE), then project (after).
@@ -73,9 +75,11 @@ async def tool_usage(
     with db.viz_conn() as c:
         rows = c.execute(
             f"""
-            SELECT date_trunc('day', tu.ts) AS bucket,
-                   tu.tool_name             AS tool,
-                   COUNT(*)                 AS n
+            SELECT to_timestamp(
+                     floor(EXTRACT(EPOCH FROM tu.ts) / {bucket_s}) * {bucket_s} + {bucket_s} / 2
+                   ) AS bucket,
+                   tu.tool_name AS tool,
+                   COUNT(*)     AS n
             FROM tool_uses tu
             JOIN files f ON f.file_key = tu.file_key
             {model_join}
@@ -89,9 +93,127 @@ async def tool_usage(
     return {
         "range": range,
         "project": project,
+        "bucket_s": bucket_s,
         "buckets": [
             {"ts": _iso(b), "tool": t, "n": int(n or 0)}
             for (b, t, n) in rows
+        ],
+    }
+
+
+@router.get("/reply-latency")
+async def reply_latency(
+    range: str = Query("30d"),
+    project: str | None = Query(None),
+    model: str | None = Query(None),
+) -> dict:
+    """Per-(bucket, model) reply-latency percentiles + per-bucket
+    top/bottom 1% outliers. Latency is the gap from each anchored user
+    message to its assistant reply, computed at parse time
+    (records.reply_latency_s). Model & project filters apply to the
+    assistant record's model/project."""
+    delta = _parse_range(range)
+    since = datetime.now(timezone.utc) - delta
+    bucket_s = _bucket_seconds(delta)
+    proj_filter = ""
+    args: list[Any] = []
+    if model:
+        # JOIN happens at the records level via the WHERE clause; no
+        # separate join arg needed since records IS the source.
+        pass
+    args.append(since)
+    if project:
+        proj_filter = "AND f.project_id = %s"
+        args.append(project)
+    model_filter = ""
+    if model:
+        model_filter = "AND r.model LIKE %s"
+        args.append(f"%{model}%")
+
+    # Bands: per-(bucket, model) percentiles.
+    bands_sql = f"""
+    SELECT to_timestamp(
+             floor(EXTRACT(EPOCH FROM r.ts) / {bucket_s}) * {bucket_s} + {bucket_s} / 2
+           ) AS bucket,
+           COALESCE(NULLIF(r.model, ''), 'unknown') AS model,
+           COUNT(*) AS n,
+           PERCENTILE_CONT(0.10) WITHIN GROUP (ORDER BY r.reply_latency_s) AS p10,
+           PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY r.reply_latency_s) AS p50,
+           PERCENTILE_CONT(0.90) WITHIN GROUP (ORDER BY r.reply_latency_s) AS p90
+    FROM records r
+    JOIN files f ON f.file_key = r.file_key
+    WHERE r.ts >= %s {proj_filter} {model_filter}
+      AND r.reply_latency_s IS NOT NULL
+    GROUP BY 1, 2
+    ORDER BY 1, 2
+    """
+
+    # Outliers: top 1% slowest + bottom 1% fastest per (bucket, model)
+    # bucket. Skip buckets with n < 100 — 1% of <100 is <1, so the
+    # min/max would dominate and pollute the panel.
+    outliers_sql = f"""
+    WITH ranked AS (
+      SELECT to_timestamp(
+               floor(EXTRACT(EPOCH FROM r.ts) / {bucket_s}) * {bucket_s} + {bucket_s} / 2
+             ) AS bucket,
+             COALESCE(NULLIF(r.model, ''), 'unknown') AS model,
+             r.ts                AS event_ts,
+             r.file_key,
+             r.line_num,
+             r.reply_latency_s AS latency_s,
+             COUNT(*) OVER (PARTITION BY
+               to_timestamp(floor(EXTRACT(EPOCH FROM r.ts) / {bucket_s}) * {bucket_s} + {bucket_s} / 2),
+               COALESCE(NULLIF(r.model, ''), 'unknown')
+             ) AS bucket_n,
+             ROW_NUMBER() OVER (PARTITION BY
+               to_timestamp(floor(EXTRACT(EPOCH FROM r.ts) / {bucket_s}) * {bucket_s} + {bucket_s} / 2),
+               COALESCE(NULLIF(r.model, ''), 'unknown')
+               ORDER BY r.reply_latency_s DESC
+             ) AS rn_high,
+             ROW_NUMBER() OVER (PARTITION BY
+               to_timestamp(floor(EXTRACT(EPOCH FROM r.ts) / {bucket_s}) * {bucket_s} + {bucket_s} / 2),
+               COALESCE(NULLIF(r.model, ''), 'unknown')
+               ORDER BY r.reply_latency_s ASC
+             ) AS rn_low
+      FROM records r
+      JOIN files f ON f.file_key = r.file_key
+      WHERE r.ts >= %s {proj_filter} {model_filter}
+        AND r.reply_latency_s IS NOT NULL
+    )
+    SELECT bucket, model, event_ts, file_key, line_num, latency_s
+    FROM ranked
+    WHERE bucket_n >= 100
+      AND (rn_high <= GREATEST(1, CEIL(bucket_n * 0.01))
+        OR rn_low  <= GREATEST(1, CEIL(bucket_n * 0.01)))
+    ORDER BY bucket, model, latency_s DESC
+    """
+
+    args2 = list(args) + list(args)  # bands + outliers each take the full arg set
+
+    with db.viz_conn() as c:
+        bands_rows = c.execute(bands_sql, args).fetchall()
+        outlier_rows = c.execute(outliers_sql, args).fetchall()
+    _ = args2  # kept for symmetry; both queries use `args` independently
+
+    return {
+        "range": range,
+        "project": project,
+        "model": model,
+        "bucket_s": bucket_s,
+        "bands": [
+            {
+                "ts": _iso(b), "model": m, "n": int(n or 0),
+                "p10": float(p10 or 0), "p50": float(p50 or 0), "p90": float(p90 or 0),
+            }
+            for (b, m, n, p10, p50, p90) in bands_rows
+        ],
+        "outliers": [
+            {
+                "ts": _iso(et), "model": m,
+                "latency_s": float(lat or 0),
+                "file_key": fk, "line": int(ln or 0),
+            }
+            for (b, m, et, fk, ln, lat) in outlier_rows
         ],
     }
 
@@ -206,6 +328,25 @@ async def list_projects() -> dict:
 
 
 _EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+
+_BUCKET_CANDIDATES_S = (60, 5*60, 15*60, 30*60, 3600, 6*3600, 12*3600, 86400)
+
+
+def _bucket_seconds(delta: timedelta) -> int:
+    """Pick the LARGEST bucket size in [60s, 86400s] (≤ 1 day) that
+    still produces ≥100 bins across the range. Mirrors the frontend's
+    dashboard binMs picker; applied to every server-side bucketed
+    query so 24h ranges don't get hardcoded-hourly 24 buckets."""
+    span_s = max(1, int(delta.total_seconds()))
+    chosen = _BUCKET_CANDIDATES_S[0]
+    for b in _BUCKET_CANDIDATES_S:
+        if b > 86400:
+            break
+        if span_s / b < 100:
+            break
+        chosen = b
+    return chosen
 
 
 def _parse_range(s: str) -> timedelta:
@@ -625,6 +766,7 @@ async def dashboard(
     substring."""
     delta = _parse_range(range)
     since = datetime.now(timezone.utc) - delta
+    bucket_s = _bucket_seconds(delta)
     proj_filter = ""
     model_filter = ""
     leg_args: list[Any] = [since]
@@ -661,8 +803,10 @@ async def dashboard(
 
     with db.viz_conn() as c:
         hourly_rows = c.execute(
-            base_cte + """
-            SELECT date_trunc('hour', d.ts) AS hour,
+            base_cte + f"""
+            SELECT to_timestamp(
+                     floor(EXTRACT(EPOCH FROM d.ts) / {bucket_s}) * {bucket_s} + {bucket_s} / 2
+                   ) AS hour,
                    COALESCE(NULLIF(d.model, ''), 'unknown') AS model,
                    SUM(d.fresh_tokens)     AS input_tokens,
                    SUM(d.output_tokens)    AS output_tokens,
@@ -776,8 +920,10 @@ async def dashboard(
         # content blocks is the clean, model-fair "visible response
         # size" measure.
         response_sizes_rows = c.execute(
-            base_cte + """
-            SELECT date_trunc('day', d.ts) AS bucket,
+            base_cte + f"""
+            SELECT to_timestamp(
+                     floor(EXTRACT(EPOCH FROM d.ts) / {bucket_s}) * {bucket_s} + {bucket_s} / 2
+                   ) AS bucket,
                    COALESCE(NULLIF(d.model, ''), 'unknown') AS model,
                    COUNT(*) AS n,
                    PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY d.text_chars) AS p50,
@@ -994,6 +1140,7 @@ async def dashboard(
     return {
         "range": range,
         "project": project,
+        "bucket_s": bucket_s,
         "hourly": hourly,
         "cost_by_model": cost_by_model,
         "rate_limit_hits": rate_limit_hits,
