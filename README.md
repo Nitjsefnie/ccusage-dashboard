@@ -75,6 +75,26 @@ For local dev without R2 credentials, point `R2_ENDPOINT` at a
 filesystem mirror (e.g. `R2_ENDPOINT=file:///tmp/r2/`) — the R2
 client falls back to walking the directory tree.
 
+## Operations
+
+The deploy is intended to run under systemd. A unit at
+`/etc/systemd/system/session-viz.service` runs uvicorn with
+`--timeout-graceful-shutdown 5` and `TimeoutStopSec=10` (so SSE
+connections drain quickly on restart):
+
+```bash
+systemctl restart session-viz
+systemctl status session-viz
+journalctl -u session-viz -f
+```
+
+Schema migrations are idempotent — re-apply after editing
+`backend/schema.sql`:
+
+```bash
+psql claude_viz -f backend/schema.sql
+```
+
 ## Auth
 
 Login expects a numeric user ID whose row in the auth DB's `users`
