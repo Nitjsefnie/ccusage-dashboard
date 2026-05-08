@@ -726,6 +726,15 @@ function Dashboard({ synth, dataLabel, models, backendOn, activeProject, activeR
         </div>
       )}
 
+      {backendOn && (
+        <div className="dash-tool-errors">
+          <window.ToolErrorRatePanel
+            project={activeProject}
+            range={activeRange}
+            nonce={dashNonce} />
+        </div>
+      )}
+
       <div className="dash-context">
         <window.ContextGrowthPanel events={events} realSessions={sessionsOverride} ctxTraces={ctxTraces} />
       </div>
