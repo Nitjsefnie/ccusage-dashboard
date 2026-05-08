@@ -400,7 +400,7 @@ function HBar({ title, rows, totalForPct, fmt, fixedColors }) {
 }
 
 // --- Burn rate panel ---
-function BurnRatePanel({ events, sessions, totalSessions, limitHits, range, windowBoundaries }) {
+function BurnRatePanel({ events, sessions, limitHits, range, windowBoundaries }) {
   const ref = React.useRef(null);
   const [size, setSize] = React.useState({ w: 1200, h: 360 });
   const [tip, setTip] = React.useState(null);
@@ -448,13 +448,17 @@ function BurnRatePanel({ events, sessions, totalSessions, limitHits, range, wind
       mid: (s.start + s.end) / 2,
       durH,
       reqs: (s.requests != null) ? s.requests : s.events.length,
-      ctxEnd: s.ctxEnd || 0,
+      ctxEnd: s.ctxEnd != null ? s.ctxEnd : null,
       primary,
       sums,
       out_per_h:    sums.output / durH,
       input_per_h:  sums.input / durH,
       cc_per_h:     sums.cc / durH,
       cr_per_h:     sums.cr / durH,
+      // Cost/h scaled by 100 so dots share the EMA's tokens-per-hour
+      // log axis without needing a second scale: $1/h ≈ 100 tok/h ≈ same
+      // visual band. Y-axis label calls out the dual meaning.
+      cost_per_h_x100: (sums.cost / durH) * 100,
     };
   });
 
@@ -502,9 +506,11 @@ function BurnRatePanel({ events, sessions, totalSessions, limitHits, range, wind
   const densified = {};
   for (const k of Object.keys(series)) densified[k] = densify(series[k].vals);
 
+  // Axis range covers BOTH the EMA lines (tokens/h) AND the dot positions
+  // (cost/h × 100), so pull both sets of values into the min/max.
   let allRates = [];
   for (const k of Object.keys(series)) allRates = allRates.concat(series[k].vals);
-  for (const s of sessionData) allRates.push(s.out_per_h);
+  for (const s of sessionData) allRates.push(s.cost_per_h_x100);
   allRates = allRates.filter(v => v > 0);
   const yMin = Math.max(1, Math.min(...allRates) * 0.3);
   const yMax = Math.max(...allRates) * 3;
@@ -540,7 +546,7 @@ function BurnRatePanel({ events, sessions, totalSessions, limitHits, range, wind
     }
     let best = null, bestD = 1e9;
     for (const s of sessionData) {
-      const sx = xScale(s.mid), sy = yScale(s.out_per_h);
+      const sx = xScale(s.mid), sy = yScale(s.cost_per_h_x100);
       const d = Math.hypot(sx - mx, sy - my);
       if (d < bestD) { bestD = d; best = s; }
     }
@@ -571,7 +577,7 @@ function BurnRatePanel({ events, sessions, totalSessions, limitHits, range, wind
         }
       }
       // Prefer line over dot when line is significantly closer
-      const dotD = best ? Math.hypot(xScale(best.mid)-mx, yScale(best.out_per_h)-my) : 1e9;
+      const dotD = best ? Math.hypot(xScale(best.mid)-mx, yScale(best.cost_per_h_x100)-my) : 1e9;
       if (bestSeriesKey && bestSeriesD < 14 && bestSeriesD < dotD - 4) {
         const sk = series[bestSeriesKey];
         const sAtCol = sessionData[bestPoint.srcIdx];
@@ -597,6 +603,14 @@ function BurnRatePanel({ events, sessions, totalSessions, limitHits, range, wind
       }
     }
     if (best && bestD < 30) {
+      const ctxKnown = best.ctxEnd != null;
+      const areaPts2 = ctxKnown
+        ? Math.min(Math.max(best.ctxEnd / 4000, 25), 250)
+        : 16;
+      const dotR = Math.sqrt(areaPts2);
+      const sizeNote = ctxKnown
+        ? `${dotR.toFixed(1)}px (ctx ${humanFmt(best.ctxEnd)})`
+        : `${dotR.toFixed(1)}px (ctx unknown)`;
       setTip({
         x: mx, y: my,
         title: 'Session ' + (best.idx + 1),
@@ -606,10 +620,12 @@ function BurnRatePanel({ events, sessions, totalSessions, limitHits, range, wind
           ['start',         fmtDate(best.start, {full:true})],
           ['duration',      best.durH < 1 ? (best.durH*60).toFixed(0)+'m' : best.durH.toFixed(1)+'h'],
           ['requests',      String(best.reqs)],
-          ...(best.ctxEnd > 0 ? [['ctx at end', humanFmt(best.ctxEnd)]] : []),
+          ['ctx at end',    ctxKnown ? humanFmt(best.ctxEnd) : 'unknown'],
           ['out tok/hr',    humanFmt(best.out_per_h)],
           ['cache rd tok/hr', humanFmt(best.cr_per_h)],
+          ['cost / hour',   '$' + (best.cost_per_h_x100 / 100).toFixed(2) + '/h'],
           ['est. cost',     '$' + best.sums.cost.toFixed(2)],
+          ['dot radius',    sizeNote],
         ],
       });
     } else {
@@ -627,7 +643,7 @@ function BurnRatePanel({ events, sessions, totalSessions, limitHits, range, wind
       <svg width={w} height={h} style={{ display: 'block' }}>
         <text x={w/2} y={20} fontSize="14" fontWeight="bold" fill={TH.text}
           textAnchor="middle" fontFamily="monospace">
-          Session Burn Rate  |  {fmtDate(range.start, {day:true})} – {fmtDate(range.end, {day:true})}, {new Date(range.end).getUTCFullYear()} UTC  |  {(totalSessions != null ? totalSessions : (events.reduce((s,e)=>s+(e.session_count||0),0) || sessions.length)).toLocaleString()} sessions, {events.reduce((s,e)=>s+(e.requests==null?1:e.requests),0).toLocaleString()} requests
+          Session Burn Rate  |  {fmtDate(range.start, {day:true})} – {fmtDate(range.end, {day:true})}, {new Date(range.end).getUTCFullYear()} UTC  |  {sessions.length.toLocaleString()} sessions, {events.reduce((s,e)=>s+(e.requests==null?1:e.requests),0).toLocaleString()} requests
         </text>
         {windowBoundaries.map((wb, i) => (
           <line key={'wb'+i} x1={xScale(wb)} x2={xScale(wb)}
@@ -648,20 +664,26 @@ function BurnRatePanel({ events, sessions, totalSessions, limitHits, range, wind
         {sessionData.map((s, i) => {
           // Scale dot AREA by ctx-at-end-of-session.
           //   100k ctx → 25 area-pts²,  1M ctx → 250 area-pts²
-          // Falls back to duration scaling (ccusage_plot.py:801) when
-          // ctxEnd isn't known (synth/live mode).
-          const areaPts2 = s.ctxEnd > 0
+          // When ctxEnd is null (analyst spec 2026-05-07: empty ctx_turns),
+          // render a fixed small open circle instead of the old durH × 60
+          // duration fallback — that fallback collapsed every kvalita
+          // subagent-only / synthetic-trailing session to either max-r or
+          // a meaningless duration-scaled size.
+          const ctxKnown = s.ctxEnd != null;
+          const areaPts2 = ctxKnown
             ? Math.min(Math.max(s.ctxEnd / 4000, 25), 250)
-            : Math.min(Math.max(s.durH * 60, 25), 250);
+            : 16; // r ≈ 4 px sentinel for ctx-unknown
           const r = Math.sqrt(areaPts2);
           const isHover = tip && tip.title === 'Session ' + (s.idx + 1);
           return (
-            <circle key={'sd'+i} cx={xScale(s.mid)} cy={yScale(s.out_per_h)}
-              r={isHover ? r + 2 : r} fill={MODEL_COLORS[s.primary] || '#888'}
+            <circle key={'sd'+i} cx={xScale(s.mid)} cy={yScale(s.cost_per_h_x100)}
+              r={isHover ? r + 2 : r}
+              fill={ctxKnown ? (MODEL_COLORS[s.primary] || '#888') : 'none'}
               fillOpacity={isHover ? 0.95 : 0.5}
-              stroke={isHover ? '#fff' : '#fff'}
-              strokeOpacity={isHover ? 0.9 : 0.3}
-              strokeWidth={isHover ? 1.5 : 0.5} />
+              stroke={ctxKnown ? '#fff' : (MODEL_COLORS[s.primary] || '#888')}
+              strokeOpacity={isHover ? 0.9 : (ctxKnown ? 0.3 : 0.85)}
+              strokeWidth={isHover ? 1.5 : (ctxKnown ? 0.5 : 1.2)}
+              strokeDasharray={ctxKnown ? undefined : '2,2'} />
           );
         })}
         {Object.entries(series).map(([k, s]) => {
@@ -682,7 +704,7 @@ function BurnRatePanel({ events, sessions, totalSessions, limitHits, range, wind
         ))}
         <text x={14} y={padT + plotH/2} fontSize="10" fill={TH.textDim}
           textAnchor="middle" fontFamily="monospace"
-          transform={`rotate(-90 14 ${padT + plotH/2})`}>Tokens / hour (EMA)</text>
+          transform={`rotate(-90 14 ${padT + plotH/2})`}>Tokens per hour (EMA) / 100 × Cost per hour</text>
 
         <g transform={`translate(${padL + 20}, ${h - 22})`}>
           {Object.entries(series).map(([k, s], i) => (

@@ -482,7 +482,7 @@ function backendDashToShape(b) {
       start: startMs,
       end: endMs,
       events: [synthEvent],
-      ctxEnd: s.ctx_at_end || 0,
+      ctxEnd: s.ctx_at_end != null ? s.ctx_at_end : null,
       session_id: s.session_id,
       requests: s.requests,
       model: s.model || 'unknown',
@@ -497,6 +497,7 @@ function backendDashToShape(b) {
     mainWUsage: b.main_w_usage,
     mainEmpty: b.main_empty,
     subagentFiles: b.subagent_files,
+    subagentOnlySessions: b.subagent_only_sessions,
     responseSizes: b.response_sizes || [],
     ctxTraces: b.ctx_traces || [],
     bucketS: b.bucket_s || 86400,
@@ -557,7 +558,7 @@ function computeSessions(events) {
 }
 
 function Dashboard({ synth, dataLabel, models, backendOn, activeProject, activeRange, dashNonce }) {
-  const { events, limitHits, range, costByModel: backendByModel, sessionsOverride, totalSessions, mainWUsage, mainEmpty, subagentFiles, responseSizes, ctxTraces, bucketS } = synth;
+  const { events, limitHits, range, costByModel: backendByModel, sessionsOverride, totalSessions, mainWUsage, mainEmpty, subagentFiles, subagentOnlySessions, responseSizes, ctxTraces, bucketS } = synth;
   const hasBackendByModel = backendByModel && Object.keys(backendByModel).length > 0;
   const computed = useMemo(() => computeSessions(events), [events]);
   const sessions = (sessionsOverride && sessionsOverride.length)
@@ -651,6 +652,7 @@ function Dashboard({ synth, dataLabel, models, backendOn, activeProject, activeR
         <Stat label="main sessions with usage" value={(mainWUsage != null ? mainWUsage : (totalSessions != null ? totalSessions : (events.reduce((s, e) => s + (e.session_count || 0), 0) || sessions.length))).toLocaleString()} />
         {mainEmpty != null && <Stat label="main empty sessions" value={mainEmpty.toLocaleString()} />}
         {subagentFiles != null && <Stat label="subagent sessions" value={subagentFiles.toLocaleString()} />}
+        {subagentOnlySessions != null && <Stat label="subagent-only sessions" value={subagentOnlySessions.toLocaleString()} />}
         {(mainWUsage != null || mainEmpty != null || subagentFiles != null) &&
           <Stat label="total" value={((mainWUsage || 0) + (mainEmpty || 0) + (subagentFiles || 0)).toLocaleString()} />}
         <Stat label="requests" value={events.reduce((s, e) => s + (e.requests == null ? 1 : e.requests), 0).toLocaleString()} />
@@ -732,7 +734,6 @@ function Dashboard({ synth, dataLabel, models, backendOn, activeProject, activeR
         <window.BurnRatePanel
           events={events}
           sessions={sessions}
-          totalSessions={mainWUsage != null ? mainWUsage : (totalSessions != null ? totalSessions : null)}
           limitHits={limitHits}
           range={range}
           windowBoundaries={windowBoundaries} />

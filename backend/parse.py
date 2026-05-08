@@ -155,6 +155,16 @@ def parse_file(file_key: str, blob: bytes) -> dict:
         usage = msg.get("usage")
         if not usage:
             continue
+        # Skip synthetic stubs: Claude Code emits these after `/exit`
+        # (text='No response requested.') and for interrupted partial
+        # responses. They have all-zero usage and no requestId, but
+        # they sit at the end of the file — without this filter, the
+        # ctx_turns walk picks them as the trailing `last_usage`,
+        # then the post-walk input>0 filter drops them, leaving
+        # ctx_turns empty even when real records preceded them.
+        # (Mirrors parse_session.py 1.20.4 fix from analyst 2026-05-07.)
+        if (msg.get("model") or "") == "<synthetic>":
+            continue
 
         # Visible-response size: sum character lengths of `text` blocks
         # in the assistant message. Per analyst (2026-05-07), thinking

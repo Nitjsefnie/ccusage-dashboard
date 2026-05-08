@@ -857,15 +857,25 @@ async def dashboard(
               COUNT(*) FILTER (WHERE is_main AND NOT EXISTS (
                 SELECT 1 FROM records r WHERE r.file_key = f.file_key
               )) AS main_empty,
-              COUNT(*) FILTER (WHERE NOT is_main) AS subagent_files
+              COUNT(*) FILTER (WHERE NOT is_main) AS subagent_files,
+              COUNT(DISTINCT f.session_id) FILTER (
+                WHERE NOT EXISTS (
+                  SELECT 1 FROM files mf
+                  WHERE mf.session_id = f.session_id AND mf.is_main
+                )
+                AND EXISTS (
+                  SELECT 1 FROM records r WHERE r.file_key = f.file_key
+                )
+              ) AS subagent_only_sessions
             FROM files f
             WHERE f.r2_last_modified >= %s {proj_filter}
             """,
             file_counts_args,
         ).fetchone()
-        main_w_usage    = int(file_counts_row[0] or 0) if file_counts_row else 0
-        main_empty      = int(file_counts_row[1] or 0) if file_counts_row else 0
-        subagent_files  = int(file_counts_row[2] or 0) if file_counts_row else 0
+        main_w_usage           = int(file_counts_row[0] or 0) if file_counts_row else 0
+        main_empty             = int(file_counts_row[1] or 0) if file_counts_row else 0
+        subagent_files         = int(file_counts_row[2] or 0) if file_counts_row else 0
+        subagent_only_sessions = int(file_counts_row[3] or 0) if file_counts_row else 0
 
         sessions_rows = c.execute(
             base_cte + """
@@ -1109,7 +1119,10 @@ async def dashboard(
             for i, t in enumerate(raw_turns)
             if isinstance(t, dict)
         ]
-        ctx_at_end = turns_proj[-1]["ctx"] if turns_proj else 0
+        # null (not 0) when ctx_turns is empty so the UI can flag the dot
+        # as "ctx unknown" instead of silently falling back to a synthetic
+        # duration-based size encoding (analyst spec 2026-05-07).
+        ctx_at_end = turns_proj[-1]["ctx"] if turns_proj else None
         sessions_out.append({
             "session_id": sid,
             "start_ts": float(st or 0),
@@ -1150,6 +1163,7 @@ async def dashboard(
         "main_w_usage": main_w_usage,
         "main_empty": main_empty,
         "subagent_files": subagent_files,
+        "subagent_only_sessions": subagent_only_sessions,
         "ctx_traces": [
             {
                 "file_key": fk,

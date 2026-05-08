@@ -197,7 +197,11 @@ window.parseTranscript = function parseTranscript(text, opts) {
       pushUserContent(content, obj.toolUseResult, i + 1, ts);
     } else if (role === 'assistant') {
       const usage = m.usage;
-      if (usage) {
+      // Skip synthetic stubs — Claude Code emits these after `/exit` and
+      // for interrupted partial responses with all-zero usage and no
+      // requestId. They clobber the `last_usage` walk in any per-turn
+      // aggregation. Mirrors parse_session.py 1.20.4 / backend/parse.py.
+      if (usage && (m.model || '') !== '<synthetic>') {
         const reqId = obj.requestId || '';
         const ev = {
           line: i + 1, type: 'assistant_usage', ts,
