@@ -125,6 +125,36 @@ def test_two_records_no_request_id_both_kept():
     assert len(out["records"]) == 2
 
 
+def test_tool_use_matched_to_error_result():
+    """A tool_use with a later tool_result is_error:true on the same
+    tool_use_id → tool_uses entry has is_error=True."""
+    out = parse.parse_file(
+        "k/sess-err/sess-err.jsonl", _read("tool_error.jsonl")
+    )
+    assert len(out["tool_uses"]) == 1
+    tu = out["tool_uses"][0]
+    assert tu["tool_name"] == "Bash"
+    assert tu["is_error"] is True
+
+
+def test_tool_use_matched_to_success_result():
+    """A tool_use with a later tool_result is_error:false → is_error=False."""
+    out = parse.parse_file(
+        "k/sess-ok/sess-ok.jsonl", _read("tool_success.jsonl")
+    )
+    assert len(out["tool_uses"]) == 1
+    assert out["tool_uses"][0]["is_error"] is False
+
+
+def test_tool_use_unmatched_stays_null():
+    """A tool_use with NO later tool_result in the file → is_error=None."""
+    out = parse.parse_file(
+        "k/sess-pending/sess-pending.jsonl", _read("tool_unmatched.jsonl")
+    )
+    assert len(out["tool_uses"]) == 1
+    assert out["tool_uses"][0]["is_error"] is None
+
+
 def test_user_text_lines_drive_turn_boundaries():
     """compute_context_growth uses user_text lines as turn boundaries.
     Within one turn (between two user_text lines), the LAST

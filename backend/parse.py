@@ -82,6 +82,10 @@ def parse_file(file_key: str, blob: bytes) -> dict:
     user_text_lines: list[int] = []
     rate_limit_hits: list[dict] = []
     tool_uses: list[dict] = []
+    # Per-file map of assistant tool_use.id -> bool(is_error).
+    # Populated from later user tool_result blocks; consumed after
+    # the line walk to fill tool_uses[*]["is_error"].
+    tool_result_is_error: dict[str, bool] = {}
     # Reply-latency anchor: last NON-instrumentation, NON-interrupt user
     # message timestamp. Cleared when consumed by an assistant message,
     # an interrupt marker, or superseded by a fresher user message.
@@ -148,6 +152,19 @@ def parse_file(file_key: str, blob: bytes) -> dict:
                     ts_dt = _to_dt(obj.get("timestamp", "") or "")
                     if ts_dt is not None:
                         last_user_ts = ts_dt
+            elif isinstance(content, list):
+                # Tool results live here. Each block with type=tool_result
+                # carries tool_use_id (referencing the assistant's
+                # tool_use.id) and an optional is_error flag.
+                for blk in content:
+                    if not isinstance(blk, dict):
+                        continue
+                    if blk.get("type") != "tool_result":
+                        continue
+                    tu_id = blk.get("tool_use_id")
+                    if not tu_id:
+                        continue
+                    tool_result_is_error[str(tu_id)] = bool(blk.get("is_error", False))
             continue
 
         if role != "assistant":
@@ -192,7 +209,11 @@ def parse_file(file_key: str, blob: bytes) -> dict:
                     # both as tool calls in the panel.
                     name = str(blk.get("name", "") or "")
                     if name:
-                        msg_tool_uses.append({"idx": idx, "tool_name": name})
+                        msg_tool_uses.append({
+                            "idx": idx,
+                            "tool_name": name,
+                            "tool_use_id": str(blk.get("id", "") or ""),
+                        })
         elif isinstance(msg_content, str):
             text_chars = len(msg_content)
 
@@ -247,7 +268,17 @@ def parse_file(file_key: str, blob: bytes) -> dict:
                     "idx": tu["idx"],
                     "ts": _to_dt(obj.get("timestamp", "") or ""),
                     "tool_name": tu["tool_name"],
+                    "tool_use_id": tu["tool_use_id"],
+                    "is_error": None,  # filled after the line walk
                 })
+
+    # Resolve tool_result.is_error onto each tool_uses entry by
+    # tool_use_id. Unmatched entries keep is_error=None and are
+    # excluded from rate denominators at query time.
+    for tu in tool_uses:
+        tu_id = tu.pop("tool_use_id", "")
+        if tu_id and tu_id in tool_result_is_error:
+            tu["is_error"] = tool_result_is_error[tu_id]
 
     # Project usage → token columns + cost; drop the raw 'usage' dict.
     records: list[dict] = []
