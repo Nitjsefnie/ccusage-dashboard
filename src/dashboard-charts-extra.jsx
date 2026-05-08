@@ -1532,30 +1532,46 @@ function ToolErrorRatePanel({ project, range, nonce }) {
 
 function ToolErrorSubPanel({ modelName, modelData, w, h, bucketMs, setTip }) {
   const AGGREGATE = '__AGG__';
+  const OTHER = '__OTHER__';
+  // Cap visible per-tool checkboxes; rest collapse into a single
+  // "Other" series. Mirrors ToolUsagePanel's TOP_N treatment so the
+  // checkbox row stays readable on models with many tools.
+  const TOP_N = 5;
 
-  // Top-3 tools by total count for this model.
-  const topTools = React.useMemo(() => {
-    return [...modelData.totalsByTool.entries()]
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 3)
-      .map(e => e[0]);
-  }, [modelData]);
-
-  const allTools = React.useMemo(() =>
+  // Tools sorted by total count, split into visible top-N and Other.
+  const sortedTools = React.useMemo(() =>
     [...modelData.totalsByTool.entries()]
       .sort((a, b) => b[1] - a[1])
       .map(e => e[0])
   , [modelData]);
 
-  // Default ON: AGGREGATE + topTools. User overrides layered on top.
+  const visibleTools = React.useMemo(
+    () => sortedTools.slice(0, TOP_N),
+    [sortedTools]
+  );
+  const otherTools = React.useMemo(
+    () => sortedTools.slice(TOP_N),
+    [sortedTools]
+  );
+  const hasOther = otherTools.length > 0;
+
+  // Top-3 of the visible tools default ON alongside AGGREGATE.
+  const topTools = React.useMemo(
+    () => visibleTools.slice(0, 3),
+    [visibleTools]
+  );
+
+  // Default ON: AGGREGATE + top-3 visible tools + OTHER (when present).
+  // User overrides layered on top.
   const [overrides, setOverrides] = React.useState({});
   const sel = React.useMemo(() => {
     const s = new Set([AGGREGATE, ...topTools]);
+    if (hasOther) s.add(OTHER);
     for (const [k, on] of Object.entries(overrides)) {
       if (on) s.add(k); else s.delete(k);
     }
     return s;
-  }, [topTools, overrides]);
+  }, [topTools, hasOther, overrides]);
 
   function toggle(k) {
     setOverrides(prev => ({ ...prev, [k]: !sel.has(k) }));
@@ -1563,26 +1579,38 @@ function ToolErrorSubPanel({ modelName, modelData, w, h, bucketMs, setTip }) {
 
   // Build per-series rate sequences. Each series: array of
   // { t_ms, rate } at non-sparse buckets only (n_total > 0).
+  // Aggregate covers all tools; visible tools are individual; Other
+  // is the bucket-wise sum across `otherTools`.
   const series = React.useMemo(() => {
     const out = new Map();
     out.set(AGGREGATE, []);
-    for (const tool of allTools) out.set(tool, []);
+    for (const tool of visibleTools) out.set(tool, []);
+    if (hasOther) out.set(OTHER, []);
     for (const ts of modelData.buckets) {
       const m = modelData.perBucketTool.get(ts);
       // Aggregate
       let aT = 0, aE = 0;
       for (const v of m.values()) { aT += v.n_total; aE += v.n_error; }
       if (aT > 0) out.get(AGGREGATE).push({ t_ms: ts, rate: aE / aT, n_total: aT, n_error: aE });
-      // Per tool
-      for (const tool of allTools) {
+      // Visible per-tool
+      for (const tool of visibleTools) {
         const v = m.get(tool);
         if (v && v.n_total > 0) {
           out.get(tool).push({ t_ms: ts, rate: v.n_error / v.n_total, n_total: v.n_total, n_error: v.n_error });
         }
       }
+      // Other (sum across non-visible tools)
+      if (hasOther) {
+        let oT = 0, oE = 0;
+        for (const tool of otherTools) {
+          const v = m.get(tool);
+          if (v) { oT += v.n_total; oE += v.n_error; }
+        }
+        if (oT > 0) out.get(OTHER).push({ t_ms: ts, rate: oE / oT, n_total: oT, n_error: oE });
+      }
     }
     return out;
-  }, [modelData, allTools]);
+  }, [modelData, visibleTools, otherTools, hasOther]);
 
   // EMA over the rate sequence for each visible series.
   const emaSeries = React.useMemo(() => {
@@ -1625,13 +1653,16 @@ function ToolErrorSubPanel({ modelName, modelData, w, h, bucketMs, setTip }) {
 
   function colorFor(key) {
     if (key === AGGREGATE) return '#ddd';
+    if (key === OTHER) return '#888';
     const palette = ['#ee4444', '#44dd66', '#dd66aa', '#44bbbb', '#eeaa44', '#9966dd', '#bb88ff', '#66ddee'];
-    const idx = allTools.indexOf(key);
+    const idx = visibleTools.indexOf(key);
     return palette[idx >= 0 ? idx % palette.length : 0];
   }
 
   function labelFor(key) {
-    return key === AGGREGATE ? 'Aggregate' : key;
+    if (key === AGGREGATE) return 'Aggregate';
+    if (key === OTHER) return `Other (${otherTools.length})`;
+    return key;
   }
 
   return (
@@ -1647,7 +1678,7 @@ function ToolErrorSubPanel({ modelName, modelData, w, h, bucketMs, setTip }) {
         fontFamily: 'monospace', fontSize: 10, color: TH_X.textDim,
         borderBottom: `1px solid ${TH_X.border}`,
       }}>
-        {[AGGREGATE, ...allTools].map(k => {
+        {[AGGREGATE, ...visibleTools, ...(hasOther ? [OTHER] : [])].map(k => {
           const c = colorFor(k);
           const checked = sel.has(k);
           return (
@@ -1709,9 +1740,18 @@ function ToolErrorSubPanel({ modelName, modelData, w, h, bucketMs, setTip }) {
                   `${new Date(ts).toISOString().replace('T', ' ').slice(0, 16)} UTC`,
                   `aggregate: ${aE}/${aT} = ${aT ? ((aE / aT) * 100).toFixed(2) : '-'}%`,
                 ];
-                for (const tool of [...sel].filter(k => k !== AGGREGATE)) {
-                  const v = m.get(tool);
-                  if (v) lines.push(`${tool}: ${v.n_error}/${v.n_total} = ${v.n_total ? ((v.n_error / v.n_total) * 100).toFixed(2) : '-'}%`);
+                for (const k of [...sel].filter(k => k !== AGGREGATE)) {
+                  if (k === OTHER) {
+                    let oT = 0, oE = 0;
+                    for (const tool of otherTools) {
+                      const v = m.get(tool);
+                      if (v) { oT += v.n_total; oE += v.n_error; }
+                    }
+                    if (oT > 0) lines.push(`other (${otherTools.length}): ${oE}/${oT} = ${((oE / oT) * 100).toFixed(2)}%`);
+                  } else {
+                    const v = m.get(k);
+                    if (v) lines.push(`${k}: ${v.n_error}/${v.n_total} = ${v.n_total ? ((v.n_error / v.n_total) * 100).toFixed(2) : '-'}%`);
+                  }
                 }
                 setTip({ x: e.clientX, y: e.clientY, text: lines.join('\n') });
               }}
