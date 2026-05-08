@@ -1396,6 +1396,333 @@ function _toolColor(name) {
 }
 const _OTHER_COLOR = '#5a627a';
 
+// Tool error rate (per-model sub-panels mirroring ContextGrowthPanel
+// layout). Each sub-panel shows EMA(α=0.15) lines for "Aggregate"
+// (all tools in the model) plus per-tool series. Default ON:
+// Aggregate + top-3 tools by n_total over the visible range.
+// Numerator = n_error, denominator = n_total over settled calls
+// (is_error IS NOT NULL); unmatched calls excluded by the API.
+function ToolErrorRatePanel({ project, range, nonce }) {
+  const ref = React.useRef(null);
+  const [w, setW] = React.useState(1200);
+  const [data, setData] = React.useState([]);
+  const [bucketMs, setBucketMs] = React.useState(86_400_000);
+  const [tip, setTip] = React.useState(null);
+
+  React.useEffect(() => {
+    if (!ref.current) return;
+    const ro = new ResizeObserver(es => setW(es[0].contentRect.width));
+    ro.observe(ref.current);
+    return () => ro.disconnect();
+  }, []);
+
+  React.useEffect(() => {
+    const q = (project ? `&project=${encodeURIComponent(project)}` : '');
+    fetch(`/api/tool-error-rate?range=${range || 'all'}${q}`,
+          { credentials: 'same-origin' })
+      .then(r => r.json())
+      .then(b => {
+        setData(b.buckets || []);
+        if (b.bucket_s) setBucketMs(b.bucket_s * 1000);
+      })
+      .catch(err => console.error('tool-error-rate fetch failed', err));
+  }, [project, range, nonce]);
+
+  // Group buckets by short model name. Each model gets:
+  //   { buckets: sorted bucket timestamps (ms),
+  //     perBucketTool: Map<ts, Map<tool, {n_total, n_error}>>,
+  //     totalsByTool: Map<tool, n_total> }
+  const byModel = React.useMemo(() => {
+    const out = {};
+    for (const r of data || []) {
+      const t = Date.parse(r.ts);
+      if (isNaN(t)) continue;
+      const key = window.shortModelName ? window.shortModelName(r.model) : r.model;
+      if (!key || key === '<synthetic>' || key === 'synthetic') continue;
+      if (!out[key]) out[key] = {
+        perBucketTool: new Map(),
+        totalsByTool:  new Map(),
+        bucketSet:     new Set(),
+      };
+      const M = out[key];
+      M.bucketSet.add(t);
+      if (!M.perBucketTool.has(t)) M.perBucketTool.set(t, new Map());
+      const cur = M.perBucketTool.get(t).get(r.tool) || { n_total: 0, n_error: 0 };
+      cur.n_total += r.n_total;
+      cur.n_error += r.n_error;
+      M.perBucketTool.get(t).set(r.tool, cur);
+      M.totalsByTool.set(r.tool, (M.totalsByTool.get(r.tool) || 0) + r.n_total);
+    }
+    for (const k of Object.keys(out)) {
+      out[k].buckets = [...out[k].bucketSet].sort((a, b) => a - b);
+      delete out[k].bucketSet;
+    }
+    return out;
+  }, [data]);
+
+  const models = React.useMemo(() => {
+    return Object.entries(byModel)
+      .map(([m, v]) => {
+        let total = 0;
+        for (const n of v.totalsByTool.values()) total += n;
+        return { model: m, total };
+      })
+      .sort((a, b) => b.total - a.total);
+  }, [byModel]);
+
+  const cellW = Math.max(280, (w - 16) / 2);
+  const cellH = 230;
+
+  // Pair sub-panels into rows of 2.
+  const rows = [];
+  for (let i = 0; i < models.length; i += 2) rows.push(models.slice(i, i + 2));
+
+  return (
+    <div ref={ref} style={{
+      background: TH_X.bgAxes, border: `1px solid ${TH_X.border}`,
+      borderRadius: 4, padding: 0, position: 'relative',
+      display: 'flex', flexDirection: 'column',
+    }}>
+      <div style={{ padding: '10px 14px 4px', borderBottom: `1px solid ${TH_X.border}` }}>
+        <div style={{ color: TH_X.text, fontFamily: 'monospace', fontWeight: 700, fontSize: 14 }}>
+          Tool Error Rate
+        </div>
+        <div style={{ color: TH_X.textDim, fontFamily: 'monospace', fontSize: 10, marginTop: 2 }}>
+          per-model EMA (α=0.15) of n_error / n_total · only tool calls with a settled tool_result counted
+        </div>
+      </div>
+
+      {!models.length && (
+        <div style={{ padding: 16, color: TH_X.textDim, fontFamily: 'monospace', fontSize: 12 }}>
+          no tool calls in range
+        </div>
+      )}
+
+      {rows.map((row, ri) => (
+        <div key={ri} style={{
+          display: 'flex', gap: 8, padding: 8,
+          borderTop: ri === 0 ? `1px solid ${TH_X.border}` : 'none',
+        }}>
+          {row.map(m => (
+            <ToolErrorSubPanel key={m.model}
+              modelName={m.model}
+              modelData={byModel[m.model]}
+              w={cellW} h={cellH}
+              bucketMs={bucketMs}
+              setTip={setTip} />
+          ))}
+          {row.length === 1 && <div style={{ width: cellW }} />}
+        </div>
+      ))}
+
+      {tip && (
+        <div style={{
+          position: 'fixed', left: tip.x + 12, top: tip.y + 12,
+          background: TH_X.bgAxes, border: `1px solid ${TH_X.border}`,
+          padding: '6px 8px', borderRadius: 3, pointerEvents: 'none',
+          fontFamily: 'monospace', fontSize: 11, color: TH_X.text,
+          whiteSpace: 'pre', zIndex: 1000,
+        }}>
+          {tip.text}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ToolErrorSubPanel({ modelName, modelData, w, h, bucketMs, setTip }) {
+  const AGGREGATE = '__AGG__';
+
+  // Top-3 tools by total count for this model.
+  const topTools = React.useMemo(() => {
+    return [...modelData.totalsByTool.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(e => e[0]);
+  }, [modelData]);
+
+  const allTools = React.useMemo(() =>
+    [...modelData.totalsByTool.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(e => e[0])
+  , [modelData]);
+
+  // Default ON: AGGREGATE + topTools. User overrides layered on top.
+  const [overrides, setOverrides] = React.useState({});
+  const sel = React.useMemo(() => {
+    const s = new Set([AGGREGATE, ...topTools]);
+    for (const [k, on] of Object.entries(overrides)) {
+      if (on) s.add(k); else s.delete(k);
+    }
+    return s;
+  }, [topTools, overrides]);
+
+  function toggle(k) {
+    setOverrides(prev => ({ ...prev, [k]: !sel.has(k) }));
+  }
+
+  // Build per-series rate sequences. Each series: array of
+  // { t_ms, rate } at non-sparse buckets only (n_total > 0).
+  const series = React.useMemo(() => {
+    const out = new Map();
+    out.set(AGGREGATE, []);
+    for (const tool of allTools) out.set(tool, []);
+    for (const ts of modelData.buckets) {
+      const m = modelData.perBucketTool.get(ts);
+      // Aggregate
+      let aT = 0, aE = 0;
+      for (const v of m.values()) { aT += v.n_total; aE += v.n_error; }
+      if (aT > 0) out.get(AGGREGATE).push({ t_ms: ts, rate: aE / aT, n_total: aT, n_error: aE });
+      // Per tool
+      for (const tool of allTools) {
+        const v = m.get(tool);
+        if (v && v.n_total > 0) {
+          out.get(tool).push({ t_ms: ts, rate: v.n_error / v.n_total, n_total: v.n_total, n_error: v.n_error });
+        }
+      }
+    }
+    return out;
+  }, [modelData, allTools]);
+
+  // EMA over the rate sequence for each visible series.
+  const emaSeries = React.useMemo(() => {
+    const ALPHA = 0.15;
+    const out = new Map();
+    for (const k of sel) {
+      const arr = series.get(k);
+      if (!arr || !arr.length) { out.set(k, []); continue; }
+      const ema = [];
+      let prev = arr[0].rate;
+      ema.push({ ...arr[0], ema: prev });
+      for (let i = 1; i < arr.length; i++) {
+        prev = ALPHA * arr[i].rate + (1 - ALPHA) * prev;
+        ema.push({ ...arr[i], ema: prev });
+      }
+      out.set(k, ema);
+    }
+    return out;
+  }, [series, sel]);
+
+  // Y axis: 0 → max EMA across visible series, +10% headroom.
+  const yMax = React.useMemo(() => {
+    let m = 0;
+    for (const k of sel) {
+      const arr = emaSeries.get(k) || [];
+      for (const p of arr) if (p.ema > m) m = p.ema;
+    }
+    return Math.max(m * 1.1, 0.001);  // never let max collapse to 0
+  }, [emaSeries, sel]);
+
+  // X axis: bucket range across the model.
+  const xMin = modelData.buckets.length ? modelData.buckets[0] : 0;
+  const xMax = modelData.buckets.length ? modelData.buckets[modelData.buckets.length - 1] + bucketMs : 1;
+
+  const padL = 38, padR = 6, padT = 22, padB = 22;
+  const plotW = Math.max(1, w - padL - padR);
+  const plotH = Math.max(1, h - padT - padB);
+  const xs = (t) => padL + ((t - xMin) / Math.max(1, xMax - xMin)) * plotW;
+  const ys = (v) => padT + plotH - (v / yMax) * plotH;
+
+  function colorFor(key) {
+    if (key === AGGREGATE) return '#ddd';
+    const palette = ['#ee4444', '#44dd66', '#dd66aa', '#44bbbb', '#eeaa44', '#9966dd', '#bb88ff', '#66ddee'];
+    const idx = allTools.indexOf(key);
+    return palette[idx >= 0 ? idx % palette.length : 0];
+  }
+
+  function labelFor(key) {
+    return key === AGGREGATE ? 'Aggregate' : key;
+  }
+
+  return (
+    <div style={{ width: w, border: `1px solid ${TH_X.border}`, borderRadius: 3 }}>
+      <div style={{ padding: '6px 10px', fontFamily: 'monospace', fontSize: 11,
+                    color: TH_X.text, fontWeight: 700, borderBottom: `1px solid ${TH_X.border}` }}>
+        {modelName}
+      </div>
+
+      {/* Checkbox row */}
+      <div style={{
+        padding: '4px 10px', display: 'flex', flexWrap: 'wrap', gap: '4px 10px',
+        fontFamily: 'monospace', fontSize: 10, color: TH_X.textDim,
+        borderBottom: `1px solid ${TH_X.border}`,
+      }}>
+        {[AGGREGATE, ...allTools].map(k => {
+          const c = colorFor(k);
+          const checked = sel.has(k);
+          return (
+            <label key={k} style={{
+              display: 'inline-flex', alignItems: 'center', gap: 4,
+              cursor: 'pointer', userSelect: 'none', opacity: checked ? 1 : 0.55,
+            }}>
+              <input type="checkbox" checked={checked} onChange={() => toggle(k)}
+                style={{ accentColor: c, margin: 0 }} />
+              <span style={{ width: 8, height: 8, background: c, display: 'inline-block', borderRadius: 2 }} />
+              <span style={{ color: TH_X.text }}>{labelFor(k)}</span>
+            </label>
+          );
+        })}
+      </div>
+
+      <svg width={w} height={h}>
+        {/* y axis */}
+        <line x1={padL} y1={padT} x2={padL} y2={padT + plotH} stroke={TH_X.border} />
+        <line x1={padL} y1={padT + plotH} x2={padL + plotW} y2={padT + plotH} stroke={TH_X.border} />
+
+        {/* y ticks: 0%, 50%, 100% of yMax */}
+        {[0, 0.5, 1].map((f, i) => {
+          const v = f * yMax;
+          return (
+            <g key={i}>
+              <line x1={padL - 3} y1={ys(v)} x2={padL} y2={ys(v)} stroke={TH_X.border} />
+              <text x={padL - 5} y={ys(v) + 3} textAnchor="end"
+                    fontSize="9" fontFamily="monospace" fill={TH_X.textDim}>
+                {(v * 100).toFixed(v < 0.01 ? 2 : 1)}%
+              </text>
+            </g>
+          );
+        })}
+
+        {/* EMA polylines */}
+        {[...sel].map(k => {
+          const arr = emaSeries.get(k) || [];
+          if (arr.length < 2) return null;
+          const pts = arr.map(p => `${xs(p.t_ms + bucketMs / 2)},${ys(p.ema)}`).join(' ');
+          return (
+            <polyline key={k} points={pts} fill="none"
+              stroke={colorFor(k)} strokeWidth={k === AGGREGATE ? 1.6 : 1.2} />
+          );
+        })}
+
+        {/* hover capture: invisible rects per bucket */}
+        {modelData.buckets.map((ts, i) => {
+          const x0 = xs(ts);
+          const x1 = xs(ts + bucketMs);
+          return (
+            <rect key={i} x={x0} y={padT} width={Math.max(1, x1 - x0)} height={plotH}
+              fill="transparent"
+              onMouseMove={(e) => {
+                const m = modelData.perBucketTool.get(ts);
+                let aT = 0, aE = 0;
+                for (const v of m.values()) { aT += v.n_total; aE += v.n_error; }
+                const lines = [
+                  `${new Date(ts).toISOString().replace('T', ' ').slice(0, 16)} UTC`,
+                  `aggregate: ${aE}/${aT} = ${aT ? ((aE / aT) * 100).toFixed(2) : '-'}%`,
+                ];
+                for (const tool of [...sel].filter(k => k !== AGGREGATE)) {
+                  const v = m.get(tool);
+                  if (v) lines.push(`${tool}: ${v.n_error}/${v.n_total} = ${v.n_total ? ((v.n_error / v.n_total) * 100).toFixed(2) : '-'}%`);
+                }
+                setTip({ x: e.clientX, y: e.clientY, text: lines.join('\n') });
+              }}
+              onMouseLeave={() => setTip(null)} />
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
 function ToolUsagePanel({ models, project, range, nonce }) {
   const ref = React.useRef(null);
   const [w, setW] = React.useState(1200);
@@ -2210,4 +2537,5 @@ window.DashTooltip = DashTooltip;
 window.shortModelName = shortModelName;
 window.ResponseSizesPanel = ResponseSizesPanel;
 window.ToolUsagePanel = ToolUsagePanel;
+window.ToolErrorRatePanel = ToolErrorRatePanel;
 window.ReplyLatencyPanel = ReplyLatencyPanel;
