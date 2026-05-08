@@ -101,6 +101,70 @@ async def tool_usage(
     }
 
 
+@router.get("/tool-error-rate")
+async def tool_error_rate(
+    range: str = Query("30d"),
+    project: str | None = Query(None),
+    model: str | None = Query(None),
+) -> dict:
+    """Bucketed (n_total, n_error) per (model, tool_name) over settled
+    tool calls only (is_error IS NOT NULL). The frontend computes
+    error-rate = n_error / n_total per series and EMA-smooths the
+    sequence.
+
+    `model` is an optional model substring filter (parity with
+    /api/tool-usage). Cross-file uuid dedup does NOT apply — tool_uses
+    aren't keyed on records.uuid; the natural boundary is per-file."""
+    delta = _parse_range(range)
+    since = datetime.now(timezone.utc) - delta
+    bucket_s = _bucket_seconds(delta)
+    # Args appended in the order placeholders appear in the SQL string:
+    # tu.ts >= %s, then f.project_id, then r.model.
+    args: list[Any] = [since]
+    proj_filter = ""
+    if project:
+        proj_filter = "AND f.project_id = %s"
+        args.append(project)
+    model_filter = ""
+    if model:
+        model_filter = "AND r.model LIKE %s"
+        args.append(f"%{model}%")
+
+    with db.viz_conn() as c:
+        rows = c.execute(
+            f"""
+            SELECT to_timestamp(
+                     floor(EXTRACT(EPOCH FROM tu.ts) / {bucket_s}) * {bucket_s} + {bucket_s} / 2
+                   ) AS bucket,
+                   r.model      AS model,
+                   tu.tool_name AS tool,
+                   COUNT(*)                              AS n_total,
+                   COUNT(*) FILTER (WHERE tu.is_error)   AS n_error
+            FROM tool_uses tu
+            JOIN records r ON r.file_key = tu.file_key AND r.line_num = tu.line_num
+            JOIN files   f ON f.file_key = tu.file_key
+            WHERE tu.is_error IS NOT NULL
+              AND tu.ts >= %s
+              {proj_filter}
+              {model_filter}
+            GROUP BY 1, 2, 3
+            ORDER BY 1, 2, 3
+            """,
+            args,
+        ).fetchall()
+
+    return {
+        "range": range,
+        "project": project,
+        "bucket_s": bucket_s,
+        "buckets": [
+            {"ts": _iso(b), "model": m, "tool": t,
+             "n_total": int(nt or 0), "n_error": int(ne or 0)}
+            for (b, m, t, nt, ne) in rows
+        ],
+    }
+
+
 @router.get("/reply-latency")
 async def reply_latency(
     range: str = Query("30d"),

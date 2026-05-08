@@ -198,3 +198,16 @@ def test_context_growth_session_returns_canonical_array(app_with_data):
 def test_context_growth_session_404(app_with_data):
     r = app_with_data.get("/api/context-growth/session/does-not-exist")
     assert r.status_code == 404
+
+
+def test_tool_error_rate_returns_expected_shape(app_with_data):
+    r = app_with_data.get("/api/tool-error-rate?range=3650d")
+    assert r.status_code == 200
+    body = r.json()
+    assert "range" in body
+    assert "bucket_s" in body
+    assert "buckets" in body
+    assert isinstance(body["buckets"], list)
+    for b in body["buckets"]:
+        assert {"ts", "model", "tool", "n_total", "n_error"} <= set(b.keys())
+        assert b["n_error"] <= b["n_total"]
