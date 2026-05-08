@@ -1407,7 +1407,6 @@ function ToolErrorRatePanel({ project, range, nonce }) {
   const [w, setW] = React.useState(1200);
   const [data, setData] = React.useState([]);
   const [bucketMs, setBucketMs] = React.useState(86_400_000);
-  const [tip, setTip] = React.useState(null);
 
   React.useEffect(() => {
     if (!ref.current) return;
@@ -1508,29 +1507,16 @@ function ToolErrorRatePanel({ project, range, nonce }) {
               modelName={m.model}
               modelData={byModel[m.model]}
               w={cellW} h={cellH}
-              bucketMs={bucketMs}
-              setTip={setTip} />
+              bucketMs={bucketMs} />
           ))}
           {row.length === 1 && <div style={{ width: cellW }} />}
         </div>
       ))}
-
-      {tip && (
-        <div style={{
-          position: 'fixed', left: tip.x + 12, top: tip.y + 12,
-          background: TH_X.bgAxes, border: `1px solid ${TH_X.border}`,
-          padding: '6px 8px', borderRadius: 3, pointerEvents: 'none',
-          fontFamily: 'monospace', fontSize: 11, color: TH_X.text,
-          whiteSpace: 'pre', zIndex: 1000,
-        }}>
-          {tip.text}
-        </div>
-      )}
     </div>
   );
 }
 
-function ToolErrorSubPanel({ modelName, modelData, w, h, bucketMs, setTip }) {
+function ToolErrorSubPanel({ modelName, modelData, w, h, bucketMs }) {
   const AGGREGATE = '__AGG__';
   const OTHER = '__OTHER__';
   // Cap visible per-tool checkboxes; rest collapse into a single
@@ -1653,16 +1639,58 @@ function ToolErrorSubPanel({ modelName, modelData, w, h, bucketMs, setTip }) {
 
   function colorFor(key) {
     if (key === AGGREGATE) return '#ddd';
-    if (key === OTHER) return '#888';
-    const palette = ['#ee4444', '#44dd66', '#dd66aa', '#44bbbb', '#eeaa44', '#9966dd', '#bb88ff', '#66ddee'];
-    const idx = visibleTools.indexOf(key);
-    return palette[idx >= 0 ? idx % palette.length : 0];
+    if (key === OTHER) return _OTHER_COLOR;
+    return _toolColor(key);
   }
 
   function labelFor(key) {
     if (key === AGGREGATE) return 'Aggregate';
     if (key === OTHER) return `Other (${otherTools.length})`;
     return key;
+  }
+
+  const [tip, setTip] = React.useState(null);
+
+  function onMove(e) {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    if (mx < padL || mx > w - padR || my < padT || my > padT + plotH) {
+      setTip(null); return;
+    }
+    if (!modelData.buckets.length) { setTip(null); return; }
+    // Snap to nearest bucket center on x.
+    let bIdx = 0, bestD = 1e9;
+    for (let i = 0; i < modelData.buckets.length; i++) {
+      const cx = xs(modelData.buckets[i] + bucketMs / 2);
+      const d = Math.abs(cx - mx);
+      if (d < bestD) { bestD = d; bIdx = i; }
+    }
+    const ts = modelData.buckets[bIdx];
+    const m = modelData.perBucketTool.get(ts);
+    let aT = 0, aE = 0;
+    for (const v of m.values()) { aT += v.n_total; aE += v.n_error; }
+    const lines = [];
+    lines.push(['aggregate', aT ? `${aE}/${aT} = ${((aE / aT) * 100).toFixed(2)}%` : '-']);
+    for (const k of [...sel].filter(k => k !== AGGREGATE)) {
+      if (k === OTHER) {
+        let oT = 0, oE = 0;
+        for (const tool of otherTools) {
+          const v = m.get(tool);
+          if (v) { oT += v.n_total; oE += v.n_error; }
+        }
+        if (oT > 0) lines.push([`other (${otherTools.length})`,
+          `${oE}/${oT} = ${((oE / oT) * 100).toFixed(2)}%`]);
+      } else {
+        const v = m.get(k);
+        if (v) lines.push([k, `${v.n_error}/${v.n_total} = ${((v.n_error / v.n_total) * 100).toFixed(2)}%`]);
+      }
+    }
+    setTip({
+      x: mx, y: my,
+      title: new Date(ts).toISOString().replace('T', ' ').slice(0, 16) + ' UTC',
+      lines,
+    });
   }
 
   return (
@@ -1695,70 +1723,44 @@ function ToolErrorSubPanel({ modelName, modelData, w, h, bucketMs, setTip }) {
         })}
       </div>
 
-      <svg width={w} height={h}>
-        {/* y axis */}
-        <line x1={padL} y1={padT} x2={padL} y2={padT + plotH} stroke={TH_X.border} />
-        <line x1={padL} y1={padT + plotH} x2={padL + plotW} y2={padT + plotH} stroke={TH_X.border} />
+      <div style={{ position: 'relative' }} onMouseMove={onMove} onMouseLeave={() => setTip(null)}>
+        <svg width={w} height={h} style={{ display: 'block' }}>
+          {/* y axis */}
+          <line x1={padL} y1={padT} x2={padL} y2={padT + plotH} stroke={TH_X.border} />
+          <line x1={padL} y1={padT + plotH} x2={padL + plotW} y2={padT + plotH} stroke={TH_X.border} />
 
-        {/* y ticks: 0%, 50%, 100% of yMax */}
-        {[0, 0.5, 1].map((f, i) => {
-          const v = f * yMax;
-          return (
-            <g key={i}>
-              <line x1={padL - 3} y1={ys(v)} x2={padL} y2={ys(v)} stroke={TH_X.border} />
-              <text x={padL - 5} y={ys(v) + 3} textAnchor="end"
-                    fontSize="9" fontFamily="monospace" fill={TH_X.textDim}>
-                {(v * 100).toFixed(v < 0.01 ? 2 : 1)}%
-              </text>
-            </g>
-          );
-        })}
+          {/* y ticks: 0%, 50%, 100% of yMax */}
+          {[0, 0.5, 1].map((f, i) => {
+            const v = f * yMax;
+            return (
+              <g key={i}>
+                <line x1={padL - 3} y1={ys(v)} x2={padL} y2={ys(v)} stroke={TH_X.border} />
+                <text x={padL - 5} y={ys(v) + 3} textAnchor="end"
+                      fontSize="9" fontFamily="monospace" fill={TH_X.textDim}>
+                  {(v * 100).toFixed(v < 0.01 ? 2 : 1)}%
+                </text>
+              </g>
+            );
+          })}
 
-        {/* EMA polylines */}
-        {[...sel].map(k => {
-          const arr = emaSeries.get(k) || [];
-          if (arr.length < 2) return null;
-          const pts = arr.map(p => `${xs(p.t_ms + bucketMs / 2)},${ys(p.ema)}`).join(' ');
-          return (
-            <polyline key={k} points={pts} fill="none"
-              stroke={colorFor(k)} strokeWidth={k === AGGREGATE ? 1.6 : 1.2} />
-          );
-        })}
+          {/* EMA polylines */}
+          {[...sel].map(k => {
+            const arr = emaSeries.get(k) || [];
+            if (arr.length < 2) return null;
+            const pts = arr.map(p => `${xs(p.t_ms + bucketMs / 2)},${ys(p.ema)}`).join(' ');
+            return (
+              <polyline key={k} points={pts} fill="none"
+                stroke={colorFor(k)} strokeWidth={k === AGGREGATE ? 1.6 : 1.2} />
+            );
+          })}
 
-        {/* hover capture: invisible rects per bucket */}
-        {modelData.buckets.map((ts, i) => {
-          const x0 = xs(ts);
-          const x1 = xs(ts + bucketMs);
-          return (
-            <rect key={i} x={x0} y={padT} width={Math.max(1, x1 - x0)} height={plotH}
-              fill="transparent"
-              onMouseMove={(e) => {
-                const m = modelData.perBucketTool.get(ts);
-                let aT = 0, aE = 0;
-                for (const v of m.values()) { aT += v.n_total; aE += v.n_error; }
-                const lines = [
-                  `${new Date(ts).toISOString().replace('T', ' ').slice(0, 16)} UTC`,
-                  `aggregate: ${aE}/${aT} = ${aT ? ((aE / aT) * 100).toFixed(2) : '-'}%`,
-                ];
-                for (const k of [...sel].filter(k => k !== AGGREGATE)) {
-                  if (k === OTHER) {
-                    let oT = 0, oE = 0;
-                    for (const tool of otherTools) {
-                      const v = m.get(tool);
-                      if (v) { oT += v.n_total; oE += v.n_error; }
-                    }
-                    if (oT > 0) lines.push(`other (${otherTools.length}): ${oE}/${oT} = ${((oE / oT) * 100).toFixed(2)}%`);
-                  } else {
-                    const v = m.get(k);
-                    if (v) lines.push(`${k}: ${v.n_error}/${v.n_total} = ${v.n_total ? ((v.n_error / v.n_total) * 100).toFixed(2) : '-'}%`);
-                  }
-                }
-                setTip({ x: e.clientX, y: e.clientY, text: lines.join('\n') });
-              }}
-              onMouseLeave={() => setTip(null)} />
-          );
-        })}
-      </svg>
+          {tip && (
+            <line x1={tip.x} x2={tip.x} y1={padT} y2={padT + plotH}
+              stroke="#fff" strokeOpacity="0.3" strokeDasharray="2,3" />
+          )}
+        </svg>
+        {tip && <window.DashTooltip tip={tip} />}
+      </div>
     </div>
   );
 }
