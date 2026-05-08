@@ -70,6 +70,13 @@ CREATE TABLE IF NOT EXISTS tool_uses (
 CREATE INDEX IF NOT EXISTS tool_uses_ts_idx   ON tool_uses (ts);
 CREATE INDEX IF NOT EXISTS tool_uses_tool_idx ON tool_uses (tool_name);
 
+-- 2026-05-08: tool_uses.is_error filled at parse time by matching
+-- assistant tool_use.id to user tool_result.tool_use_id within the
+-- same JSONL file. NULL = unmatched (no later tool_result block in
+-- the file). Read endpoints WHERE is_error IS NOT NULL to compute
+-- the error rate over settled calls only.
+ALTER TABLE tool_uses ADD COLUMN IF NOT EXISTS is_error BOOLEAN;
+
 CREATE TABLE IF NOT EXISTS ingest_runs (
   id              BIGSERIAL PRIMARY KEY,
   started_at      TIMESTAMPTZ NOT NULL,
