@@ -165,8 +165,8 @@ def run_ingest(trigger: str) -> dict:
                 if parsed.get("tool_uses"):
                     cur.executemany(
                         """
-                        INSERT INTO tool_uses (file_key, line_num, idx, ts, tool_name)
-                        VALUES (%(file_key)s, %(line_num)s, %(idx)s, %(ts)s, %(tool_name)s)
+                        INSERT INTO tool_uses (file_key, line_num, idx, ts, tool_name, is_error)
+                        VALUES (%(file_key)s, %(line_num)s, %(idx)s, %(ts)s, %(tool_name)s, %(is_error)s)
                         """,
                         parsed["tool_uses"],
                     )
