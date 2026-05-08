@@ -1689,38 +1689,19 @@ function ToolErrorSubPanel({ modelName, modelData, w, h, bucketMs }) {
     setTip({
       x: mx, y: my,
       title: new Date(ts).toISOString().replace('T', ' ').slice(0, 16) + ' UTC',
+      accent: '#ddd',
       lines,
     });
   }
 
   return (
-    <div style={{ width: w, border: `1px solid ${TH_X.border}`, borderRadius: 3 }}>
+    <div style={{
+      width: w, border: `1px solid ${TH_X.border}`, borderRadius: 3,
+      display: 'flex', flexDirection: 'column',
+    }}>
       <div style={{ padding: '6px 10px', fontFamily: 'monospace', fontSize: 11,
                     color: TH_X.text, fontWeight: 700, borderBottom: `1px solid ${TH_X.border}` }}>
         {modelName}
-      </div>
-
-      {/* Checkbox row */}
-      <div style={{
-        padding: '4px 10px', display: 'flex', flexWrap: 'wrap', gap: '4px 10px',
-        fontFamily: 'monospace', fontSize: 10, color: TH_X.textDim,
-        borderBottom: `1px solid ${TH_X.border}`,
-      }}>
-        {[AGGREGATE, ...visibleTools, ...(hasOther ? [OTHER] : [])].map(k => {
-          const c = colorFor(k);
-          const checked = sel.has(k);
-          return (
-            <label key={k} style={{
-              display: 'inline-flex', alignItems: 'center', gap: 4,
-              cursor: 'pointer', userSelect: 'none', opacity: checked ? 1 : 0.55,
-            }}>
-              <input type="checkbox" checked={checked} onChange={() => toggle(k)}
-                style={{ accentColor: c, margin: 0 }} />
-              <span style={{ width: 8, height: 8, background: c, display: 'inline-block', borderRadius: 2 }} />
-              <span style={{ color: TH_X.text }}>{labelFor(k)}</span>
-            </label>
-          );
-        })}
       </div>
 
       <div style={{ position: 'relative' }} onMouseMove={onMove} onMouseLeave={() => setTip(null)}>
@@ -1760,6 +1741,38 @@ function ToolErrorSubPanel({ modelName, modelData, w, h, bucketMs }) {
           )}
         </svg>
         {tip && <window.DashTooltip tip={tip} />}
+      </div>
+
+      {/* Checkbox row (below the SVG, matches ToolUsagePanel's
+          order: 99 / borderTop layout). */}
+      <div style={{
+        padding: '8px 14px', borderTop: `1px solid ${TH_X.border}`,
+        display: 'flex', flexWrap: 'wrap', gap: '6px 14px',
+        fontFamily: 'monospace', fontSize: 11, color: TH_X.textDim,
+      }}>
+        <span>show:</span>
+        {[AGGREGATE, ...visibleTools, ...(hasOther ? [OTHER] : [])].map(k => {
+          const c = colorFor(k);
+          const checked = sel.has(k);
+          const totalForKey = k === AGGREGATE
+            ? [...modelData.totalsByTool.values()].reduce((s, n) => s + n, 0)
+            : k === OTHER
+              ? otherTools.reduce((s, t) => s + (modelData.totalsByTool.get(t) || 0), 0)
+              : (modelData.totalsByTool.get(k) || 0);
+          return (
+            <label key={k} style={{
+              display: 'inline-flex', alignItems: 'center', gap: 5,
+              cursor: 'pointer', userSelect: 'none',
+              opacity: checked ? 1 : 0.6,
+            }}>
+              <input type="checkbox" checked={checked} onChange={() => toggle(k)}
+                style={{ accentColor: c, margin: 0 }} />
+              <span style={{ width: 10, height: 10, background: c, display: 'inline-block', borderRadius: 2 }} />
+              <span style={{ color: TH_X.text, fontWeight: 600 }}>{labelFor(k)}</span>
+              <span style={{ color: TH_X.textDim }}>({totalForKey.toLocaleString()})</span>
+            </label>
+          );
+        })}
       </div>
     </div>
   );
