@@ -112,6 +112,7 @@ function txToDashData(tx) {
         ephemeral_5m: eph5,
         ephemeral_1h: eph1h,
         cost_usd: cost,
+        ctx: window.usageCtxInput(us),
       });
     }
   }

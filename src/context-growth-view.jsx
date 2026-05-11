@@ -58,7 +58,10 @@ function computeTurnStats(tx) {
     const cc = u.cache_creation_input_tokens || 0;
     const cr = u.cache_read_input_tokens || 0;
     const out = u.output_tokens || 0;
-    const ctx = inp + cc + cr;
+    // Peak per-call context — max-of-iteration-totals when the turn
+    // fanned out via advisor()/sub-agent; otherwise the top-level sum.
+    // Top-level inp/cc/cr stay as billing sums for the breakdown columns.
+    const ctx = window.usageCtxInput(u);
     if (ctx === 0) continue; // refusal / interrupt
     const delta = prevInput !== null ? ctx - prevInput : null;
     rows.push({

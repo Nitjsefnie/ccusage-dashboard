@@ -10,6 +10,30 @@ window.parseTranscript = function parseTranscript(text, opts) {
   const seenReq = new Map(); // requestId -> usage event (for streaming merge)
   const seenUuids = (opts && opts.seenUuids) || null; // optional cross-file dedup
 
+  // Per-call context-window size. Mirrors backend/parse.py:_usage_ctx_input
+  // and canonical parse_session.py 1.20.6. When usage.iterations has >1
+  // entries (advisor()/sub-agent fan-out), the top-level fresh+create+read
+  // is the BILLING sum across iterations, not the peak single-call window.
+  // For context-growth views we want the peak: max-of-iteration-totals.
+  function usageCtxInput(u) {
+    if (!u) return 0;
+    const iters = u.iterations;
+    if (Array.isArray(iters) && iters.length > 1) {
+      let peak = 0;
+      for (const it of iters) {
+        const t = (it.input_tokens || 0)
+                + (it.cache_creation_input_tokens || 0)
+                + (it.cache_read_input_tokens || 0);
+        if (t > peak) peak = t;
+      }
+      return peak;
+    }
+    return (u.input_tokens || 0)
+         + (u.cache_creation_input_tokens || 0)
+         + (u.cache_read_input_tokens || 0);
+  }
+  window.usageCtxInput = usageCtxInput;
+
   function mergeUsageMax(existing, incoming) {
     // Recursive max merge: numeric fields take max, nested dicts merge
     // key-by-key, non-numeric fields keep `existing` if present else

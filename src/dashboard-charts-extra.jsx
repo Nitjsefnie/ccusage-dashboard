@@ -389,9 +389,15 @@ function buildSessionTurns(events) {
     const seq = [{ t: 0, ctx: 0 }];
     evs.forEach((e, i) => {
       const t = (e.turn_index != null ? e.turn_index : i) + 1;
+      // Per-call context window. Prefer the per-event `ctx` produced by
+      // txToDashData (which respects usage.iterations max via
+      // usageCtxInput); fall back to the input+create+read sum when an
+      // older event-shape lacks it.
       seq.push({
         t,
-        ctx: (e.input_tokens || 0) + (e.cache_create || 0) + (e.cache_read || 0),
+        ctx: e.ctx != null
+          ? e.ctx
+          : (e.input_tokens || 0) + (e.cache_create || 0) + (e.cache_read || 0),
       });
     });
     if (!out[dom]) out[dom] = [];

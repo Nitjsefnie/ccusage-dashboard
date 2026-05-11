@@ -48,6 +48,29 @@ def _merge_usage_max(existing, incoming):
     return existing
 
 
+def _usage_ctx_input(u: dict) -> int:
+    # Per-call context-window size. Mirrors parse_session.py 1.20.6:
+    # when the harness fans out multiple sub-calls (advisor()/retries),
+    # they get rolled into one `usage` envelope as `iterations`. The
+    # top-level fresh+create+read is the BILLING sum across iterations,
+    # not the peak single-call window. For context-growth panels we
+    # want the peak, so take max-of-iteration-totals when >1 iters.
+    # Single-iter (or absent) → fall back to top-level sum.
+    iters = u.get("iterations") or []
+    if isinstance(iters, list) and len(iters) > 1:
+        return max(
+            (int(it.get("input_tokens", 0) or 0)
+             + int(it.get("cache_creation_input_tokens", 0) or 0)
+             + int(it.get("cache_read_input_tokens", 0) or 0))
+            for it in iters
+        )
+    return (
+        int(u.get("input_tokens", 0) or 0)
+        + int(u.get("cache_creation_input_tokens", 0) or 0)
+        + int(u.get("cache_read_input_tokens", 0) or 0)
+    )
+
+
 def _to_dt(s: str | None):
     if not s:
         return None
@@ -314,6 +337,7 @@ def parse_file(file_key: str, blob: bytes) -> dict:
             "eph5_tokens": eph5,
             "eph1h_tokens": eph1h,
             "cost_usd": round(cost, 6),
+            "ctx_input": _usage_ctx_input(u),
         })
 
     # Build ctx_turns by user-text boundary, mirroring
@@ -337,15 +361,12 @@ def parse_file(file_key: str, blob: bytes) -> dict:
         turn_records.append(last_usage)
 
     # Drop turns with 0 input (refusals/interrupts; they corrupt deltas).
-    turn_records = [
-        t for t in turn_records
-        if (t["fresh_tokens"] + t["cache_creation_tokens"] + t["cache_read_tokens"]) > 0
-    ]
+    turn_records = [t for t in turn_records if t["ctx_input"] > 0]
 
     ctx_turns: list[dict] = []
     prev_input = 0
     for idx, t in enumerate(turn_records, 1):
-        ctx_input = t["fresh_tokens"] + t["cache_creation_tokens"] + t["cache_read_tokens"]
+        ctx_input = t["ctx_input"]
         ctx_turns.append({
             "idx": idx,
             "ts": t["ts"].isoformat() if t["ts"] else "",
