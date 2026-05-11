@@ -509,9 +509,9 @@ function TopBar({ route, setRoute, isGuest }) {
     <header className="topbar">
       <div className="topbar-left">
         <div className="logo">
-          <span className="logo-mark">▮▮</span>
+          <span className="logo-mark">{'>'}</span>
           <span className="logo-text">CCUSAGE</span>
-          <span className="logo-sub">/ session inspector{isGuest ? ' · guest' : ''}</span>
+          <span className="logo-sub">session inspector{isGuest ? ' · guest' : ''}</span>
         </div>
       </div>
       <nav className="topnav">

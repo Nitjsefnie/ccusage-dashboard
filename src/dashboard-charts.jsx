@@ -1,32 +1,42 @@
 // Dashboard chart components — interactive SVG (with hover tooltips).
 // Six time-series cards, two horizontal bars, and the burn-rate panel.
 
-const TH = {
-  bgDark:  '#1a1a2e',
-  bgAxes:  '#16213e',
-  border:  '#2a2a4a',
-  text:    '#e0e0e0',
-  textDim: '#8888aa',
-  grid:    '#2a2a4a',
+// CSS-var resolver so the chart theme follows the stylesheet.
+// Evaluated once at module-load — sufficient for a single-theme app.
+const cssVar = (name, fallback) => {
+  if (typeof window === 'undefined') return fallback;
+  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return v || fallback;
 };
 
+const TH = {
+  bgDark:  cssVar('--bg',       '#0a0b10'),
+  bgAxes:  cssVar('--bg-card',  '#12141d'),
+  border:  cssVar('--border',   '#1f2230'),
+  text:    cssVar('--fg',       '#e7e9f2'),
+  textDim: cssVar('--muted',    '#6b7193'),
+  grid:    'rgba(255,255,255,0.05)',
+};
+
+// Series colors — kept as literals so the chart palette is tunable
+// independently of the surface tokens.
 const COL = {
-  inputTokens:       '#00d4aa',
-  outputTokens:      '#ff8c42',
-  cacheCreateTokens: '#aa55ff',
-  cacheReadTokens:   '#ff3366',
-  totalTokens:       '#00d4ff',
-  costUSD:           '#ffdd00',
+  inputTokens:       cssVar('--accent', '#00d4aa'),
+  outputTokens:      '#ff9c5a',
+  cacheCreateTokens: 'oklch(0.72 0.14 305)',
+  cacheReadTokens:   'oklch(0.72 0.14 25)',
+  totalTokens:       'oklch(0.78 0.14 245)',
+  costUSD:           cssVar('--gold', 'oklch(0.85 0.14 90)'),
 };
 
 const MODEL_COLORS = {
-  'opus-4-7':   '#ff2222',
-  'opus-4-6':   '#ff8800',
-  'opus-4-5':   '#ffdd00',
-  'sonnet-4-6': '#00bbff',
-  'sonnet-4-5': '#8866ff',
-  'haiku-4-5':  '#88cc44',
-  '<synthetic>':'#888888',
+  'opus-4-7':    'oklch(0.72 0.16 25)',   // coral
+  'opus-4-6':    'oklch(0.78 0.14 55)',   // amber
+  'opus-4-5':    'oklch(0.85 0.14 90)',   // gold
+  'sonnet-4-6':  'oklch(0.78 0.14 245)',  // blue
+  'sonnet-4-5':  'oklch(0.72 0.16 305)',  // violet
+  'haiku-4-5':   'oklch(0.78 0.14 175)',  // teal — matches --accent
+  '<synthetic>': 'oklch(0.65 0.02 260)',  // neutral
 };
 
 function humanFmt(v, isCurrency) {
@@ -97,26 +107,22 @@ function Tooltip({ tip }) {
     left: pos.left,
     top: pos.top,
     visibility: pos.ready ? 'visible' : 'hidden',
-    background: 'rgba(8, 10, 18, 0.96)',
-    border: '1px solid ' + (tip.accent || TH.border),
-    borderRadius: 4,
-    padding: '8px 10px',
-    fontFamily: 'monospace',
-    fontSize: 11,
-    color: TH.text,
+    borderColor: tip.accent || undefined,
     pointerEvents: 'none',
-    whiteSpace: 'nowrap',
-    boxShadow: '0 6px 20px rgba(0,0,0,0.6)',
     zIndex: 5,
     maxWidth: 280,
   };
   return (
-    <div ref={ref} style={style}>
-      {tip.title && <div style={{ color: tip.accent || TH.text, fontWeight: 700, marginBottom: 4 }}>{tip.title}</div>}
+    <div ref={ref} className="chart-tooltip" style={style}>
+      {tip.title && (
+        <div className="chart-tooltip-title" style={{ color: tip.accent || undefined }}>
+          {tip.title}
+        </div>
+      )}
       {(tip.lines || []).map((l, i) => (
-        <div key={i} style={{ display: 'flex', gap: 8, justifyContent: 'space-between', lineHeight: 1.6 }}>
-          <span style={{ color: TH.textDim }}>{l[0]}</span>
-          <span style={{ color: l[2] || TH.text, fontWeight: 600 }}>{l[1]}</span>
+        <div key={i} className="chart-tooltip-row">
+          <span className="chart-tooltip-key">{l[0]}</span>
+          <span className="chart-tooltip-val" style={{ color: l[2] || undefined }}>{l[1]}</span>
         </div>
       ))}
     </div>

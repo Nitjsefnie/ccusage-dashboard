@@ -1080,27 +1080,23 @@ function DashTooltip({ tip }) {
     left: pos.left,
     top: pos.top,
     visibility: pos.ready ? 'visible' : 'hidden',
-    background: 'rgba(8, 10, 18, 0.96)',
-    border: '1px solid ' + (tip.accent || TH_X.border),
-    borderRadius: 4,
-    padding: '8px 10px',
-    fontFamily: 'monospace',
-    fontSize: 11,
-    color: TH_X.text,
+    borderColor: tip.accent || undefined,
     pointerEvents: 'none',
-    whiteSpace: 'nowrap',
-    boxShadow: '0 6px 20px rgba(0,0,0,0.6)',
     zIndex: 5,
-    maxWidth: 360,
+    width: 'max-content',
   };
   return (
-    <div ref={ref} style={style}>
-      {tip.title && <div style={{ color: tip.accent || TH_X.text, fontWeight: 700, marginBottom: 4 }}>{tip.title}</div>}
+    <div ref={ref} className="chart-tooltip" style={style}>
+      {tip.title && (
+        <div className="chart-tooltip-title" style={{ color: tip.accent || undefined }}>
+          {tip.title}
+        </div>
+      )}
       {(tip.lines || []).map((l, i) => (
-        <div key={i} style={{ display: 'flex', gap: 12, justifyContent: 'space-between', lineHeight: 1.6 }}>
-          <span style={{ color: TH_X.textDim, flexShrink: 0 }}>{l[0]}</span>
-          <span style={{
-            color: l[2] || TH_X.text, fontWeight: 600,
+        <div key={i} className="chart-tooltip-row">
+          <span className="chart-tooltip-key" style={{ flexShrink: 0 }}>{l[0]}</span>
+          <span className="chart-tooltip-val" style={{
+            color: l[2] || undefined,
             wordBreak: 'break-all', whiteSpace: 'normal', textAlign: 'right',
           }}>{l[1]}</span>
         </div>
