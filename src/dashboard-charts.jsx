@@ -306,14 +306,21 @@ function TimeSeriesPanel({ title, events, valueKey, color, isCurrency, range, bi
           textAnchor="middle" fontFamily="monospace"
           transform={`rotate(-90 ${w - 12} ${padT + plotH/2})`}>cumulative</text>
 
-        <g>
-          <rect x={w - padR - 92} y={padT + 2} width={86} height={20} rx={4}
-            fill={TH.bgAxes} stroke={color} strokeOpacity="0.8" />
-          <text x={w - padR - 49} y={padT + 16} fontSize="11" fontWeight="bold"
-            fill={color} textAnchor="middle" fontFamily="monospace">
-            Total: {humanFmt(total, isCurrency)}
-          </text>
-        </g>
+        {(() => {
+          const totalStr = `Total: ${humanFmt(total, isCurrency)}`;
+          const boxW = Math.round(totalStr.length * 6.6) + 16;
+          const boxX = w - padR - boxW - 6;
+          return (
+            <g>
+              <rect x={boxX} y={padT + 2} width={boxW} height={20} rx={4}
+                fill={TH.bgAxes} stroke={color} strokeOpacity="0.8" />
+              <text x={boxX + boxW / 2} y={padT + 16} fontSize="11" fontWeight="bold"
+                fill={color} textAnchor="middle" fontFamily="monospace">
+                {totalStr}
+              </text>
+            </g>
+          );
+        })()}
       </svg>
       <Tooltip tip={tip} />
     </div>
