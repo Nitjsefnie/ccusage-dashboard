@@ -1,0 +1,47 @@
+**ccudash** — Claude Code Usage Dashboard
+*Self-hosted visual analytics for Claude Code sessions*
+
+📊 **9 Interactive Panels**
+
+`Session Burn Rate` · `Cost by Model` · `Token Breakdown` · `Prompt-Cache TTL Split` · `Per-Session Context Growth` · `Response Sizes` · `Tool Usage` · `Reply Latency` · `Tool Error Rate`
+
+```
+┌──────────────────────┬─────────────┬─────────────────┐
+│                      │  ccusage    │    ccudash      │
+│                      │   -plot     │   (this repo)   │
+├──────────────────────┼─────────────┼─────────────────┤
+│ Delivery             │ matplotlib  │ SVG / React     │
+│ Interaction          │ static PNG  │ live, clickable │
+│ Updates              │ re-run CLI  │ SSE push        │
+│ Users                │ single      │ multi + guest   │
+│ Runtime              │ offline     │ self-hosted     │
+└──────────────────────┴─────────────┴─────────────────┘
+```
+
+⚡ **What makes it different**
+
+• **Live updates** — ingest_done SSE events trigger dashboard refetch, zero page reload
+• **Zero build step** — React + in-browser Babel, no webpack/vite/npm install
+• **Canonical cost model** — TTL-split cache pricing (5m × 1.25, 1h × 2) matching Claude Code's internal billing
+• **Multi-user auth** — PBKDF2 against external users.config, or read-only guest mode
+• **Automated R2 pipeline** — hourly etag-based ingest from Cloudflare R2, incremental forever
+• **In-browser inspector** — drag-drop a JSONL for offline parsing fallback
+
+🧪 **68 tests · FastAPI + React + Postgres · clean architecture**
+
+Backend: per-file `requestId` max-merge at ingest time, cross-file uuid dedup at query time via `DISTINCT ON (uuid)`. Costs pre-computed at ingest; bump `PARSER_VERSION` to force full reparse.
+
+🏃 **One-liner start**
+```bash
+createdb claude_viz && psql claude_viz -f backend/schema.sql
+pip install -r backend/requirements.txt
+python3 -m uvicorn backend.app:app --host 127.0.0.1 --port 8000
+```
+
+🌐 **Live demo:** https://claude.nitjsefni.eu/ (guest login, read-only)
+
+🔗 **GitHub:** https://github.com/Nitjsefnie/ccusage-dashboard
+
+---
+
+*Based on visual design from nhz-io/ccusage-plot · MIT © 2026 Nitjsefnie*
