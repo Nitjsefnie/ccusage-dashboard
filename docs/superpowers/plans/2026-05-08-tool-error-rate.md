@@ -477,8 +477,8 @@ async def tool_error_rate(
 - [ ] **Step 2: Restart the backend and smoke-test the endpoint**
 
 ```bash
-systemctl restart session-viz
-curl -sS -b "session=$(cat ~/.claude/session-viz.cookie 2>/dev/null || echo '')" \
+systemctl restart ccudash
+curl -sS -b "session=$(cat ~/.claude/ccudash.cookie 2>/dev/null || echo '')" \
   'http://127.0.0.1:8000/api/tool-error-rate?range=30d' | python3 -m json.tool | head -30
 ```
 
@@ -926,7 +926,7 @@ In `src/app.jsx`, after the closing `</div>` of the
 - [ ] **Step 2: Restart, reload, visually verify**
 
 ```bash
-systemctl restart session-viz
+systemctl restart ccudash
 ```
 
 Open the dashboard in a browser. Scroll past Reply Latency. The new
@@ -941,7 +941,7 @@ ingest:
 curl -sS -X POST -H "X-Admin-Token: $ADMIN_TOKEN" http://127.0.0.1:8000/admin/ingest
 ```
 
-Wait for `ingest_done` (visible in `journalctl -u session-viz -f`),
+Wait for `ingest_done` (visible in `journalctl -u ccudash -f`),
 reload the page (the SSE listener auto-refetches; no manual refresh
 needed if the tab was open, but a reload is fine).
 

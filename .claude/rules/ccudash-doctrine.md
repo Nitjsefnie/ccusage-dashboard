@@ -1,6 +1,6 @@
-# session-viz Doctrine
+# ccudash Doctrine
 
-Local rules for the session-viz repo. Global rules under `~/.claude/rules/**` still apply.
+Local rules for the ccudash repo. Global rules under `~/.claude/rules/**` still apply.
 
 ## Parser-spec ownership (SV-PARSER-SPEC)
 
@@ -49,7 +49,7 @@ come from R2, owned by the same operator).
 
 ## Bundle distribution NOT applicable (SV-NO-BUNDLE)
 
-session-viz does not ship via `claude-setup.zip`. Distribution path is
+ccudash does not ship via `claude-setup.zip`. Distribution path is
 git (this repo) + `pip install -r backend/requirements.txt`.
 
 ## Test fixtures stay small (SV-FIXTURE-SIZE)
@@ -62,7 +62,7 @@ Don't grow either by accident — larger samples go under
 
 ## Read-only on canonical paths (SV-READ-ONLY-CANONICAL)
 
-session-viz NEVER edits `~/.claude/scripts/parse_session.py` or
+ccudash NEVER edits `~/.claude/scripts/parse_session.py` or
 `~/.claude/scripts/discord_mb.py`. Those are owned by analyst. The
 symlinks in `scripts/` are read-only references.
 

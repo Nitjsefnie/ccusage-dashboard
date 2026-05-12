@@ -1,16 +1,18 @@
-# session-viz
+# ccudash
 
-A self-hosted web app for visualizing Claude Code session JSONL transcripts.
-A FastAPI backend ingests transcripts from Cloudflare R2 (or a local
-`file://` mirror), parses them into Postgres, and serves dashboards and raw
-transcripts to a React + in-browser-Babel frontend (no build step).
+**Claude Code Usage Dashboard** — a self-hosted web app for visualising Claude
+Code session JSONL transcripts.
+
+A FastAPI backend ingests transcripts from Cloudflare R2 (or a local `file://`
+mirror), parses them into Postgres, and serves dashboards and raw transcripts
+to a React + in-browser-Babel frontend (no build step).
 
 The dashboard panel set — Session Burn Rate, Cost by Model, Token Breakdown,
-Prompt-Cache TTL Split, Per-Session Context Growth, Response Sizes,
-Tool Usage, Reply Latency — is based on
+Prompt-Cache TTL Split, Per-Session Context Growth, Response Sizes, Tool Usage,
+Reply Latency, Tool Error Rate — is based on
 [`nhz-io/ccusage-plot`](https://github.com/nhz-io/ccusage-plot). This repo
-ports those matplotlib-only offline visualizations into a hosted
-SVG/React app with multi-user auth, R2 ingest, and live updates.
+ports those matplotlib-only offline visualisations into a hosted SVG/React app
+with multi-user auth, R2 ingest, and live updates.
 
 ## Features
 
@@ -18,11 +20,11 @@ SVG/React app with multi-user auth, R2 ingest, and live updates.
   cache-create TTL split (`ephemeral_5m` × 1.25× base, `ephemeral_1h` × 2× base).
 - **Token Breakdown** as paired sort-by-tokens / sort-by-cost bars
   over Input, Output, Cache Create (5m / 1h / unsplit), Cache Read.
-- **Prompt-Cache TTL Split** showing adaptively-bucketed ephemeral_5m
-  vs ephemeral_1h cache_create volumes with a 5m-share-% trend strip.
+- **Prompt-Cache TTL Split** showing adaptively-bucketed `ephemeral_5m`
+  vs `ephemeral_1h` cache_create volumes with a 5m-share-% trend strip.
 - **Response Sizes by Model** — adaptively-bucketed median + p90 of
-  *visible response characters* (text content blocks; thinking
-  excluded) on a log y-axis, per-model checkboxes.
+  *visible response characters* (text content blocks; thinking excluded)
+  on a log y-axis, per-model checkboxes.
 - **Per-Session Context Growth** — per-model sub-panels with a
   p25–p75 IQR ribbon under a median line plus faint per-session
   traces, a multi-model checkbox-driven comparison row, and
@@ -39,6 +41,8 @@ SVG/React app with multi-user auth, R2 ingest, and live updates.
   per-panel model select, a per-bucket `Other` breakdown on hover,
   and `server_tool_use` blocks (e.g. WebSearch) counted alongside
   client tool calls.
+- **Tool Error Rate over Time** — per-model EMA progression with
+  per-tool toggleable lines (top-3 default ON), plus an Aggregate line.
 - **Reply Latency over Time** — per-(bucket, model) p10–p90 ribbon
   with a median line and top/bottom 1% outlier dots (only when the
   bucket has ≥100 replies); log y-axis from 0.1s to max p90. Latency
@@ -67,12 +71,13 @@ Postgres `claude_viz`
   • records      (file_key, line_num PK, per-request tokens + cost
                   + text_chars for visible-response size
                   + reply_latency_s for the user→assistant gap)
-  • tool_uses    (file_key, line_num, idx PK, ts, tool_name)
+  • tool_uses    (file_key, line_num, idx PK, ts, tool_name, is_error)
   • ingest_runs  (audit log)
   ↓  on-demand
 FastAPI  →  /api/dashboard, /api/cache, /api/context-growth/*,
             /api/sessions, /api/sessions/{id}/transcript,
-            /api/tool-usage, /api/reply-latency, /api/models,
+            /api/tool-usage, /api/tool-error-rate,
+            /api/reply-latency, /api/models,
             /api/events
   ↓
 React + in-browser Babel  →  /  (served by FastAPI)
@@ -108,15 +113,17 @@ client falls back to walking the directory tree.
 
 ## Operations
 
-The deploy is intended to run under systemd. A unit at
-`/etc/systemd/system/session-viz.service` runs uvicorn with
-`--timeout-graceful-shutdown 5` and `TimeoutStopSec=10` (so SSE
-connections drain quickly on restart):
+The deploy is intended to run under systemd. See
+[`examples/ccudash.service`](examples/ccudash.service) for a sample
+unit file. Key settings:
+
+- `--timeout-graceful-shutdown 5` so SSE connections drain quickly.
+- `TimeoutStopSec=10` for fast restarts.
 
 ```bash
-systemctl restart session-viz
-systemctl status session-viz
-journalctl -u session-viz -f
+systemctl restart ccudash
+systemctl status ccudash
+journalctl -u ccudash -f
 ```
 
 Schema migrations are idempotent — re-apply after editing
@@ -151,6 +158,7 @@ restart).
   at runtime.
 - `tests/` — pytest suite (parser fixtures, ingest, API).
 - `fixtures/` — small JSONL + zip samples for parser tests.
+- `examples/` — sample systemd service file.
 
 ## License
 

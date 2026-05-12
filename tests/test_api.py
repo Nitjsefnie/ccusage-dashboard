@@ -6,6 +6,8 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
 
 @pytest.fixture
 def app_with_data(monkeypatch):
@@ -16,9 +18,9 @@ def app_with_data(monkeypatch):
     test_db = "claude_viz_test_api"
     os.system(f"dropdb --if-exists {test_db} 2>/dev/null")
     os.system(f"createdb {test_db} 2>/dev/null")
-    os.system(f"psql {test_db} -f /root/session-viz/backend/schema.sql >/dev/null")
+    os.system(f"psql {test_db} -f {_REPO_ROOT / 'backend/schema.sql'} >/dev/null")
     monkeypatch.setenv("DATABASE_URL_VIZ", f"postgresql:///{test_db}")
-    src = Path("/root/session-viz/fixtures/r2_mini")
+    src = _REPO_ROOT / "fixtures/r2_mini"
     tmp = tempfile.mkdtemp(prefix="sv-api-")
     shutil.copytree(src, Path(tmp) / "r2")
     monkeypatch.setenv("R2_ENDPOINT", f"file://{tmp}/r2/")

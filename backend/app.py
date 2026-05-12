@@ -1,4 +1,4 @@
-"""FastAPI entrypoint for session-viz."""
+"""FastAPI entrypoint for ccudash."""
 from __future__ import annotations
 
 import os
@@ -54,7 +54,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="session-viz",
+    title="ccudash",
     docs_url=None,
     redoc_url=None,
     lifespan=lifespan,

@@ -1,4 +1,4 @@
-# session-viz
+# ccudash
 
 @README.md
 

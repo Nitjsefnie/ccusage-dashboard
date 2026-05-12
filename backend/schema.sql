@@ -1,4 +1,4 @@
--- session-viz schema. Bump PARSER_VERSION env var to invalidate all rows.
+-- ccudash schema. Bump PARSER_VERSION env var to invalidate all rows.
 
 CREATE TABLE IF NOT EXISTS projects (
   project_id    TEXT PRIMARY KEY,
