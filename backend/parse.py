@@ -71,6 +71,41 @@ def _usage_ctx_input(u: dict) -> int:
     )
 
 
+def _flatten_usage(usage: dict) -> dict:
+    """Flatten a usage dict by summing iterations[] into top-level fields.
+
+    Anthropic's API returns multi-turn responses (e.g. advisor_message
+    iterations) as an ``iterations`` array. The top-level ``input_tokens``,
+    ``output_tokens``, etc. in these records are partial snapshots — only
+    the sum across iterations reflects the true token spend.
+    """
+    iters = usage.get("iterations")
+    if not iters:
+        return usage
+    out = dict(usage)
+    int_keys = (
+        "input_tokens",
+        "cache_creation_input_tokens",
+        "cache_read_input_tokens",
+        "output_tokens",
+    )
+    nested_keys = ("cache_creation", "server_tool_use")
+    for k in int_keys:
+        out[k] = sum((i.get(k) or 0) for i in iters)
+    for k in nested_keys:
+        merged: dict[str, int] = {}
+        for i in iters:
+            nested = i.get(k)
+            if not isinstance(nested, dict):
+                continue
+            for nk, nv in nested.items():
+                if isinstance(nv, int):
+                    merged[nk] = merged.get(nk, 0) + nv
+        if merged:
+            out[k] = merged
+    return out
+
+
 def _to_dt(s: str | None):
     if not s:
         return None
@@ -195,6 +230,7 @@ def parse_file(file_key: str, blob: bytes) -> dict:
         usage = msg.get("usage")
         if not usage:
             continue
+        usage = _flatten_usage(usage)
         # Skip synthetic stubs: Claude Code emits these after `/exit`
         # (text='No response requested.') and for interrupted partial
         # responses. They have all-zero usage and no requestId, but

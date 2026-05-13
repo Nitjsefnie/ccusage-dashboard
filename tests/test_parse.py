@@ -155,6 +155,25 @@ def test_tool_use_unmatched_stays_null():
     assert out["tool_uses"][0]["is_error"] is None
 
 
+def test_iterations_flattened_to_sum():
+    """Multi-iteration usage: top-level fields are partial snapshots.
+    Parser must sum across iterations for billing tokens."""
+    out = parse.parse_file(
+        "k/sess-it/sess-it.jsonl", _read("iterations_flatten.jsonl")
+    )
+    assert len(out["records"]) == 1
+    r = out["records"][0]
+    # Top-level in fixture: fresh=2, create=3690, read=232289, output=292
+    # Sum across iterations: fresh=118735, create=3690, read=232289, output=5396
+    assert r["fresh_tokens"] == 118735
+    assert r["cache_creation_tokens"] == 3690
+    assert r["cache_read_tokens"] == 232289
+    assert r["output_tokens"] == 5396
+    # eph1h = 2623 + 1067 = 3690, eph5 = 0
+    assert r["eph1h_tokens"] == 3690
+    assert r["eph5_tokens"] == 0
+
+
 def test_user_text_lines_drive_turn_boundaries():
     """compute_context_growth uses user_text lines as turn boundaries.
     Within one turn (between two user_text lines), the LAST
