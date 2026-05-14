@@ -245,9 +245,7 @@ a.loadbtn { display: inline-block; text-decoration: none; }
 
 .dash-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 
-.dash-burn    { height: 400px; }
 .dash-ttl     { min-height: 340px; }
-.dash-context { min-height: 720px; }
 .dash-foot { font-size: 14px; padding: 4px 4px 24px; }
 .muted { color: var(--muted); font-family: var(--mono); font-size: 13px; }
 code {
