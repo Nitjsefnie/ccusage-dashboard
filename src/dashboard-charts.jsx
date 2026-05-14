@@ -413,7 +413,7 @@ function HBar({ title, rows, totalForPct, fmt, fixedColors }) {
 }
 
 // --- Burn rate panel ---
-function BurnRatePanel({ events, sessions, limitHits, range, windowBoundaries }) {
+function BurnRatePanel({ events, sessions, limitHits, range: propRange, windowBoundaries }) {
   const ref = React.useRef(null);
   const [size, setSize] = React.useState({ w: 1200, h: 360 });
   const [tip, setTip] = React.useState(null);
@@ -428,6 +428,25 @@ function BurnRatePanel({ events, sessions, limitHits, range, windowBoundaries })
     return () => ro.disconnect();
   }, []);
   const { w, h } = size;
+
+  // The prop range is derived from hourly bucket MIDPOINTS, so it
+  // doesn't match what this chart plots (raw session start/end + limit
+  // hits). Derive a data-envelope range here so sessions never escape
+  // the plot box on the left and the chart never trails into empty
+  // space on the right.
+  const range = (() => {
+    let lo = Infinity, hi = -Infinity;
+    // Sessions (dots + EMA polylines) are plotted at midpoints, so the
+    // range that makes them fill the plot is the min/max of midpoints.
+    for (const s of sessions) {
+      const mid = (s.start + s.end) / 2;
+      if (mid < lo) lo = mid;
+      if (mid > hi) hi = mid;
+    }
+    for (const lh of limitHits) { if (lh.ts < lo) lo = lh.ts; if (lh.ts > hi) hi = lh.ts; }
+    if (lo === Infinity || lo === hi) return propRange;
+    return { start: lo, end: hi };
+  })();
   // Top is just title (no legend); bottom has x-tick labels + the legend.
   const padL = 60, padR = 30, padT = 30, padB = 56;
   const plotW = Math.max(10, w - padL - padR);
@@ -654,10 +673,22 @@ function BurnRatePanel({ events, sessions, limitHits, range, windowBoundaries })
     onMouseMove={onMove}
     onMouseLeave={() => setTip(null)}>
       <svg width={w} height={h} style={{ display: 'block' }}>
+        <defs>
+          <clipPath id="burn-plot-clip">
+            <rect x={padL} y={padT} width={plotW} height={plotH} />
+          </clipPath>
+        </defs>
         <text x={w/2} y={20} fontSize="14" fontWeight="bold" fill={TH.text}
           textAnchor="middle" fontFamily="monospace">
           Session Burn Rate  |  {fmtDate(range.start, {day:true})} – {fmtDate(range.end, {day:true})}, {new Date(range.end).getUTCFullYear()} UTC  |  {sessions.length.toLocaleString()} sessions, {events.reduce((s,e)=>s+(e.requests==null?1:e.requests),0).toLocaleString()} requests
         </text>
+        {yTicks.map((v, i) => (
+          <text key={'yl'+i} x={padL - 8} y={yScale(v) + 4}
+            fontSize="10" fill={TH.textDim} textAnchor="end" fontFamily="monospace">
+            {humanFmt(v)}
+          </text>
+        ))}
+        <g clipPath="url(#burn-plot-clip)">
         {windowBoundaries.map((wb, i) => (
           <line key={'wb'+i} x1={xScale(wb)} x2={xScale(wb)}
             y1={padT} y2={padT + plotH}
@@ -667,12 +698,6 @@ function BurnRatePanel({ events, sessions, limitHits, range, windowBoundaries })
           <line key={'yg'+i} x1={padL} x2={w-padR}
             y1={yScale(v)} y2={yScale(v)}
             stroke={TH.grid} strokeOpacity="0.25" />
-        ))}
-        {yTicks.map((v, i) => (
-          <text key={'yl'+i} x={padL - 8} y={yScale(v) + 4}
-            fontSize="10" fill={TH.textDim} textAnchor="end" fontFamily="monospace">
-            {humanFmt(v)}
-          </text>
         ))}
         {sessionData.map((s, i) => {
           // Scale dot AREA by ctx-at-end-of-session.
@@ -709,6 +734,7 @@ function BurnRatePanel({ events, sessions, limitHits, range, windowBoundaries })
             y1={padT} y2={padT + plotH}
             stroke="#ff3366" strokeWidth="2" strokeOpacity="0.7" />
         ))}
+        </g>
         {xTicks.map((t, i) => (
           <text key={'x'+i} x={xScale(t)} y={h - padB + 14}
             fontSize="10" fill={TH.textDim} textAnchor="middle" fontFamily="monospace">
