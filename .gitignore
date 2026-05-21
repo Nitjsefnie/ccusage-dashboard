@@ -36,5 +36,3 @@ backend/__pycache__/
 __pycache__/
 .pytest_cache/
 *.pyc
-scripts/discord_mb.py
-scripts/parse_session.py

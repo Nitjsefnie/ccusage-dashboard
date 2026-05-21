@@ -153,9 +153,9 @@ restart).
 - `public/` — `index.html`, `app.css`. Served at `/`.
 - `src/` — React JSX modules. Served at `/src/*` with mtime-based
   cache-bust.
-- `scripts/` — symlinks to canonical `~/.claude/scripts/*.py` (analyst
-  parser + Discord mailbox CLI). Read-only references; not invoked
-  at runtime.
+- `scripts/` — `plots/ccusage_plot.py`, the upstream
+  `nhz-io/ccusage-plot` reference. Canonical analyst scripts are not
+  vendored here; invoke them by absolute path under `~/.claude/scripts/`.
 - `tests/` — pytest suite (parser fixtures, ingest, API).
 - `fixtures/` — small JSONL + zip samples for parser tests.
 - `examples/` — sample systemd service file.

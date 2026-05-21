@@ -72,9 +72,11 @@ src/              — React JSX modules served at /src/* (in-browser Babel)
     cache-view.jsx           — Cache analysis view.
     context-growth-view-v2.jsx — Updated context growth view.
 
-scripts/          — Symlinks to canonical ~/.claude/scripts/*.py.
-                    READ-ONLY references for parity with analyst tooling.
-                    The web app does NOT invoke them at runtime.
+scripts/          — scripts/plots/ccusage_plot.py: the upstream
+                    nhz-io/ccusage-plot reference (visual-design parity).
+                    Canonical analyst scripts (parse_session.py,
+                    discord_mb.py) are NOT vendored here — invoke them by
+                    absolute path under ~/.claude/scripts/.
 
 tests/            — pytest suite
   conftest.py     — Injects repo root into sys.path; forces file-mode R2 and

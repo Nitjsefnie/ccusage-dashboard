@@ -63,8 +63,9 @@ Don't grow either by accident — larger samples go under
 ## Read-only on canonical paths (SV-READ-ONLY-CANONICAL)
 
 ccudash NEVER edits `~/.claude/scripts/parse_session.py` or
-`~/.claude/scripts/discord_mb.py`. Those are owned by analyst. The
-symlinks in `scripts/` are read-only references.
+`~/.claude/scripts/discord_mb.py`. Those are owned by analyst, and per
+global doctrine they are NOT copied, symlinked, or hardlinked into this
+repo — invoke them by absolute path under `~/.claude/scripts/`.
 
 ## Schema fail-fast (SV-SCHEMA-FAIL-FAST)
 
