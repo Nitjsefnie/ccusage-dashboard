@@ -309,3 +309,20 @@ def test_dashboard_excludes_rate_limit_hits_older_than_range(app_with_rl_data):
                 client.get("/api/dashboard?range=3650d").json()["rate_limit_hits"]]
     assert in_range in hits_all
     assert out_range in hits_all
+
+
+def test_dashboard_response_is_cached_and_fresh_bypasses(app_with_data):
+    from backend import cache, db
+
+    cache.response_cache.clear()
+    first = app_with_data.get("/api/dashboard?range=all").json()
+
+    # Mutate the DB underneath the cache: delete every record.
+    with db.viz_conn() as c:
+        c.execute("DELETE FROM records")
+
+    cached = app_with_data.get("/api/dashboard?range=all").json()
+    assert cached == first                       # stale-but-cached payload
+
+    fresh = app_with_data.get("/api/dashboard?range=all&fresh=1").json()
+    assert fresh["cost_by_model"] == []          # fresh=1 sees the empty DB

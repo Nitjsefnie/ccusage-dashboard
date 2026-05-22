@@ -23,6 +23,7 @@ from starlette.requests import Request
 from starlette.responses import Response, StreamingResponse
 
 from backend import cache, db, pricing, r2
+from backend.cache import cache_response
 
 
 router = APIRouter(prefix="/api")
@@ -39,6 +40,7 @@ async def me(request: Request) -> dict:
 
 
 @router.get("/tool-usage")
+@cache_response
 async def tool_usage(
     range: str = Query("30d"),
     project: str | None = Query(None),
@@ -102,6 +104,7 @@ async def tool_usage(
 
 
 @router.get("/tool-error-rate")
+@cache_response
 async def tool_error_rate(
     range: str = Query("30d"),
     project: str | None = Query(None),
@@ -166,6 +169,7 @@ async def tool_error_rate(
 
 
 @router.get("/reply-latency")
+@cache_response
 async def reply_latency(
     range: str = Query("30d"),
     project: str | None = Query(None),
@@ -427,6 +431,7 @@ def _parse_range(s: str) -> timedelta:
 
 
 @router.get("/cache")
+@cache_response
 async def cache_view(
     range: str = Query("30d"),
     project: str | None = Query(None),
@@ -639,6 +644,7 @@ async def cache_view(
 
 
 @router.get("/context-growth/agg")
+@cache_response
 async def context_growth_agg(
     range: str = Query("30d"),
     project: str | None = Query(None),
@@ -815,6 +821,7 @@ def _iso(v) -> str | None:
 
 
 @router.get("/dashboard")
+@cache_response
 async def dashboard(
     range: str = Query("30d"),
     project: str | None = Query(None),
