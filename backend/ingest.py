@@ -228,8 +228,11 @@ def run_ingest(trigger: str) -> dict:
         "deleted": deleted,
         "error": err,
     }
-    # Notify connected SSE clients so the dashboard re-fetches without
-    # a page reload. Threadsafe: ingest may run in a scheduler thread.
+    # Data changed: invalidate the response cache, then notify connected
+    # SSE clients so the dashboard re-fetches without a page reload. The
+    # flush runs BEFORE the broadcast so a client reacting to ingest_done
+    # cannot read a stale entry. Threadsafe: ingest may run in a scheduler
+    # thread.
     if err is None and (inserted or reparsed or deleted):
         cache.response_cache.clear()
         events.broadcast_threadsafe("ingest_done", summary)

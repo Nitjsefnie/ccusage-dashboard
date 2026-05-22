@@ -831,8 +831,10 @@ async def dashboard(
     """Hourly aggregates + per-session burns + per-session ctx_lines.
 
     Cross-file uuid dedup at query time via DISTINCT ON; legacy NULL-uuid
-    rows are kept verbatim. `model=opus-4-7` filters the deduped CTE
-    so every CTE-derived panel (hourly, cost_by_model, response_sizes,
+    rows are kept verbatim. The deduped set is materialised once per
+    request into a ``ON COMMIT DROP`` temp table, then read by the five
+    panel queries. `model=opus-4-7` filters the deduped body so every
+    panel derived from it (hourly, cost_by_model, response_sizes,
     sessions, ctx_traces) is constrained to records matching the model
     substring."""
     delta = _parse_range(range)

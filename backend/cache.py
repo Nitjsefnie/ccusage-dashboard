@@ -92,7 +92,9 @@ def cache_response(fn: Callable[..., Awaitable[dict]]) -> Callable[..., Awaitabl
     signature through ``functools.wraps``' ``__wrapped__`` link, so the
     wrapper can keep a ``**kwargs`` signature while FastAPI still parses
     the original query params. A truthy ``fresh`` kwarg bypasses the
-    cache (read+write), matching the existing browser cache-bust."""
+    cache (read+write) — only ``/api/dashboard`` declares ``fresh``;
+    on the other decorated endpoints the bypass never triggers and
+    invalidation comes solely from the ingest-driven ``clear()``."""
 
     @functools.wraps(fn)
     async def wrapper(**kwargs: Any) -> dict:
