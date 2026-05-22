@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Implementation plan — Dashboard load-time caching</title>
+<style>
+  :root{
+    --ivory:#1B1A17; --slate:#F5F3EC; --clay:#D97757; --olive:#8FA56E;
+    --rust:#E08B7F; --g150:#2E2C27; --g300:#3A3833; --g500:#8F8D82;
+    --g700:#CFCCC2; --white:#252420;
+    --serif:ui-serif,Georgia,'Times New Roman',serif;
+    --sans:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+    --mono:ui-monospace,'SF Mono',Menlo,Monaco,monospace;
+    --radius:12px; --border:1.5px solid var(--g300);
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{font-family:var(--sans);background:var(--ivory);color:var(--g700);
+    line-height:1.6;padding:56px 32px 120px;-webkit-font-smoothing:antialiased;}
+  .page{max-width:980px;margin:0 auto;}
+  .eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.08em;
+    text-transform:uppercase;color:var(--g500);margin-bottom:12px;}
+  h1{font-family:var(--serif);font-weight:500;font-size:36px;line-height:1.15;
+    color:var(--slate);margin-bottom:16px;letter-spacing:-.01em;}
+  h2{font-family:var(--serif);font-weight:500;font-size:23px;color:var(--slate);
+    margin:44px 0 14px;letter-spacing:-.01em;}
+  p{margin-bottom:12px;}
+  code{font-family:var(--mono);font-size:.88em;background:var(--g150);
+    padding:1px 5px;border-radius:4px;color:var(--rust);}
+  .ctx{background:var(--g150);border:var(--border);border-radius:var(--radius);
+    padding:16px 20px;font-size:14.5px;margin-bottom:8px;}
+  .ctx .label{font-family:var(--mono);font-size:11px;text-transform:uppercase;
+    letter-spacing:.06em;color:var(--g500);display:block;margin-bottom:6px;}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14px;}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--g300);
+    vertical-align:top;}
+  th{font-family:var(--mono);font-size:11px;text-transform:uppercase;
+    letter-spacing:.05em;color:var(--g500);}
+  td.mono{font-family:var(--mono);font-size:12.5px;}
+  .task{background:var(--white);border:var(--border);border-radius:var(--radius);
+    padding:18px 22px;margin:14px 0;}
+  .task h3{font-family:var(--mono);font-size:13px;text-transform:uppercase;
+    letter-spacing:.04em;color:var(--clay);margin-bottom:8px;}
+  .task .files{font-family:var(--mono);font-size:12px;color:var(--g500);
+    margin-bottom:8px;}
+  ol{margin:6px 0 4px 20px;} li{margin-bottom:5px;}
+  .callout{border-left:3px solid var(--clay);background:var(--g150);
+    padding:12px 18px;border-radius:0 8px 8px 0;margin:14px 0;font-size:14px;}
+  .flow{font-family:var(--mono);font-size:12.5px;background:var(--g150);
+    border:var(--border);border-radius:var(--radius);padding:16px 18px;
+    white-space:pre;overflow-x:auto;color:var(--g700);margin:14px 0;}
+</style>
+</head>
+<body>
+<div class="page">
+
+<div class="eyebrow">ccudash · implementation plan · 2026-05-22</div>
+<h1>Dashboard load-time caching</h1>
+
+<div class="ctx">
+  <span class="label">Goal</span>
+  Make warm dashboard loads near-instant and roughly halve the cold load by
+  caching heavy read-endpoint responses and computing the <code>deduped</code>
+  CTE once per request. Verbatim task steps live in the companion
+  <code>.md</code> plan; this page is the readable overview.
+</div>
+
+<div class="callout">
+  <strong>For agentic workers:</strong> execute the <code>.md</code> plan
+  task-by-task via <code>superpowers:subagent-driven-development</code> or
+  <code>superpowers:executing-plans</code>. Each task is TDD: failing test →
+  implementation → passing test → commit.
+</div>
+
+<h2>Architecture</h2>
+<p>
+  Two independent changes. <strong>(1)</strong> A process-local TTL response
+  cache plus a <code>cache_response</code> decorator on the six heavy read
+  endpoints, flushed when ingest completes. <strong>(2)</strong>
+  <code>/api/dashboard</code> builds the <code>deduped</code> set once into a
+  <code>ON COMMIT DROP</code> temp table with a bumped <code>work_mem</code>,
+  instead of re-running the CTE in five separate statements.
+</p>
+
+<h2>Files touched</h2>
+<table>
+  <tr><th>File</th><th>Change</th></tr>
+  <tr><td class="mono">backend/cache.py</td><td><code>_TTLCache</code>, <code>response_cache</code>, <code>cache_response</code> decorator</td></tr>
+  <tr><td class="mono">backend/api.py</td><td>decorate 6 endpoints; <code>dashboard()</code> temp-table refactor</td></tr>
+  <tr><td class="mono">backend/ingest.py</td><td>flush <code>response_cache</code> where <code>ingest_done</code> broadcasts</td></tr>
+  <tr><td class="mono">tests/test_cache.py</td><td><em>new</em> — unit tests for cache + decorator</td></tr>
+  <tr><td class="mono">tests/test_api.py</td><td>dashboard cache-behaviour test</td></tr>
+  <tr><td class="mono">tests/test_ingest.py</td><td>cache-flush-on-ingest test</td></tr>
+</table>
+
+<h2>Tasks</h2>
+
+<div class="task">
+  <h3>Task 1 — TTL response cache + decorator</h3>
+  <div class="files">backend/cache.py · tests/test_cache.py</div>
+  <ol>
+    <li><code>_TTLCache</code>: flat-TTL dict cache (<code>get</code>/<code>put</code>/<code>clear</code>), expiry on read.</li>
+    <li><code>response_cache = _TTLCache(ttl_seconds=3600)</code> as a safety-net TTL.</li>
+    <li><code>cache_response</code>: wraps an async endpoint, keys on its keyword
+        args, follows <code>functools.wraps</code> so FastAPI still parses the
+        real query params. A truthy <code>fresh</code> kwarg bypasses.</li>
+  </ol>
+</div>
+
+<div class="task">
+  <h3>Task 2 — Apply the decorator</h3>
+  <div class="files">backend/api.py</div>
+  <p style="margin:0"><code>@cache_response</code> below <code>@router.get(...)</code>
+  on: <code>/dashboard</code>, <code>/cache</code>, <code>/tool-usage</code>,
+  <code>/tool-error-rate</code>, <code>/reply-latency</code>,
+  <code>/context-growth/agg</code>. Behaviour test: a second call returns the
+  cached payload even after the DB is mutated; <code>fresh=1</code> bypasses.</p>
+</div>
+
+<div class="task">
+  <h3>Task 3 — Flush on ingest</h3>
+  <div class="files">backend/ingest.py:234</div>
+  <div class="flow">cache.response_cache.clear()          # NEW
+events.broadcast_threadsafe("ingest_done", summary)</div>
+  <p style="margin:0">Cache flushed exactly when — and only when — the
+  underlying data changes.</p>
+</div>
+
+<div class="task">
+  <h3>Task 4 — Compute the deduped set once</h3>
+  <div class="files">backend/api.py · dashboard()</div>
+  <div class="flow">SET LOCAL work_mem = '64MB';                  -- kill the disk spill
+CREATE TEMP TABLE deduped ON COMMIT DROP AS   -- CTE body, run ONCE
+  ( ...deduped UNION ALL... );
+-- 5 panel queries drop the `base_cte +` prefix and the args2 param,
+-- now scanning the 42k-row temp table directly.</div>
+  <p style="margin:0">Behaviour-preserving — existing dashboard tests are the
+  regression guard.</p>
+</div>
+
+<div class="task">
+  <h3>Task 5 — Verify against the live service</h3>
+  <div class="files">manual</div>
+  <p style="margin:0">Restart <code>session-viz</code>, time a cold then warm
+  authenticated <code>/api/dashboard?range=30d</code> call, report measured
+  numbers.</p>
+</div>
+
+<h2>Expected outcome</h2>
+<table>
+  <tr><th>Scenario</th><th>Before</th><th>After</th></tr>
+  <tr><td>Warm load (between hourly ingests)</td><td>~4.4&nbsp;s</td><td style="color:var(--olive)">~instant</td></tr>
+  <tr><td>Cold load (first after an ingest)</td><td>~4.4&nbsp;s</td><td style="color:var(--olive)">~2&nbsp;s</td></tr>
+</table>
+
+</div>
+</body>
+</html>
