@@ -850,8 +850,7 @@ async def dashboard(
     args = list(leg_args)
     args2 = leg_args + leg_args  # filters applied twice (one per UNION leg)
 
-    base_cte = f"""
-    WITH deduped AS (
+    dedup_body = f"""
       (SELECT DISTINCT ON (r.uuid)
          r.file_key, r.line_num, r.uuid, r.request_id, r.ts, r.model,
          r.fresh_tokens, r.cache_creation_tokens, r.cache_read_tokens,
@@ -869,12 +868,16 @@ async def dashboard(
        FROM records r
        JOIN files f ON f.file_key = r.file_key
        WHERE r.ts >= %s {proj_filter} AND r.uuid IS NULL)
-    )
     """
 
     with db.viz_conn() as c:
+        c.execute("SET LOCAL work_mem = '64MB'")
+        c.execute(
+            f"CREATE TEMP TABLE deduped ON COMMIT DROP AS {dedup_body}",
+            args2,
+        )
         hourly_rows = c.execute(
-            base_cte + f"""
+            f"""
             SELECT to_timestamp(
                      floor(EXTRACT(EPOCH FROM d.ts) / {bucket_s}) * {bucket_s} + {bucket_s} / 2
                    ) AS hour,
@@ -892,29 +895,26 @@ async def dashboard(
             WHERE d.ts IS NOT NULL
             GROUP BY 1, 2
             ORDER BY 1, 2
-            """,
-            args2,
+            """
         ).fetchall()
 
         cost_by_model_rows = c.execute(
-            base_cte + """
+            """
             SELECT COALESCE(NULLIF(d.model, ''), 'unknown') AS model,
                    SUM(d.cost_usd) AS cost_usd
             FROM deduped d
             GROUP BY 1
             ORDER BY 2 DESC
-            """,
-            args2,
+            """
         ).fetchall()
 
         total_sessions_row = c.execute(
-            base_cte + """
+            """
             SELECT COUNT(DISTINCT f.session_id) AS n
             FROM deduped d
             JOIN files f ON f.file_key = d.file_key
             WHERE d.ts IS NOT NULL
-            """,
-            args2,
+            """
         ).fetchone()
         total_sessions = int(total_sessions_row[0] or 0) if total_sessions_row else 0
 
@@ -949,7 +949,7 @@ async def dashboard(
         subagent_only_sessions = int(file_counts_row[3] or 0) if file_counts_row else 0
 
         sessions_rows = c.execute(
-            base_cte + """
+            """
             SELECT f.session_id,
                    EXTRACT(EPOCH FROM MIN(d.ts))::float AS start_ts,
                    EXTRACT(EPOCH FROM MAX(d.ts))::float AS end_ts,
@@ -988,8 +988,7 @@ async def dashboard(
             GROUP BY f.session_id
             ORDER BY SUM(d.cost_usd) DESC NULLS LAST
             LIMIT 500
-            """,
-            args2,
+            """
         ).fetchall()
 
         # Response-size time series per model — daily-bucketed
@@ -1001,7 +1000,7 @@ async def dashboard(
         # content blocks is the clean, model-fair "visible response
         # size" measure.
         response_sizes_rows = c.execute(
-            base_cte + f"""
+            f"""
             SELECT to_timestamp(
                      floor(EXTRACT(EPOCH FROM d.ts) / {bucket_s}) * {bucket_s} + {bucket_s} / 2
                    ) AS bucket,
@@ -1013,8 +1012,7 @@ async def dashboard(
             WHERE d.text_chars > 0 AND d.ts IS NOT NULL
             GROUP BY 1, 2
             ORDER BY 1, 2
-            """,
-            args2,
+            """
         ).fetchall()
 
         ctx_turns_args = list(args)
