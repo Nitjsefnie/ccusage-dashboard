@@ -1,6 +1,8 @@
+import json
 import os
 import shutil
 import tempfile
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -213,3 +215,97 @@ def test_tool_error_rate_returns_expected_shape(app_with_data):
     for b in body["buckets"]:
         assert {"ts", "model", "tool", "n_total", "n_error"} <= set(b.keys())
         assert b["n_error"] <= b["n_total"]
+
+
+@pytest.fixture
+def app_with_rl_data(monkeypatch):
+    """Fresh DB + R2 mirror plus one session whose file mtime is current
+    but which carries both an in-range and an out-of-range rate-limit hit.
+
+    The out-of-range hit reproduces the bug where /api/dashboard filtered
+    rate-limit hits by file mtime (r2_last_modified) rather than the hit's
+    own ts. Yields (client, in_range_ts, out_of_range_ts).
+    """
+    test_db = "claude_viz_test_api_rl"
+    os.system(f"dropdb --if-exists {test_db} 2>/dev/null")
+    os.system(f"createdb {test_db} 2>/dev/null")
+    os.system(f"psql {test_db} -f {_REPO_ROOT / 'backend/schema.sql'} >/dev/null")
+    monkeypatch.setenv("DATABASE_URL_VIZ", f"postgresql:///{test_db}")
+    tmp = tempfile.mkdtemp(prefix="sv-api-rl-")
+    shutil.copytree(_REPO_ROOT / "fixtures/r2_mini", Path(tmp) / "r2")
+    monkeypatch.setenv("R2_ENDPOINT", f"file://{tmp}/r2/")
+
+    now = datetime.now(timezone.utc)
+    in_range = (now - timedelta(days=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    out_range = (now - timedelta(days=45)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def _rl(ts, uid):
+        return json.dumps({
+            "type": "assistant", "timestamp": ts, "uuid": uid,
+            "isApiErrorMessage": True, "error": "rate_limit",
+            "message": {"role": "assistant", "content": [{
+                "type": "text",
+                "text": "Claude usage limit reached - you are out of "
+                        "extra usage.",
+            }]},
+        })
+
+    sess_dir = Path(tmp) / "r2" / "claude" / "projA" / "sess-RL"
+    sess_dir.mkdir(parents=True)
+    (sess_dir / "sess-RL.jsonl").write_text(
+        json.dumps({"type": "user", "timestamp": in_range, "uuid": "rl-u1",
+                    "message": {"role": "user", "content": "hi"}}) + "\n"
+        + json.dumps({
+            "type": "assistant", "timestamp": in_range, "uuid": "rl-a1",
+            "requestId": "rl-req-1",
+            "message": {"role": "assistant", "model": "claude-sonnet-4-5",
+                        "content": [{"type": "text", "text": "ok"}],
+                        "usage": {"input_tokens": 10, "output_tokens": 20,
+                                  "cache_creation_input_tokens": 0,
+                                  "cache_read_input_tokens": 0}}}) + "\n"
+        + _rl(in_range, "rl-h1") + "\n"
+        + _rl(out_range, "rl-h2") + "\n"
+    )
+
+    from backend import db as _db
+    if _db._VIZ is not None:
+        try:
+            _db._VIZ.close()
+        except Exception:
+            pass
+    _db._VIZ = None
+
+    from backend import ingest
+    ingest.run_ingest(trigger="manual")
+
+    from fastapi import FastAPI
+    from backend import api as api_mod
+    a = FastAPI()
+    a.include_router(api_mod.router)
+
+    yield TestClient(a), in_range, out_range
+
+    if _db._VIZ is not None:
+        try:
+            _db._VIZ.close()
+        except Exception:
+            pass
+    _db._VIZ = None
+    shutil.rmtree(tmp)
+    os.system(f"dropdb --if-exists {test_db} 2>/dev/null")
+
+
+def test_dashboard_excludes_rate_limit_hits_older_than_range(app_with_rl_data):
+    client, in_range, out_range = app_with_rl_data
+
+    hits_30d = [h["ts"] for h in
+                client.get("/api/dashboard?range=30d").json()["rate_limit_hits"]]
+    assert in_range in hits_30d
+    # The 45-day-old hit must not appear: it sits outside the 30d window
+    # even though its file's r2_last_modified (mtime) is current.
+    assert out_range not in hits_30d
+
+    hits_all = [h["ts"] for h in
+                client.get("/api/dashboard?range=3650d").json()["rate_limit_hits"]]
+    assert in_range in hits_all
+    assert out_range in hits_all

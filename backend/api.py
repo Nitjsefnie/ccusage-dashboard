@@ -1102,13 +1102,17 @@ async def dashboard(
             ctx_args,
         ).fetchall()
 
-        rl_args = list(args)
+        rl_args = list(args) + [since]
         rl_rows = c.execute(
             f"""
             SELECT f.session_id, hit
             FROM files f, jsonb_array_elements(f.rate_limit_hits) AS hit
             WHERE f.r2_last_modified >= %s {proj_filter}
               AND jsonb_array_length(f.rate_limit_hits) > 0
+              -- r2_last_modified is the file's mtime, not the hit's time:
+              -- a file touched within range can still carry hits older
+              -- than `since`, so filter on each hit's own ts too.
+              AND NULLIF(hit->>'ts', '')::timestamptz >= %s
             """,
             rl_args,
         ).fetchall()
