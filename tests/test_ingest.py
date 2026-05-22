@@ -179,3 +179,14 @@ def test_first_seen_at_uses_least(fresh_db, mini_r2_env):
             "SELECT first_seen_at FROM projects WHERE project_id = 'projA'"
         ).fetchone()[0]
     assert after < before, f"first_seen_at should move backward: was {before}, now {after}"
+
+
+def test_ingest_flushes_response_cache(fresh_db, mini_r2_env):
+    from backend import cache
+
+    cache.response_cache.put("stale-key", {"v": "old"})
+    assert cache.response_cache.get("stale-key") == {"v": "old"}
+
+    ingest.run_ingest(trigger="manual")
+
+    assert cache.response_cache.get("stale-key") is None

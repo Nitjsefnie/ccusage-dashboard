@@ -21,7 +21,7 @@ import json
 import os
 from datetime import datetime, timezone
 
-from backend import db, events, parse, r2
+from backend import cache, db, events, parse, r2
 
 
 def run_ingest(trigger: str) -> dict:
@@ -231,5 +231,6 @@ def run_ingest(trigger: str) -> dict:
     # Notify connected SSE clients so the dashboard re-fetches without
     # a page reload. Threadsafe: ingest may run in a scheduler thread.
     if err is None and (inserted or reparsed or deleted):
+        cache.response_cache.clear()
         events.broadcast_threadsafe("ingest_done", summary)
     return summary
