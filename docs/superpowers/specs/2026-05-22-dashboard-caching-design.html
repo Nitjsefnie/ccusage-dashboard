@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Design spec — Dashboard load-time caching</title>
+<style>
+  :root{
+    --ivory:#1B1A17; --slate:#F5F3EC; --clay:#D97757; --olive:#8FA56E;
+    --rust:#E08B7F; --g150:#2E2C27; --g300:#3A3833; --g500:#8F8D82;
+    --g700:#CFCCC2; --white:#252420;
+    --serif:ui-serif,Georgia,'Times New Roman',serif;
+    --sans:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+    --mono:ui-monospace,'SF Mono',Menlo,Monaco,monospace;
+    --radius:12px; --border:1.5px solid var(--g300);
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{font-family:var(--sans);background:var(--ivory);color:var(--g700);
+    line-height:1.6;padding:56px 32px 120px;-webkit-font-smoothing:antialiased;}
+  .page{max-width:980px;margin:0 auto;}
+  .eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.08em;
+    text-transform:uppercase;color:var(--g500);margin-bottom:12px;}
+  h1{font-family:var(--serif);font-weight:500;font-size:36px;line-height:1.15;
+    color:var(--slate);margin-bottom:16px;letter-spacing:-.01em;}
+  h2{font-family:var(--serif);font-weight:500;font-size:24px;color:var(--slate);
+    margin:48px 0 16px;letter-spacing:-.01em;}
+  h3{font-size:15px;font-weight:600;color:var(--slate);margin:24px 0 8px;
+    font-family:var(--mono);text-transform:uppercase;letter-spacing:.04em;}
+  p{margin-bottom:12px;}
+  code{font-family:var(--mono);font-size:.88em;background:var(--g150);
+    padding:1px 5px;border-radius:4px;color:var(--rust);}
+  .ctx{background:var(--g150);border:var(--border);border-radius:var(--radius);
+    padding:16px 20px;font-size:14.5px;margin-bottom:8px;}
+  .ctx .label{font-family:var(--mono);font-size:11px;text-transform:uppercase;
+    letter-spacing:.06em;color:var(--g500);display:block;margin-bottom:6px;}
+  table{width:100%;border-collapse:collapse;margin:16px 0;font-size:14px;}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--g300);}
+  th{font-family:var(--mono);font-size:11px;text-transform:uppercase;
+    letter-spacing:.05em;color:var(--g500);}
+  td.num{font-family:var(--mono);}
+  .good{color:var(--olive);} .bad{color:var(--rust);}
+  .callout{border-left:3px solid var(--clay);background:var(--g150);
+    padding:12px 18px;border-radius:0 8px 8px 0;margin:16px 0;font-size:14px;}
+  .callout.warn{border-left-color:var(--rust);}
+  ul,ol{margin:8px 0 14px 22px;} li{margin-bottom:6px;}
+  .card{background:var(--white);border:var(--border);border-radius:var(--radius);
+    padding:20px 24px;margin:16px 0;}
+  .flow{font-family:var(--mono);font-size:13px;background:var(--g150);
+    border:var(--border);border-radius:var(--radius);padding:18px 20px;
+    white-space:pre;overflow-x:auto;color:var(--g700);margin:16px 0;}
+  .tag{font-family:var(--mono);font-size:11px;padding:2px 8px;border-radius:99px;
+    border:1px solid var(--g300);color:var(--g500);}
+</style>
+</head>
+<body>
+<div class="page">
+
+<div class="eyebrow">ccudash · design spec · 2026-05-22</div>
+<h1>Dashboard load-time caching</h1>
+
+<div class="ctx">
+  <span class="label">Problem</span>
+  The main index page takes <strong>~4.4&nbsp;s</strong> to render actual data.
+  The <code>/api/dashboard</code> endpoint is the bottleneck. Goal: warm loads
+  near-instant, cold loads roughly halved.
+</div>
+
+<h2>Root cause</h2>
+<p>
+  <code>/api/dashboard</code> issues ~6 separate SQL statements, and
+  <em>every one re-runs the same <code>deduped</code> CTE</em> — a
+  <code>DISTINCT ON (uuid)</code> over <code>records&nbsp;⋈&nbsp;files</code>
+  with the time-range filter. Measured on the live <code>claude_viz</code> DB
+  (114k records, 42k in the 30d window):
+</p>
+
+<table>
+  <tr><th>Observation</th><th>Detail</th></tr>
+  <tr><td>CTE cost per run</td><td class="num">~220&nbsp;ms</td></tr>
+  <tr><td>CTE runs per request</td><td class="num">~6 → ~1.3&nbsp;s</td></tr>
+  <tr><td>Sort spills to disk</td><td><code>external merge Disk: 3360kB</code> — <code>work_mem</code> is only 4&nbsp;MB</td></tr>
+  <tr><td><code>records_ts_idx</code></td><td>exists but planner correctly ignores it (30d = 37% of rows → seq scan wins)</td></tr>
+</table>
+
+<div class="callout">
+  Caching alone leaves the <strong>first load after each hourly ingest at
+  4.4&nbsp;s</strong>. Dashboard data only changes on ingest, so two
+  complementary fixes are in scope.
+</div>
+
+<h2>Change 1 — Response cache <span class="tag">warm loads</span></h2>
+<p>
+  Cache the final JSON of the heavy read endpoints, keyed by
+  <code>(path, sorted query params)</code>. The data is global (not
+  per-user), so a params-keyed cache is correct — auth middleware still
+  gates access before the endpoint runs.
+</p>
+
+<h3>Endpoints cached</h3>
+<ul>
+  <li><code>/api/dashboard</code>, <code>/api/cache</code>,
+      <code>/api/tool-usage</code>, <code>/api/tool-error-rate</code>,
+      <code>/api/reply-latency</code>, <code>/api/context-growth/agg</code></li>
+  <li>Light endpoints (<code>/api/models</code>, <code>/api/projects</code>,
+      <code>/api/me</code>) are left uncached.</li>
+</ul>
+
+<h3>Mechanism</h3>
+<ul>
+  <li>New <code>response_cache</code> in <code>backend/cache.py</code> beside
+      the existing transcript <code>_IdleLRU</code> — a dict keyed by the
+      request signature, storing the serialized JSON.</li>
+  <li>A small <code>@cache_response</code> decorator reads the request's
+      query string to build the key.</li>
+  <li><code>fresh=1</code> on <code>/api/dashboard</code> bypasses the cache
+      (already used as a browser cache-bust).</li>
+  <li>TTL ~1&nbsp;h as a safety net; primary invalidation is event-driven.</li>
+</ul>
+
+<h3>Invalidation</h3>
+<div class="flow">ingest run completes
+  └─ ingest.run_ingest()  →  events.broadcast_threadsafe("ingest_done")
+       └─ NEW: response_cache.clear()
+            └─ next dashboard load recomputes once, then warm again</div>
+<p>
+  The clear is wired at the same point that already broadcasts
+  <code>ingest_done</code> (<code>backend/ingest.py:234</code>), so the cache
+  is flushed exactly when — and only when — the underlying data changes.
+</p>
+
+<h2>Change 2 — Compute the CTE once <span class="tag">cold loads</span></h2>
+<p>
+  <code>viz_conn()</code> runs with <code>autocommit=False</code>, so each
+  request is already a transaction. Within <code>/api/dashboard</code>:
+</p>
+<div class="flow">SET LOCAL work_mem = '64MB';                  -- kill the disk spill
+CREATE TEMP TABLE deduped ON COMMIT DROP AS   -- run the CTE body ONCE
+  ( ...existing deduped UNION ALL... );
+-- each panel query now scans the 42k-row temp table (~10-20 ms)</div>
+<ul>
+  <li>The 6 panel queries change from <code>base_cte + SELECT…</code> to plain
+      <code>SELECT … FROM deduped</code>.</li>
+  <li><code>ON COMMIT DROP</code> is safe — the connection context manager
+      commits on exit, dropping the temp table.</li>
+  <li><code>SET LOCAL</code> scopes the <code>work_mem</code> bump to this one
+      transaction.</li>
+</ul>
+
+<div class="callout warn">
+  <strong>Scope:</strong> Change&nbsp;2 targets <code>/api/dashboard</code>
+  only — it is the main index page and the user's actual complaint. The
+  other <code>deduped</code>-pattern endpoints are covered by Change&nbsp;1's
+  response cache and are not restructured here.
+</div>
+
+<h2>Expected outcome</h2>
+<table>
+  <tr><th>Scenario</th><th>Before</th><th>After</th></tr>
+  <tr><td>Warm load (between hourly ingests)</td>
+      <td class="num bad">~4.4&nbsp;s</td>
+      <td class="num good">~instant (cache hit)</td></tr>
+  <tr><td>Cold load (first after an ingest)</td>
+      <td class="num bad">~4.4&nbsp;s</td>
+      <td class="num good">~2&nbsp;s (CTE once + work_mem)</td></tr>
+</table>
+
+<h2>Testing</h2>
+<ul>
+  <li><code>test_api.py</code>: dashboard returns identical payload on a
+      second call (cache hit); <code>fresh=1</code> bypasses.</li>
+  <li>Cache cleared after a simulated ingest run — stale payload not served.</li>
+  <li>Existing dashboard correctness tests must pass unchanged (temp-table
+      refactor is behaviour-preserving).</li>
+</ul>
+
+<h2>Out of scope</h2>
+<ul>
+  <li>No persisted rollup table (banned by <code>SV-FILES-RECORDS</code>).</li>
+  <li>No HTTP <code>Cache-Control</code>/<code>ETag</code> headers for static
+      assets — separate concern, not the data-load bottleneck.</li>
+  <li>No restructuring of <code>/api/cache</code> et al. internals.</li>
+</ul>
+
+</div>
+</body>
+</html>
