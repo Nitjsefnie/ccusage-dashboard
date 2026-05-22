@@ -3,8 +3,10 @@
 """
 from __future__ import annotations
 
+import functools
 import time
 from collections import OrderedDict
+from typing import Any, Awaitable, Callable
 
 
 class _IdleLRU:
@@ -51,3 +53,57 @@ class _IdleLRU:
 
 
 transcript_cache = _IdleLRU(max_bytes=256 * 1024 * 1024, idle_seconds=1200)
+
+
+class _TTLCache:
+    """Process-local cache with a flat TTL. Values are whatever the
+    decorated endpoint returns (dicts). Not size-bounded — the keyspace
+    is (endpoint × range × project × model), which is small, and the
+    cache is fully flushed on every ingest."""
+
+    def __init__(self, ttl_seconds: int):
+        self.ttl_seconds = ttl_seconds
+        self._items: dict[str, tuple[Any, float]] = {}
+
+    def get(self, key: str) -> Any | None:
+        item = self._items.get(key)
+        if item is None:
+            return None
+        value, ts = item
+        if time.time() - ts > self.ttl_seconds:
+            self._items.pop(key, None)
+            return None
+        return value
+
+    def put(self, key: str, value: Any) -> None:
+        self._items[key] = (value, time.time())
+
+    def clear(self) -> None:
+        self._items.clear()
+
+
+response_cache = _TTLCache(ttl_seconds=3600)
+
+
+def cache_response(fn: Callable[..., Awaitable[dict]]) -> Callable[..., Awaitable[dict]]:
+    """Cache an async endpoint's dict result keyed by its keyword args.
+
+    FastAPI calls endpoints with all params as keywords and resolves the
+    signature through ``functools.wraps``' ``__wrapped__`` link, so the
+    wrapper can keep a ``**kwargs`` signature while FastAPI still parses
+    the original query params. A truthy ``fresh`` kwarg bypasses the
+    cache (read+write), matching the existing browser cache-bust."""
+
+    @functools.wraps(fn)
+    async def wrapper(**kwargs: Any) -> dict:
+        if kwargs.get("fresh"):
+            return await fn(**kwargs)
+        key = fn.__qualname__ + ":" + repr(sorted(kwargs.items()))
+        hit = response_cache.get(key)
+        if hit is not None:
+            return hit
+        result = await fn(**kwargs)
+        response_cache.put(key, result)
+        return result
+
+    return wrapper
