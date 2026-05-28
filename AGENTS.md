@@ -151,6 +151,12 @@ Tests use fixture-driven data, not real R2. `conftest.py` forces `R2_ENDPOINT=fi
 curl -X POST http://127.0.0.1:8000/admin/ingest \
   -H "X-Admin-Token: $ADMIN_TOKEN"
 
+# Restarting the service also kicks a fresh ingest (a startup ingest
+# runs on every boot of backend/app.py — equivalent to the curl above
+# for any case where the admin token isn't handy or the service was
+# already going to be restarted for another reason).
+systemctl restart ccudash
+
 # Re-apply schema migrations (idempotent)
 psql claude_viz -f backend/schema.sql
 ```
