@@ -939,7 +939,14 @@ async def dashboard(
                 AND EXISTS (
                   SELECT 1 FROM records r WHERE r.file_key = f.file_key
                 )
-              ) AS subagent_only_sessions
+              ) AS subagent_only_sessions,
+              -- Prompts: substantive user text msgs (instrumentation +
+              -- interrupts excluded). Turns: ctx_turns boundaries that
+              -- produced a usage-bearing assistant reply. Both summed
+              -- across every file in scope (main + subagent) so sub-agent
+              -- prompts/turns roll up alongside their parents.
+              COALESCE(SUM(f.prompt_count), 0) AS total_prompts,
+              COALESCE(SUM(f.turn_count),   0) AS total_turns
             FROM files f
             WHERE f.r2_last_modified >= %s {proj_filter}
             """,
@@ -949,6 +956,8 @@ async def dashboard(
         main_empty             = int(file_counts_row[1] or 0) if file_counts_row else 0
         subagent_files         = int(file_counts_row[2] or 0) if file_counts_row else 0
         subagent_only_sessions = int(file_counts_row[3] or 0) if file_counts_row else 0
+        total_prompts          = int(file_counts_row[4] or 0) if file_counts_row else 0
+        total_turns            = int(file_counts_row[5] or 0) if file_counts_row else 0
 
         sessions_rows = c.execute(
             """
@@ -1239,6 +1248,8 @@ async def dashboard(
         "main_empty": main_empty,
         "subagent_files": subagent_files,
         "subagent_only_sessions": subagent_only_sessions,
+        "total_prompts": total_prompts,
+        "total_turns": total_turns,
         "ctx_traces": [
             {
                 "file_key": fk,

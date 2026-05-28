@@ -417,6 +417,12 @@ def parse_file(file_key: str, blob: bytes) -> dict:
         "records": records,
         "ctx_turns": ctx_turns,
         "turn_count": len(ctx_turns),
+        # Substantive user text messages — instrumentation
+        # (bash IO, command stubs) and interrupt markers excluded.
+        # `turn_count` only counts prompts that produced a usage-bearing
+        # assistant reply; `prompt_count` is the raw "how many times did
+        # the user actually type something" total. Prompts ≥ Turns.
+        "prompt_count": len(user_text_lines),
         "rate_limit_hits": rate_limit_hits,
         "tool_uses": tool_uses,
     }

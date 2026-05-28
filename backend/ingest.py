@@ -121,12 +121,12 @@ def run_ingest(trigger: str) -> dict:
                     INSERT INTO files (file_key, project_id, session_id,
                       is_main, r2_etag, r2_size_bytes, r2_last_modified,
                       parsed_at, parser_version, ctx_turns, turn_count,
-                      rate_limit_hits)
+                      prompt_count, rate_limit_hits)
                     VALUES (%(file_key)s, %(project_id)s, %(session_id)s,
                       %(is_main)s, %(r2_etag)s, %(r2_size_bytes)s,
                       %(r2_last_modified)s, %(parsed_at)s, %(parser_version)s,
                       %(ctx_turns)s::jsonb, %(turn_count)s,
-                      %(rate_limit_hits)s::jsonb)
+                      %(prompt_count)s, %(rate_limit_hits)s::jsonb)
                     ON CONFLICT (file_key) DO UPDATE SET
                       project_id = EXCLUDED.project_id,
                       session_id = EXCLUDED.session_id,
@@ -138,6 +138,7 @@ def run_ingest(trigger: str) -> dict:
                       parser_version = EXCLUDED.parser_version,
                       ctx_turns = EXCLUDED.ctx_turns,
                       turn_count = EXCLUDED.turn_count,
+                      prompt_count = EXCLUDED.prompt_count,
                       rate_limit_hits = EXCLUDED.rate_limit_hits
                     """,
                     {
@@ -152,6 +153,7 @@ def run_ingest(trigger: str) -> dict:
                         "parser_version": parser_version,
                         "ctx_turns": json.dumps(parsed["ctx_turns"], default=str),
                         "turn_count": parsed["turn_count"],
+                        "prompt_count": parsed["prompt_count"],
                         "rate_limit_hits": json.dumps(
                             parsed.get("rate_limit_hits", []), default=str
                         ),

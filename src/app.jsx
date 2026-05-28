@@ -499,6 +499,8 @@ function backendDashToShape(b) {
     mainEmpty: b.main_empty,
     subagentFiles: b.subagent_files,
     subagentOnlySessions: b.subagent_only_sessions,
+    totalPrompts: b.total_prompts,
+    totalTurns: b.total_turns,
     responseSizes: b.response_sizes || [],
     ctxTraces: b.ctx_traces || [],
     bucketS: b.bucket_s || 86400,
@@ -559,7 +561,7 @@ function computeSessions(events) {
 }
 
 function Dashboard({ synth, dataLabel, models, backendOn, activeProject, activeRange, dashNonce }) {
-  const { events, limitHits, range, costByModel: backendByModel, sessionsOverride, totalSessions, mainWUsage, mainEmpty, subagentFiles, subagentOnlySessions, responseSizes, ctxTraces, bucketS } = synth;
+  const { events, limitHits, range, costByModel: backendByModel, sessionsOverride, totalSessions, mainWUsage, mainEmpty, subagentFiles, subagentOnlySessions, totalPrompts, totalTurns, responseSizes, ctxTraces, bucketS } = synth;
   const hasBackendByModel = backendByModel && Object.keys(backendByModel).length > 0;
   const computed = useMemo(() => computeSessions(events), [events]);
   const sessions = (sessionsOverride && sessionsOverride.length)
@@ -656,6 +658,8 @@ function Dashboard({ synth, dataLabel, models, backendOn, activeProject, activeR
         {subagentOnlySessions != null && <Stat label="subagent-only sessions" value={subagentOnlySessions.toLocaleString()} />}
         {(mainWUsage != null || mainEmpty != null || subagentFiles != null) &&
           <Stat label="total" value={((mainWUsage || 0) + (mainEmpty || 0) + (subagentFiles || 0)).toLocaleString()} />}
+        {totalPrompts != null && <Stat label="prompts" value={totalPrompts.toLocaleString()} />}
+        {totalTurns != null && <Stat label="turns" value={totalTurns.toLocaleString()} />}
         <Stat label="requests" value={events.reduce((s, e) => s + (e.requests == null ? 1 : e.requests), 0).toLocaleString()} />
         <Stat label="total tokens" value={window.humanFmt(totals.total)} />
         <Stat label="total cost" value={totalCostStr} highlight />

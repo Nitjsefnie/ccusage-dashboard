@@ -174,6 +174,25 @@ def test_iterations_flattened_to_sum():
     assert r["eph5_tokens"] == 0
 
 
+def test_prompt_count_excludes_instrumentation_and_interrupts():
+    """prompt_count tracks substantive user text only — bash-IO blobs,
+    command stubs, and interrupt markers don't count as prompts."""
+    blob = (
+        b'{"type":"user","timestamp":"2026-05-07T10:00:00Z","uuid":"u1",'
+        b'"message":{"role":"user","content":"real prompt"}}\n'
+        b'{"type":"user","timestamp":"2026-05-07T10:00:01Z","uuid":"u2",'
+        b'"message":{"role":"user","content":"<bash-input>ls</bash-input>"}}\n'
+        b'{"type":"user","timestamp":"2026-05-07T10:00:02Z","uuid":"u3",'
+        b'"message":{"role":"user","content":"<command-name>foo</command-name>"}}\n'
+        b'{"type":"user","timestamp":"2026-05-07T10:00:03Z","uuid":"u4",'
+        b'"message":{"role":"user","content":"[Request interrupted by user]"}}\n'
+        b'{"type":"user","timestamp":"2026-05-07T10:00:04Z","uuid":"u5",'
+        b'"message":{"role":"user","content":"another real prompt"}}\n'
+    )
+    out = parse.parse_file("k/sess-p/sess-p.jsonl", blob)
+    assert out["prompt_count"] == 2
+
+
 def test_user_text_lines_drive_turn_boundaries():
     """compute_context_growth uses user_text lines as turn boundaries.
     Within one turn (between two user_text lines), the LAST

@@ -19,11 +19,14 @@ CREATE TABLE IF NOT EXISTS files (
   parser_version      TEXT NOT NULL,
   ctx_turns           JSONB NOT NULL DEFAULT '[]'::jsonb,
   turn_count          INT   NOT NULL DEFAULT 0,
+  prompt_count        INT   NOT NULL DEFAULT 0,
   rate_limit_hits     JSONB NOT NULL DEFAULT '[]'::jsonb
 );
 
 ALTER TABLE files ADD COLUMN IF NOT EXISTS
   rate_limit_hits JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE files ADD COLUMN IF NOT EXISTS
+  prompt_count INT NOT NULL DEFAULT 0;
 
 CREATE INDEX IF NOT EXISTS files_project_idx ON files (project_id);
 CREATE INDEX IF NOT EXISTS files_session_idx ON files (session_id);

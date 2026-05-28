@@ -295,6 +295,21 @@ def app_with_rl_data(monkeypatch):
     os.system(f"dropdb --if-exists {test_db} 2>/dev/null")
 
 
+def test_dashboard_returns_prompts_and_turns_totals(app_with_data):
+    """total_prompts sums files.prompt_count; total_turns sums files.turn_count.
+    Mini r2 has one real user prompt (sess-A) and five usage-bearing files
+    (sess-A, sess-B, sess-C main, sess-C agent, sess-D), each producing
+    a single ctx_turn entry."""
+    body = app_with_data.get("/api/dashboard?range=3650d").json()
+    assert body["total_prompts"] == 1
+    assert body["total_turns"] == 5
+
+    # Project filter scopes both counts.
+    body_b = app_with_data.get("/api/dashboard?range=3650d&project=projB").json()
+    assert body_b["total_prompts"] == 0
+    assert body_b["total_turns"] == 3
+
+
 def test_dashboard_excludes_rate_limit_hits_older_than_range(app_with_rl_data):
     client, in_range, out_range = app_with_rl_data
 
