@@ -339,6 +339,9 @@ function App() {
       {backendOn && (
         <RangePicker active={activeRange} onChange={setActiveRange} />
       )}
+      {backendOn && !isGuest && (
+        <ExportButton range={activeRange} project={activeProject} />
+      )}
       {route === 'dashboard' && dashData && <Dashboard synth={dashData} dataLabel={dataLabel} models={models} backendOn={backendOn} activeProject={activeProject} activeRange={activeRange} dashNonce={dashNonce} />}
       {route === 'sessions' && dashData && (
         <SessionsList
@@ -408,6 +411,27 @@ function RangePicker({ active, onChange }) {
         >{p.label}</button>
       ))}
     </div>
+  );
+}
+
+function ExportButton({ range, project }) {
+  const [busy, setBusy] = useState(false);
+  const href = `/api/export?range=${encodeURIComponent(range)}` +
+    (project ? `&project=${encodeURIComponent(project)}` : '');
+  const onClick = (e) => {
+    if (busy) { e.preventDefault(); return; }
+    setBusy(true);
+    // Re-enable after a beat so a stuck render doesn't permanently disable it.
+    setTimeout(() => setBusy(false), 3000);
+  };
+  return (
+    <a
+      className="pp-btn"
+      style={{ marginLeft: 12, opacity: busy ? 0.5 : 1, pointerEvents: busy ? 'none' : 'auto' }}
+      href={href}
+      onClick={onClick}
+      title="Download a PNG of this dashboard for the current filters"
+    >{busy ? 'rendering…' : 'Export PNG'}</a>
   );
 }
 
