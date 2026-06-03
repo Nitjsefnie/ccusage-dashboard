@@ -15,7 +15,13 @@ tables but returning OLD response shape:
 """
 from __future__ import annotations
 
+import asyncio
+import os
+import re
+import sys
+import tempfile
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
@@ -27,6 +33,32 @@ from backend.cache import cache_response
 
 
 router = APIRouter(prefix="/api")
+
+# Export-PNG render plumbing -------------------------------------------------
+# System python (has matplotlib + psycopg); the app .venv does not. Override
+# via EXPORT_PYTHON for dev/test boxes where matplotlib lives elsewhere.
+_EXPORT_PYTHON = os.environ.get("EXPORT_PYTHON", "/usr/bin/python3")
+_EXPORT_SCRIPT = str(Path(__file__).resolve().parents[1] / "scripts/plots/ccusage_plot_db.py")
+_EXPORT_TIMEOUT_S = 120
+_export_lock = asyncio.Semaphore(1)
+
+
+def _build_export_argv(rng: str, project: str | None, out_path: str, db_url: str) -> list[str]:
+    """Construct the argv for the plot subprocess. `all` → --all, else -p <rng>."""
+    argv = [_EXPORT_PYTHON, _EXPORT_SCRIPT, "--db-url", db_url, "-o", out_path]
+    if rng == "all":
+        argv.append("--all")
+    else:
+        argv += ["-p", rng]
+    if project:
+        argv += ["--project", project]
+    return argv
+
+
+def _export_filename(rng: str, project: str | None) -> str:
+    """Safe download filename: ccusage_<project-or-all>_<range>.png."""
+    proj_slug = re.sub(r"[^A-Za-z0-9._-]", "_", project) if project else "all"
+    return f"ccusage_{proj_slug}_{rng}.png"
 
 
 @router.get("/me")

@@ -21,6 +21,24 @@ def _load_plot_db_module():
     return mod
 
 
+def test_build_export_argv_period_and_project():
+    from backend import api
+    argv = api._build_export_argv("7d", "myproj", "/tmp/out.png", db_url="postgresql:///x")
+    assert "/tmp/out.png" in argv
+    assert argv[argv.index("-p") + 1] == "7d"
+    assert argv[argv.index("--project") + 1] == "myproj"
+    assert argv[argv.index("--db-url") + 1] == "postgresql:///x"
+    assert "--all" not in argv
+
+
+def test_build_export_argv_all_and_no_project():
+    from backend import api
+    argv = api._build_export_argv("all", None, "/tmp/out.png", db_url="postgresql:///x")
+    assert "--all" in argv
+    assert "-p" not in argv
+    assert "--project" not in argv
+
+
 def test_plot_db_project_filter_subsets_events(app_with_data):
     """load_events(project=...) returns a strict subset of all-projects,
     and every returned event belongs to the requested project."""
