@@ -1,3 +1,4 @@
+import importlib.util
 import json
 import os
 import shutil
@@ -9,6 +10,37 @@ import pytest
 from fastapi.testclient import TestClient
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _load_plot_db_module():
+    """Import scripts/plots/ccusage_plot_db.py by path (not a package)."""
+    path = _REPO_ROOT / "scripts/plots/ccusage_plot_db.py"
+    spec = importlib.util.spec_from_file_location("ccusage_plot_db", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_plot_db_project_filter_subsets_events(app_with_data):
+    """load_events(project=...) returns a strict subset of all-projects,
+    and every returned event belongs to the requested project."""
+    mod = _load_plot_db_module()
+    mod.DB_URL = os.environ["DATABASE_URL_VIZ"]
+
+    all_events = mod.load_events(None, None)
+    assert all_events, "fixture should yield records"
+
+    # Discover a real project_id from the test DB.
+    import psycopg
+    with psycopg.connect(mod.DB_URL) as conn, conn.cursor() as cur:
+        cur.execute("SELECT DISTINCT project_id FROM files ORDER BY 1")
+        project_ids = [r[0] for r in cur.fetchall()]
+    assert len(project_ids) >= 2, "mini fixture has 2 projects"
+    target = project_ids[0]
+
+    filtered = mod.load_events(None, None, project=target)
+    assert filtered, "project filter should still yield records"
+    assert len(filtered) < len(all_events), "filter must drop the other project"
 
 
 @pytest.fixture
