@@ -328,7 +328,7 @@ function App() {
 
   return (
     <div className="app-root">
-      <TopBar route={route} setRoute={setRoute} isGuest={isGuest} />
+      <TopBar route={route} setRoute={setRoute} isGuest={isGuest} backendOn={backendOn} range={activeRange} project={activeProject} />
       {backendOn && !isGuest && projects && (
         <ProjectPicker
           projects={projects}
@@ -338,9 +338,6 @@ function App() {
       )}
       {backendOn && (
         <RangePicker active={activeRange} onChange={setActiveRange} />
-      )}
-      {backendOn && !isGuest && (
-        <ExportButton range={activeRange} project={activeProject} />
       )}
       {route === 'dashboard' && dashData && <Dashboard synth={dashData} dataLabel={dataLabel} models={models} backendOn={backendOn} activeProject={activeProject} activeRange={activeRange} dashNonce={dashNonce} />}
       {route === 'sessions' && dashData && (
@@ -556,7 +553,7 @@ function backendDashToShape(b) {
   };
 }
 
-function TopBar({ route, setRoute, isGuest }) {
+function TopBar({ route, setRoute, isGuest, backendOn, range, project }) {
   return (
     <header className="topbar">
       <div className="topbar-left">
@@ -576,6 +573,9 @@ function TopBar({ route, setRoute, isGuest }) {
         )}
       </nav>
       <div className="topbar-right">
+        {backendOn && !isGuest && (
+          <ExportButton range={range} project={project} />
+        )}
         <a className="loadbtn logout-btn" href="/logout">Logout</a>
       </div>
     </header>
