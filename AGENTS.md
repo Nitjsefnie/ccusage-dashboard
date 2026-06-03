@@ -29,7 +29,8 @@ backend/          — FastAPI application
   api.py          — REST endpoints (/api/me, /api/projects, /api/dashboard,
                     /api/cache, /api/context-growth/{agg,session},
                     /api/sessions*, /api/events SSE, /api/tool-usage,
-                    /api/tool-error-rate, /api/reply-latency, /api/models)
+                    /api/tool-error-rate, /api/reply-latency, /api/models,
+                    /api/export)
   parse.py        — JSONL → records + ctx_turns + rate_limit_hits.
                     Mirrors canonical ~/.claude/scripts/parse_session.py
                     for Phase 1 within-file requestId max-merge.

@@ -78,7 +78,7 @@ FastAPI  →  /api/dashboard, /api/cache, /api/context-growth/*,
             /api/sessions, /api/sessions/{id}/transcript,
             /api/tool-usage, /api/tool-error-rate,
             /api/reply-latency, /api/models,
-            /api/events
+            /api/events, /api/export
   ↓
 React + in-browser Babel  →  /  (served by FastAPI)
 ```
