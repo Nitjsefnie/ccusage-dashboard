@@ -55,10 +55,16 @@ event loop. Matches the "since it works" intent.
 - **Invocation:** `asyncio.create_subprocess_exec` of **system
   `/usr/bin/python3`** (the interpreter that has matplotlib + psycopg; the
   app `.venv` does not) running the script with:
-  - `--db-url <resolved DATABASE_URL_VIZ>` — passed **explicitly** from the
-    backend's own env so the script's hard-coded `/root/session-viz/.env`
-    default is never relied on (the deployed service runs from
-    `/opt/ccudash` with `EnvironmentFile=/opt/ccudash/.env`).
+  - The DSN is **not** passed on the command line. The subprocess inherits
+    `DATABASE_URL_VIZ` from the backend's environment (the service sets it via
+    `EnvironmentFile`), and the script's `_resolve_db_url` falls back to that
+    env var. Passing `--db-url` was dropped in review — it leaked the
+    password into the process list and was redundant. (The script keeps its
+    `--db-url` CLI flag for standalone use.) **Deployment note:** the service
+    actually runs in-place from **`/root/session-viz`** (the real
+    `ccudash.service` unit; the `examples/` file's `/opt/ccudash` is only a
+    sample), so no deploy-sync step is needed — a restart picks up the repo
+    directly.
   - `-o <tempfile>` — a `tempfile.mkstemp(suffix=".png")` path.
   - the range args, and `--project <project_id>` when set.
   - Script path resolved relative to the backend package
@@ -105,12 +111,15 @@ guard logic.
 - A small `Export PNG` button rendered next to `RangePicker` (per-view export
   of the active filters), gated on **`backendOn && !isGuest`** — guests never
   see it (matching the endpoint's 403).
-- On click: navigate/open
-  `/api/export?range=${activeRange}${activeProject ? '&project=' +
-  encodeURIComponent(activeProject) : ''}`. The `attachment` response makes
-  the browser download it directly — no blob/fetch plumbing.
-- A short-lived `exporting` flag disables the button briefly on click so a
-  double-click can't launch two 120s renders.
+- On click: `fetch` the export URL with `credentials: 'same-origin'` and
+  branch on `res.ok` — on success, download the PNG via `blob()` + an
+  object-URL + a temporary `<a download>`; on any error response, show the
+  message inline. (Review correction: a plain `<a href>` would navigate the
+  whole SPA away to the raw JSON body on *any* error — including the
+  reachable empty-data 500 — so the anchor approach was replaced with
+  fetch+blob.)
+- A `busy` flag (set true on click, cleared in `finally`) disables the button
+  during a render so a double-click can't launch two 120s renders.
 
 ## Data flow
 
@@ -126,8 +135,9 @@ record set from Postgres, so the PNG matches the on-screen panels.
 | Guest hits `/api/export` (with or without `project=`) | 403; export is logged-in-only |
 | Render exceeds 120s | kill subprocess, 503 |
 | Script exits non-zero | 500; stderr tail logged server-side |
-| Concurrent export requests | serialised by `Semaphore(1)` (queued, not failed) |
-| No records in range | script already exits non-zero with a message → 500 (acceptable; rare) |
+| Concurrent export requests | fail-fast: if a render is already in flight (`_export_lock.locked()`), return 503 "already in progress" |
+| No records in range | script exits non-zero → 500; the frontend `fetch`+`.ok` path shows the message inline (does not eject the SPA) |
+| Any error response | frontend shows it inline via `fetch`+`.ok`; never navigates away |
 
 ## Testing (`tests/test_api.py`)
 
@@ -148,12 +158,16 @@ record set from Postgres, so the PNG matches the on-screen panels.
 
 ## Deployment notes
 
-- Requires `/usr/bin/python3` on the box to have `matplotlib` + `psycopg`
-  (verified present) and the script to be deployed under
-  `/opt/ccudash/scripts/plots/ccusage_plot_db.py` — the deploy sync must
-  include `scripts/plots/`.
-- `--db-url` is passed explicitly, so the script's `/root/session-viz/.env`
-  default is irrelevant in production.
+- The service runs in-place from **`/root/session-viz`** (real
+  `ccudash.service` unit; `examples/ccudash.service`'s `/opt/ccudash` is only
+  a sample). So **no deploy-sync step** — `systemctl restart ccudash` picks up
+  the repo directly, including `scripts/plots/ccusage_plot_db.py`.
+- Requires system `/usr/bin/python3` to have `matplotlib` + `psycopg`
+  (verified present); the service itself runs under `.venv` (no matplotlib),
+  and the endpoint subprocesses system python3 for the render.
+- The DSN is inherited from the environment by the subprocess (not passed in
+  argv), so no credentials appear in the process list. `plot_timeline` raises
+  a clear error if matplotlib is somehow absent at render time (→ 500, logged).
 - No new entry in `backend/requirements.txt` (matplotlib stays out of the
   app venv by design).
 
