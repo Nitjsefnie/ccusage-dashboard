@@ -1,0 +1,575 @@
+<!-- Copyright 2026 Anthropic PBC · SPDX-License-Identifier: Apache-2.0 -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Design spec — Export PNG button (ccudash)</title>
+  <style>
+    :root {
+      --ivory:    #1B1A17;
+      --slate:    #F5F3EC;
+      --clay:     #D97757;
+      --oat:      #3A352B;
+      --olive:    #8FA56E;
+      --rust:     #E08B7F;
+      --gray-150: #2E2C27;
+      --gray-300: #3A3833;
+      --gray-500: #8F8D82;
+      --gray-700: #CFCCC2;
+      --white:    #252420;
+
+      --serif: ui-serif, Georgia, 'Times New Roman', serif;
+      --sans:  system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+      --mono:  ui-monospace, 'SF Mono', Menlo, Monaco, monospace;
+
+      --radius: 12px;
+      --border: 1.5px solid var(--gray-300);
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: var(--sans);
+      background: var(--ivory);
+      color: var(--gray-700);
+      line-height: 1.58;
+      padding: 56px 32px 120px;
+      -webkit-font-smoothing: antialiased;
+    }
+    .page { margin: 0 auto; max-width: 960px; }
+
+    /* ---------- header ---------- */
+    header.page-head { margin-bottom: 40px; max-width: 840px; }
+    .eyebrow {
+      font-family: var(--mono);
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--gray-500);
+      margin-bottom: 12px;
+    }
+    h1 {
+      font-family: var(--serif);
+      font-weight: 500;
+      font-size: 38px;
+      line-height: 1.14;
+      color: var(--slate);
+      margin-bottom: 18px;
+      letter-spacing: -0.01em;
+    }
+    .context-box {
+      background: var(--gray-150);
+      border: var(--border);
+      border-radius: var(--radius);
+      padding: 16px 20px;
+      font-size: 14.5px;
+      color: var(--gray-700);
+    }
+    .context-box .label {
+      font-family: var(--mono);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--gray-500);
+      display: block;
+      margin-bottom: 6px;
+    }
+
+    /* ---------- summary strip ---------- */
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+      margin-bottom: 56px;
+    }
+    @media (max-width: 900px) { .summary { grid-template-columns: repeat(2, 1fr); } }
+    .summary .cell {
+      background: var(--white);
+      border: var(--border);
+      border-radius: var(--radius);
+      padding: 18px 20px;
+    }
+    .summary .k {
+      font-family: var(--mono);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--gray-500);
+      margin-bottom: 6px;
+    }
+    .summary .v { font-size: 17px; color: var(--slate); font-weight: 600; }
+    .summary .v.accent  { color: var(--clay); }
+    .summary .v.ok      { color: var(--olive); }
+
+    /* ---------- decision banner ---------- */
+    .decision {
+      background: var(--white);
+      border: var(--border);
+      border-left: 4px solid var(--clay);
+      border-radius: var(--radius);
+      padding: 22px 26px;
+      margin-bottom: 56px;
+    }
+    .decision .d-tag {
+      font-family: var(--mono);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      color: var(--clay);
+      margin-bottom: 8px;
+    }
+    .decision .d-head {
+      font-family: var(--serif);
+      font-size: 22px;
+      font-weight: 500;
+      color: var(--slate);
+      margin-bottom: 10px;
+      letter-spacing: -0.01em;
+    }
+    .decision .d-body { font-size: 14.5px; color: var(--gray-700); max-width: 820px; }
+    .decision .d-body + .d-body { margin-top: 8px; }
+
+    /* ---------- section chrome ---------- */
+    section { margin-bottom: 60px; }
+    .sec-head {
+      display: flex;
+      align-items: baseline;
+      gap: 14px;
+      margin-bottom: 8px;
+    }
+    .sec-head .num {
+      font-family: var(--mono);
+      font-size: 12px;
+      background: var(--oat);
+      color: var(--slate);
+      padding: 3px 9px;
+      border-radius: 8px;
+    }
+    .sec-head h2 {
+      font-family: var(--serif);
+      font-weight: 500;
+      font-size: 26px;
+      color: var(--slate);
+      letter-spacing: -0.01em;
+    }
+    .sec-intro {
+      font-size: 14.5px;
+      color: var(--gray-500);
+      max-width: 740px;
+      margin-bottom: 24px;
+    }
+    p.body { font-size: 14.5px; max-width: 820px; margin-bottom: 14px; }
+    p.body strong { color: var(--slate); }
+    code {
+      font-family: var(--mono);
+      font-size: 0.88em;
+      background: var(--gray-150);
+      border: 1px solid var(--gray-300);
+      border-radius: 5px;
+      padding: 1px 5px;
+      color: #C9B98A;
+    }
+    pre {
+      font-family: var(--mono);
+      font-size: 12.5px;
+      background: var(--gray-150);
+      border: var(--border);
+      border-radius: var(--radius);
+      padding: 16px 20px;
+      color: var(--gray-700);
+      overflow-x: auto;
+      margin-bottom: 14px;
+      line-height: 1.5;
+    }
+
+    /* ---------- generic data table ---------- */
+    .tbl {
+      width: 100%;
+      border: var(--border);
+      border-radius: var(--radius);
+      border-collapse: separate;
+      border-spacing: 0;
+      overflow: hidden;
+      font-size: 13.5px;
+    }
+    .tbl th, .tbl td {
+      text-align: left;
+      padding: 11px 16px;
+      border-bottom: 1px solid var(--gray-300);
+      vertical-align: top;
+    }
+    .tbl th {
+      font-family: var(--mono);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--gray-500);
+      background: var(--gray-150);
+      font-weight: 600;
+    }
+    .tbl tr:last-child td { border-bottom: none; }
+    .tbl td { color: var(--gray-700); }
+    .tbl td.slate { color: var(--slate); font-weight: 600; }
+    .tbl tbody tr:hover { background: var(--gray-150); }
+
+    /* ---------- comparison ("X vs Y") cards ---------- */
+    .compare {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+    }
+    @media (max-width: 820px) { .compare { grid-template-columns: 1fr; } }
+    .compare .col {
+      background: var(--white);
+      border: var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+    .compare .col-head {
+      padding: 12px 18px;
+      font-family: var(--mono);
+      font-size: 11.5px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      border-bottom: var(--border);
+    }
+    .compare .col.bad  .col-head { background: #2E211C; color: var(--rust); }
+    .compare .col.good .col-head { background: #232A1C; color: var(--olive); }
+    .compare .col-body { padding: 16px 18px; font-size: 13.5px; }
+    .compare .col-body ul { list-style: none; }
+    .compare .col-body li { margin: 7px 0; padding-left: 18px; position: relative; }
+    .compare .col.bad  li:before { content: '\2715'; position: absolute; left: 0; color: var(--rust); }
+    .compare .col.good li:before { content: '\2713'; position: absolute; left: 0; color: var(--olive); }
+
+    /* ---------- change inventory ---------- */
+    .changes { display: flex; flex-direction: column; gap: 12px; }
+    .change {
+      background: var(--white);
+      border: var(--border);
+      border-radius: var(--radius);
+      padding: 16px 20px;
+      display: grid;
+      grid-template-columns: 280px 1fr;
+      gap: 4px 24px;
+    }
+    @media (max-width: 720px) { .change { grid-template-columns: 1fr; } }
+    .change .file {
+      font-family: var(--mono);
+      font-size: 12.5px;
+      color: var(--clay);
+      word-break: break-all;
+    }
+    .change .what { font-size: 14px; color: var(--gray-700); }
+    .change .what .lead { color: var(--slate); font-weight: 600; }
+
+    /* ---------- checklist ---------- */
+    .checklist { display: flex; flex-direction: column; gap: 10px; max-width: 820px; }
+    .check {
+      display: flex;
+      gap: 12px;
+      align-items: flex-start;
+      background: var(--white);
+      border: var(--border);
+      border-radius: 10px;
+      padding: 12px 16px;
+    }
+    .check .box {
+      width: 18px; height: 18px;
+      border-radius: 5px;
+      border: 2px solid var(--gray-500);
+      flex-shrink: 0;
+      margin-top: 2px;
+    }
+    .check .ck-text { font-size: 14px; color: var(--gray-700); }
+    .check .ck-text strong { color: var(--slate); }
+
+    /* ---------- risk table ---------- */
+    .risks {
+      border: var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      background: var(--white);
+    }
+    .risks .row { display: grid; grid-template-columns: 1.6fr 90px 1.6fr; }
+    @media (max-width: 780px) { .risks .row { grid-template-columns: 1fr; } }
+    .risks .row + .row { border-top: var(--border); }
+    .risks .cell { padding: 14px 18px; font-size: 13.5px; }
+    .risks .cell + .cell { border-left: var(--border); }
+    @media (max-width: 780px) {
+      .risks .cell + .cell { border-left: none; border-top: 1px dashed var(--gray-300); }
+    }
+    .risks .head {
+      background: var(--gray-150);
+      font-weight: 600;
+      color: var(--slate);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .sev {
+      display: inline-block;
+      font-family: var(--mono);
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 6px;
+      font-weight: 600;
+    }
+    .sev.high { background: #4A2A1C; color: #F0B79C; }
+    .sev.med  { background: var(--oat);  color: var(--slate); }
+    .sev.low  { background: #2D3A24; color: #B6CC96; }
+
+    /* ---------- deferred / out-of-scope cards ---------- */
+    .deferred { display: flex; flex-direction: column; gap: 14px; max-width: 840px; }
+    .defer {
+      background: var(--white);
+      border: var(--border);
+      border-left: 4px solid var(--gray-500);
+      border-radius: 10px;
+      padding: 16px 20px;
+    }
+    .defer .dt { font-weight: 600; font-size: 15px; color: var(--slate); margin-bottom: 4px; }
+    .defer .dd { font-size: 13.5px; color: var(--gray-500); }
+
+    .footer {
+      color: var(--gray-500);
+      font-size: 13px;
+      margin-top: 64px;
+      padding-top: 22px;
+      border-top: 1px solid var(--gray-300);
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+
+    <header class="page-head">
+      <div class="eyebrow">Design spec · ccudash</div>
+      <h1>Export PNG button — render the dashboard for the active filters</h1>
+      <div class="context-box">
+        <span class="label">Context</span>
+        The DB-backed plotting script <code>scripts/plots/ccusage_plot_db.py</code>
+        already renders the full 8-panel matplotlib usage dashboard from the
+        deduped, cost-priced <code>records</code> table — the same data the web
+        dashboard shows. This spec wires it to a browser <strong>Export PNG</strong>
+        button that honours the dashboard's active project + time-range filters,
+        and walls the feature off from guests.
+      </div>
+    </header>
+
+    <div class="summary">
+      <div class="cell"><div class="k">Scope</div><div class="v accent">4 changes</div></div>
+      <div class="cell"><div class="k">Files touched</div><div class="v">4 + tests</div></div>
+      <div class="cell"><div class="k">Risk</div><div class="v ok">Low–Med</div></div>
+      <div class="cell"><div class="k">Deferred</div><div class="v">3 items</div></div>
+    </div>
+
+    <div class="decision">
+      <div class="d-tag">Decision</div>
+      <div class="d-head">A new <code>GET /api/export</code> subprocesses the working script and streams back a PNG.</div>
+      <div class="d-body">Subprocess over in-process: it reuses the script
+        verbatim, keeps the heavy <code>matplotlib</code> dependency out of the
+        app <code>.venv</code>, and isolates the CPU-bound render so it never
+        blocks the uvicorn event loop. Matches the "since it works" intent.</div>
+      <div class="d-body">Export is <strong>logged-in-only</strong> — guests get a
+        403 from the existing auth middleware and never see the button. It
+        deliberately does <em>not</em> cache the PNG, queue async jobs, or honour
+        the <code>model</code> filter (project + range only).</div>
+    </div>
+
+    <section>
+      <div class="sec-head"><span class="num">01</span><h2>Background</h2></div>
+      <p class="sec-intro">What the reader needs to evaluate the rest.</p>
+      <p class="body">The dashboard filters on <code>range</code>
+        (<code>1d/7d/30d/90d/365d/all</code>) + <code>project</code> (a
+        <code>project_id</code> that joins <code>files</code>) + <code>model</code>,
+        deduping cross-file via <code>DISTINCT ON (r.uuid)</code> in
+        <code>/api/dashboard</code>. <code>ccusage_plot_db.py</code> mirrors that
+        exact dedup and reads the precomputed <code>records.cost_usd</code>, so its
+        plot is data-consistent with the live dashboard by construction.</p>
+      <p class="body">Two gaps remain: <strong>(a)</strong> the script has no
+        project filter (its <code>load_events</code> is a bare
+        <code>FROM records r</code>), and <strong>(b)</strong> nothing connects it
+        to the web app. The deployed service runs from <code>/opt/ccudash</code> as
+        root with <code>EnvironmentFile=/opt/ccudash/.env</code>, and the only
+        interpreter with matplotlib is system <code>/usr/bin/python3</code> — the
+        app <code>.venv</code> does not have it.</p>
+    </section>
+
+    <section>
+      <div class="sec-head"><span class="num">02</span><h2>Subprocess vs. in-process</h2></div>
+      <p class="sec-intro">Why the render runs in a separate process.</p>
+      <div class="compare">
+        <div class="col bad">
+          <div class="col-head">In-process module</div>
+          <div class="col-body"><ul>
+            <li>Adds matplotlib to the app <code>.venv</code> — a heavy dep the web tier otherwise avoids.</li>
+            <li>pyplot global state + CPU-bound render risk blocking the event loop; needs threadpool care.</li>
+            <li>Requires refactoring the CLI script into an importable module.</li>
+          </ul></div>
+        </div>
+        <div class="col good">
+          <div class="col-head">Subprocess (chosen)</div>
+          <div class="col-body"><ul>
+            <li>Reuses the working script verbatim (plus one <code>--project</code> arg).</li>
+            <li>matplotlib stays out of the app venv; render isolated in its own process.</li>
+            <li><code>asyncio.create_subprocess_exec</code> never blocks the loop.</li>
+          </ul></div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="sec-head"><span class="num">03</span><h2>Data flow</h2></div>
+      <p class="sec-intro">From button click to downloaded PNG.</p>
+      <pre>Browser ──GET /api/export?range=&amp;project=──▶ FastAPI (backend/api.py)
+                                                │ middleware: guest → 403 (session.py)
+                                                │ arg map + asyncio.Semaphore(1)
+                                                ▼
+                    asyncio.create_subprocess_exec(
+                      /usr/bin/python3  scripts/plots/ccusage_plot_db.py
+                      --db-url &lt;DSN&gt;  -o &lt;tempfile&gt;  [-p Nd | --all]  [--project P])
+                                                │ matplotlib render, ≤120s
+                                                ▼
+                    read PNG bytes → unlink temp → Response(image/png, attachment)</pre>
+      <p class="body">The dashboard view already holds <code>activeRange</code> and
+        <code>activeProject</code> in state and feeds them to
+        <code>/api/dashboard</code>. The Export button forwards the <em>same</em>
+        two values to <code>/api/export</code>; the script re-derives the identical
+        deduped record set, so the PNG matches the on-screen panels.</p>
+    </section>
+
+    <section>
+      <div class="sec-head"><span class="num">04</span><h2>Change inventory</h2></div>
+      <p class="sec-intro">Every file the implementation touches, and the precise change.</p>
+      <div class="changes">
+        <div class="change">
+          <div class="file">backend/api.py</div>
+          <div class="what"><span class="lead">New <code>GET /api/export</code>.</span>
+            Params <code>range="30d"</code>, <code>project=None</code> (same as
+            <code>/api/dashboard</code>). Maps <code>all</code>→<code>--all</code>,
+            else <code>-p &lt;range&gt;</code>. Runs system
+            <code>/usr/bin/python3</code> on the script with an explicit
+            <code>--db-url</code> (resolved <code>DATABASE_URL_VIZ</code>),
+            <code>-o &lt;tempfile&gt;</code>, and <code>--project</code> when set.
+            Module-level <code>asyncio.Semaphore(1)</code> single-flights;
+            <code>wait_for(..., 120)</code> → 503 on timeout, 500 on non-zero exit.
+            Returns the PNG bytes as <code>image/png</code> with an
+            <code>attachment</code> Content-Disposition; temp file unlinked. No
+            <code>@cache_response</code>.</div>
+        </div>
+        <div class="change">
+          <div class="file">backend/session.py:180-183</div>
+          <div class="what"><span class="lead">Guest gate.</span> Add
+            <code>path.startswith("/api/export")</code> to the existing
+            guest-blocked path check (beside <code>/api/projects</code> /
+            <code>/api/sessions</code>) → guest gets <code>403 Forbidden (guest)</code>.
+            One line; no new logic.</div>
+        </div>
+        <div class="change">
+          <div class="file">scripts/plots/ccusage_plot_db.py</div>
+          <div class="what"><span class="lead">Add <code>--project</code>.</span>
+            <code>load_events(..., project=None)</code> joins <code>files</code> and
+            adds <code>AND f.project_id = %(project)s</code> when set;
+            <code>find_limit_hits()</code> scoped the same way so burn-rate
+            rate-limit markers match. No arg → byte-identical to today.</div>
+        </div>
+        <div class="change">
+          <div class="file">src/app.jsx</div>
+          <div class="what"><span class="lead">Export PNG button.</span> Next to
+            <code>RangePicker</code>, gated on <code>backendOn &amp;&amp; !isGuest</code>.
+            Opens <code>/api/export?range=…&amp;project=…</code> (browser downloads
+            the <code>attachment</code>). A short-lived <code>exporting</code> flag
+            disables it on click to prevent a double 120s render.</div>
+        </div>
+        <div class="change">
+          <div class="file">tests/test_api.py · (middleware test)</div>
+          <div class="what"><span class="lead">Tests.</span> Monkeypatch the
+            subprocess runner: assert argv for <code>-p 7d</code> / <code>--all</code>,
+            <code>--project</code> presence/absence, <code>--db-url</code> passed,
+            and <code>image/png</code> + <code>attachment</code> on success. Guest
+            403 asserted at the middleware layer (the router-only harness bypasses
+            auth).</div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="sec-head"><span class="num">05</span><h2>Range → script-arg mapping</h2></div>
+      <p class="sec-intro">The dashboard range presets map directly onto the script's CLI.</p>
+      <table class="tbl">
+        <thead><tr><th>Dashboard preset</th><th>range value</th><th>Script args</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td class="slate">24h</td><td>1d</td><td>-p 1d</td><td>matches <code>(\d+)[hdwm]</code></td></tr>
+          <tr><td class="slate">7d</td><td>7d</td><td>-p 7d</td><td></td></tr>
+          <tr><td class="slate">30d</td><td>30d</td><td>-p 30d</td><td></td></tr>
+          <tr><td class="slate">90d</td><td>90d</td><td>-p 90d</td><td></td></tr>
+          <tr><td class="slate">1y</td><td>365d</td><td>-p 365d</td><td></td></tr>
+          <tr><td class="slate">all</td><td>all</td><td>--all</td><td>≈ 165k records; heaviest render</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <div class="sec-head"><span class="num">06</span><h2>Verification</h2></div>
+      <p class="sec-intro">How the implementer confirms the change is correct.</p>
+      <div class="checklist">
+        <div class="check"><div class="box"></div><div class="ck-text"><strong>pytest tests/test_api.py</strong> — argv-mapping + image/png assertions pass.</div></div>
+        <div class="check"><div class="box"></div><div class="ck-text"><strong>Guest 403</strong> — middleware test rejects <code>/api/export</code> for a guest session.</div></div>
+        <div class="check"><div class="box"></div><div class="ck-text"><strong>python3 scripts/plots/ccusage_plot_db.py -p 7d --project &lt;id&gt; -o /tmp/x.png</strong> — renders a project-filtered PNG; data matches the dashboard for that project.</div></div>
+        <div class="check"><div class="box"></div><div class="ck-text"><strong>Manual</strong> — click Export PNG as a logged-in user for several range/project combos; confirm download + correctness. Confirm the button is absent in guest mode.</div></div>
+      </div>
+    </section>
+
+    <section>
+      <div class="sec-head"><span class="num">07</span><h2>Risks</h2></div>
+      <div class="risks">
+        <div class="row">
+          <div class="cell head">Risk</div>
+          <div class="cell head">Sev</div>
+          <div class="cell head">Mitigation</div>
+        </div>
+        <div class="row">
+          <div class="cell"><code>/usr/bin/python3</code> on the deploy box lacks matplotlib/psycopg, or <code>scripts/plots/</code> isn't synced to <code>/opt/ccudash</code>.</div>
+          <div class="cell"><span class="sev med">MED</span></div>
+          <div class="cell">Deps verified present; deploy note flags that <code>scripts/plots/</code> must ship. Non-zero exit → 500 with logged stderr, not a crash.</div>
+        </div>
+        <div class="row">
+          <div class="cell">All-history render (165k records) is slow or memory-heavy under load.</div>
+          <div class="cell"><span class="sev low">LOW</span></div>
+          <div class="cell"><code>Semaphore(1)</code> single-flights renders; 120s timeout kills runaways → 503.</div>
+        </div>
+        <div class="row">
+          <div class="cell">DSN leaks into process args / logs.</div>
+          <div class="cell"><span class="sev low">LOW</span></div>
+          <div class="cell">Passed as an argv to a local subprocess only; not logged. Same trust boundary as the app's own DB connection.</div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="sec-head"><span class="num">08</span><h2>Out of scope</h2></div>
+      <p class="sec-intro">Explicitly deferred — named so the reader knows it was considered, not missed.</p>
+      <div class="deferred">
+        <div class="defer">
+          <div class="dt">Model filter in the export</div>
+          <div class="dd">Design covers project + range only, per request. Trivial to add later via the same arg-mapping path.</div>
+        </div>
+        <div class="defer">
+          <div class="dt">Async job queue / progress UI</div>
+          <div class="dd">Renders are seconds; single-flight + a brief disabled button suffice.</div>
+        </div>
+        <div class="defer">
+          <div class="dt">PNG response caching</div>
+          <div class="dd">Explicit user action, heavy binary, data changes each ingest. Revisit only if export traffic warrants it.</div>
+        </div>
+      </div>
+    </section>
+
+    <div class="footer">
+      <p>Design spec · ccudash · 2026-06-03 · companion to <code>docs/superpowers/specs/2026-06-03-export-png-button-design.md</code></p>
+    </div>
+
+  </div>
+</body>
+</html>
