@@ -375,6 +375,14 @@
         403 from the existing auth middleware and never see the button. It
         deliberately does <em>not</em> cache the PNG, queue async jobs, or honour
         the <code>model</code> filter (project + range only).</div>
+      <div class="d-body"><strong>Post-review (commit 4768ab5):</strong> the DSN is
+        <em>not</em> passed in argv — the subprocess inherits
+        <code>DATABASE_URL_VIZ</code> from the env (keeps the password out of the
+        process list); and the frontend uses <code>fetch</code>+blob with an
+        <code>.ok</code> check rather than a plain <code>&lt;a href&gt;</code>, so error
+        responses render inline instead of ejecting the SPA. The service runs
+        in-place from <code>/root/session-viz</code> (the <code>examples/</code> unit's
+        <code>/opt/ccudash</code> is only a sample), so a restart needs no deploy-sync.</div>
     </div>
 
     <section>
@@ -426,9 +434,9 @@
                                                 │ middleware: guest → 403 (session.py)
                                                 │ arg map + asyncio.Semaphore(1)
                                                 ▼
-                    asyncio.create_subprocess_exec(
+                    asyncio.create_subprocess_exec(   # child inherits DATABASE_URL_VIZ
                       /usr/bin/python3  scripts/plots/ccusage_plot_db.py
-                      --db-url &lt;DSN&gt;  -o &lt;tempfile&gt;  [-p Nd | --all]  [--project P])
+                      -o &lt;tempfile&gt;  [-p Nd | --all]  [--project P])
                                                 │ matplotlib render, ≤120s
                                                 ▼
                     read PNG bytes → unlink temp → Response(image/png, attachment)</pre>
@@ -449,9 +457,9 @@
             Params <code>range="30d"</code>, <code>project=None</code> (same as
             <code>/api/dashboard</code>). Maps <code>all</code>→<code>--all</code>,
             else <code>-p &lt;range&gt;</code>. Runs system
-            <code>/usr/bin/python3</code> on the script with an explicit
-            <code>--db-url</code> (resolved <code>DATABASE_URL_VIZ</code>),
-            <code>-o &lt;tempfile&gt;</code>, and <code>--project</code> when set.
+            <code>/usr/bin/python3</code> on the script with
+            <code>-o &lt;tempfile&gt;</code> and <code>--project</code> when set; the
+            DSN is inherited from the environment (not passed in argv).
             Module-level <code>asyncio.Semaphore(1)</code> single-flights;
             <code>wait_for(..., 120)</code> → 503 on timeout, 500 on non-zero exit.
             Returns the PNG bytes as <code>image/png</code> with an
@@ -476,20 +484,21 @@
         </div>
         <div class="change">
           <div class="file">src/app.jsx</div>
-          <div class="what"><span class="lead">Export PNG button.</span> Next to
-            <code>RangePicker</code>, gated on <code>backendOn &amp;&amp; !isGuest</code>.
-            Opens <code>/api/export?range=…&amp;project=…</code> (browser downloads
-            the <code>attachment</code>). A short-lived <code>exporting</code> flag
-            disables it on click to prevent a double 120s render.</div>
+          <div class="what"><span class="lead">Export PNG button.</span> In the
+            top bar next to Logout, gated on <code>backendOn &amp;&amp; !isGuest</code>.
+            <code>fetch</code>es <code>/api/export?range=…&amp;project=…</code> and
+            branches on <code>res.ok</code> — blob-download on success, inline
+            error otherwise (so an error never ejects the SPA). A <code>busy</code>
+            flag disables it during a render.</div>
         </div>
         <div class="change">
           <div class="file">tests/test_api.py · (middleware test)</div>
           <div class="what"><span class="lead">Tests.</span> Monkeypatch the
             subprocess runner: assert argv for <code>-p 7d</code> / <code>--all</code>,
-            <code>--project</code> presence/absence, <code>--db-url</code> passed,
-            and <code>image/png</code> + <code>attachment</code> on success. Guest
-            403 asserted at the middleware layer (the router-only harness bypasses
-            auth).</div>
+            <code>--project</code> presence/absence, <code>--db-url</code> <em>absent</em>
+            (env-inherited DSN), <code>image/png</code> + <code>attachment</code> on
+            success, and timeout→503 / exit→500. Guest 403 asserted at the
+            middleware layer (the router-only harness bypasses auth).</div>
         </div>
       </div>
     </section>
@@ -530,9 +539,9 @@
           <div class="cell head">Mitigation</div>
         </div>
         <div class="row">
-          <div class="cell"><code>/usr/bin/python3</code> on the deploy box lacks matplotlib/psycopg, or <code>scripts/plots/</code> isn't synced to <code>/opt/ccudash</code>.</div>
-          <div class="cell"><span class="sev med">MED</span></div>
-          <div class="cell">Deps verified present; deploy note flags that <code>scripts/plots/</code> must ship. Non-zero exit → 500 with logged stderr, not a crash.</div>
+          <div class="cell">System <code>/usr/bin/python3</code> lacks matplotlib/psycopg at render time.</div>
+          <div class="cell"><span class="sev low">LOW</span></div>
+          <div class="cell">Deps verified present; service runs in-place from <code>/root/session-viz</code> so no sync. <code>plot_timeline</code> guards <code>plt is None</code> and non-zero exit → 500 with logged stderr, not a crash.</div>
         </div>
         <div class="row">
           <div class="cell">All-history render (165k records) is slow or memory-heavy under load.</div>
@@ -540,9 +549,9 @@
           <div class="cell"><code>Semaphore(1)</code> single-flights renders; 120s timeout kills runaways → 503.</div>
         </div>
         <div class="row">
-          <div class="cell">DSN leaks into process args / logs.</div>
+          <div class="cell">Concurrent exports pile up / one render blocks others.</div>
           <div class="cell"><span class="sev low">LOW</span></div>
-          <div class="cell">Passed as an argv to a local subprocess only; not logged. Same trust boundary as the app's own DB connection.</div>
+          <div class="cell">Fail-fast: <code>_export_lock.locked()</code> → 503 "already in progress". DSN is env-inherited (not in argv), so no credential leak into the process list.</div>
         </div>
       </div>
     </section>
