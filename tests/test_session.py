@@ -2,6 +2,8 @@ import time
 from unittest.mock import patch
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 from backend import session
 
@@ -86,3 +88,18 @@ def test_check_origin_accepts_same_origin_post():
     }
     req = Request(scope)
     assert session.check_origin(req)
+
+
+def test_guest_blocked_from_export():
+    app = FastAPI()
+    app.middleware("http")(session.auth_middleware)
+
+    @app.get("/api/export")
+    async def _stub():
+        return {"ok": True}
+
+    client = TestClient(app)
+    guest_cookie = session.make_guest_session_token()
+    client.cookies.set(session.SESSION_COOKIE_NAME, guest_cookie)
+    resp = client.get("/api/export?range=7d")
+    assert resp.status_code == 403

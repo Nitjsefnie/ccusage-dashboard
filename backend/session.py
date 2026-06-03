@@ -180,6 +180,7 @@ async def auth_middleware(request: Request, call_next):
         if (
             path == "/api/projects"
             or path.startswith("/api/sessions")
+            or path.startswith("/api/export")
         ):
             return JSONResponse(
                 {"ok": False, "error": "Forbidden (guest)"}, status_code=403
