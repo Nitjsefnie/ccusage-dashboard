@@ -39,6 +39,36 @@ def test_build_export_argv_all_and_no_project():
     assert "--project" not in argv
 
 
+def test_export_returns_png_attachment(app_with_data, monkeypatch):
+    from backend import api
+
+    captured = {}
+
+    async def fake_render(argv, out_path):
+        captured["argv"] = argv
+        # Simulate the script writing a PNG.
+        with open(out_path, "wb") as fh:
+            fh.write(b"\x89PNG\r\n\x1a\n" + b"fake")
+
+    monkeypatch.setattr(api, "_render_export", fake_render)
+
+    resp = app_with_data.get("/api/export?range=7d")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "image/png"
+    assert "attachment" in resp.headers["content-disposition"]
+    assert resp.content.startswith(b"\x89PNG")
+    assert "-p" in captured["argv"] and "7d" in captured["argv"]
+
+
+def test_export_bad_range_400(app_with_data, monkeypatch):
+    from backend import api
+    async def fake_render(argv, out_path):  # should never be called
+        raise AssertionError("render must not run on bad range")
+    monkeypatch.setattr(api, "_render_export", fake_render)
+    resp = app_with_data.get("/api/export?range=banana")
+    assert resp.status_code == 400
+
+
 def test_plot_db_project_filter_subsets_events(app_with_data):
     """load_events(project=...) returns a strict subset of all-projects,
     and every returned event belongs to the requested project."""

@@ -61,6 +61,57 @@ def _export_filename(rng: str, project: str | None) -> str:
     return f"ccusage_{proj_slug}_{rng}.png"
 
 
+async def _render_export(argv: list[str], out_path: str) -> None:
+    """Run the plot subprocess, bounded by _EXPORT_TIMEOUT_S. Raises
+    HTTPException(503) on timeout, HTTPException(500) on non-zero exit."""
+    proc = await asyncio.create_subprocess_exec(
+        *argv,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=_EXPORT_TIMEOUT_S)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        raise HTTPException(503, "export render timed out")
+    if proc.returncode != 0:
+        tail = (stderr or b"").decode("utf-8", "replace")[-500:]
+        print(f"[export] render failed (rc={proc.returncode}): {tail}", file=sys.stderr)
+        raise HTTPException(500, "export render failed")
+
+
+@router.get("/export")
+async def export_png(
+    range: str = Query("30d"),
+    project: str | None = Query(None),
+):
+    """Render the full matplotlib dashboard PNG for the active filters.
+    Logged-in only (guests are blocked in session.auth_middleware)."""
+    _parse_range(range)  # validation only — raises HTTPException(400) on garbage
+    db_url = os.environ["DATABASE_URL_VIZ"]
+    fd, out_path = tempfile.mkstemp(suffix=".png", prefix="ccudash_export_")
+    os.close(fd)
+    try:
+        argv = _build_export_argv(range, project, out_path, db_url)
+        async with _export_lock:
+            await _render_export(argv, out_path)
+        with open(out_path, "rb") as fh:
+            png = fh.read()
+    finally:
+        try:
+            os.unlink(out_path)
+        except OSError:
+            pass
+    return Response(
+        content=png,
+        media_type="image/png",
+        headers={
+            "Content-Disposition": f'attachment; filename="{_export_filename(range, project)}"'
+        },
+    )
+
+
 @router.get("/me")
 async def me(request: Request) -> dict:
     """Identity probe — frontend uses `is_guest` to decide which UI
