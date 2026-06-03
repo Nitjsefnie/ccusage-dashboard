@@ -43,9 +43,11 @@ _EXPORT_TIMEOUT_S = 120
 _export_lock = asyncio.Semaphore(1)
 
 
-def _build_export_argv(rng: str, project: str | None, out_path: str, db_url: str) -> list[str]:
-    """Construct the argv for the plot subprocess. `all` → --all, else -p <rng>."""
-    argv = [_EXPORT_PYTHON, _EXPORT_SCRIPT, "--db-url", db_url, "-o", out_path]
+def _build_export_argv(rng: str, project: str | None, out_path: str) -> list[str]:
+    """Construct the argv for the plot subprocess. The child inherits
+    DATABASE_URL_VIZ from the environment, so the DSN is NOT passed on the
+    command line (keeps credentials out of the process list)."""
+    argv = [_EXPORT_PYTHON, _EXPORT_SCRIPT, "-o", out_path]
     if rng == "all":
         argv.append("--all")
     else:
@@ -89,11 +91,12 @@ async def export_png(
     """Render the full matplotlib dashboard PNG for the active filters.
     Logged-in only (guests are blocked in session.auth_middleware)."""
     _parse_range(range)  # validation only — raises HTTPException(400) on garbage
-    db_url = os.environ["DATABASE_URL_VIZ"]
+    if _export_lock.locked():
+        raise HTTPException(503, "an export is already in progress; try again shortly")
     fd, out_path = tempfile.mkstemp(suffix=".png", prefix="ccudash_export_")
     os.close(fd)
     try:
-        argv = _build_export_argv(range, project, out_path, db_url)
+        argv = _build_export_argv(range, project, out_path)
         async with _export_lock:
             await _render_export(argv, out_path)
         with open(out_path, "rb") as fh:

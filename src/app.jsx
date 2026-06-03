@@ -416,22 +416,47 @@ function RangePicker({ active, onChange }) {
 
 function ExportButton({ range, project }) {
   const [busy, setBusy] = useState(false);
-  const href = `/api/export?range=${encodeURIComponent(range)}` +
-    (project ? `&project=${encodeURIComponent(project)}` : '');
-  const onClick = (e) => {
-    if (busy) { e.preventDefault(); return; }
+  const [err, setErr] = useState('');
+  const onClick = async () => {
+    if (busy) return;
     setBusy(true);
-    // Re-enable after a beat so a stuck render doesn't permanently disable it.
-    setTimeout(() => setBusy(false), 3000);
+    setErr('');
+    const url = `/api/export?range=${encodeURIComponent(range)}` +
+      (project ? `&project=${encodeURIComponent(project)}` : '');
+    try {
+      const res = await fetch(url, { credentials: 'same-origin' });
+      if (!res.ok) {
+        let msg = `export failed (${res.status})`;
+        try { const j = await res.json(); if (j && j.detail) msg = j.detail; } catch (_) {}
+        setErr(msg);
+        return;
+      }
+      const blob = await res.blob();
+      const objUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = objUrl;
+      a.download = `ccusage_${project || 'all'}_${range}.png`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(objUrl);
+    } catch (e) {
+      setErr('export failed');
+    } finally {
+      setBusy(false);
+    }
   };
   return (
-    <a
-      className="pp-btn"
-      style={{ marginLeft: 12, opacity: busy ? 0.5 : 1, pointerEvents: busy ? 'none' : 'auto' }}
-      href={href}
-      onClick={onClick}
-      title="Download a PNG of this dashboard for the current filters"
-    >{busy ? 'rendering…' : 'Export PNG'}</a>
+    <span style={{ display: 'inline-flex', alignItems: 'center' }}>
+      <button
+        className="pp-btn"
+        style={{ marginLeft: 12, opacity: busy ? 0.5 : 1 }}
+        onClick={onClick}
+        disabled={busy}
+        title="Download a PNG of this dashboard for the current filters"
+      >{busy ? 'rendering…' : 'Export PNG'}</button>
+      {err && <span style={{ color: '#ff6b6b', fontSize: 11, marginLeft: 8 }}>{err}</span>}
+    </span>
   );
 }
 

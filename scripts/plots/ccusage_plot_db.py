@@ -890,6 +890,8 @@ def plot_burn_rate(ax, events, sessions, window_boundaries, limit_hits,
 
 
 def plot_timeline(events, period_str, output_path, tz=None, highlight=None, project=None):
+    if plt is None:
+        raise RuntimeError("matplotlib is required to render plots")
     apply_theme()
 
     if tz:

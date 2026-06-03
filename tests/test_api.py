@@ -23,20 +23,21 @@ def _load_plot_db_module():
 
 def test_build_export_argv_period_and_project():
     from backend import api
-    argv = api._build_export_argv("7d", "myproj", "/tmp/out.png", db_url="postgresql:///x")
+    argv = api._build_export_argv("7d", "myproj", "/tmp/out.png")
     assert "/tmp/out.png" in argv
     assert argv[argv.index("-p") + 1] == "7d"
     assert argv[argv.index("--project") + 1] == "myproj"
-    assert argv[argv.index("--db-url") + 1] == "postgresql:///x"
+    assert "--db-url" not in argv  # DSN comes from inherited env, not argv
     assert "--all" not in argv
 
 
 def test_build_export_argv_all_and_no_project():
     from backend import api
-    argv = api._build_export_argv("all", None, "/tmp/out.png", db_url="postgresql:///x")
+    argv = api._build_export_argv("all", None, "/tmp/out.png")
     assert "--all" in argv
     assert "-p" not in argv
     assert "--project" not in argv
+    assert "--db-url" not in argv
 
 
 def test_export_returns_png_attachment(app_with_data, monkeypatch):
@@ -67,6 +68,26 @@ def test_export_bad_range_400(app_with_data, monkeypatch):
     monkeypatch.setattr(api, "_render_export", fake_render)
     resp = app_with_data.get("/api/export?range=banana")
     assert resp.status_code == 400
+
+
+def test_export_render_timeout_returns_503(app_with_data, monkeypatch):
+    from backend import api
+    from fastapi import HTTPException
+    async def fake_render(argv, out_path):
+        raise HTTPException(503, "export render timed out")
+    monkeypatch.setattr(api, "_render_export", fake_render)
+    resp = app_with_data.get("/api/export?range=7d")
+    assert resp.status_code == 503
+
+
+def test_export_render_failure_returns_500(app_with_data, monkeypatch):
+    from backend import api
+    from fastapi import HTTPException
+    async def fake_render(argv, out_path):
+        raise HTTPException(500, "export render failed")
+    monkeypatch.setattr(api, "_render_export", fake_render)
+    resp = app_with_data.get("/api/export?range=7d")
+    assert resp.status_code == 500
 
 
 def test_plot_db_project_filter_subsets_events(app_with_data):
