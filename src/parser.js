@@ -295,6 +295,8 @@ window.parseTranscript = function parseTranscript(text, opts) {
 // Inspector (computeSessionStats below) and the Token Breakdown panel
 // (app.jsx) read these via window.modelRates / window.rateForModel.
 window.modelRates = {
+  'claude-fable-5':    { fresh: 10,   c5: 12.5,  c1h: 20,   read: 1,    out: 50 },
+  'claude-opus-4-8':   { fresh: 5,    c5: 6.25,  c1h: 10,   read: 0.5,  out: 25 },
   'claude-opus-4-7':   { fresh: 5,    c5: 6.25,  c1h: 10,   read: 0.5,  out: 25 },
   'claude-opus-4-6':   { fresh: 5,    c5: 6.25,  c1h: 10,   read: 0.5,  out: 25 },
   'claude-opus-4-5':   { fresh: 5,    c5: 6.25,  c1h: 10,   read: 0.5,  out: 25 },

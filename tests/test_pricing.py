@@ -13,6 +13,23 @@ def test_opus_4_7_rates_match_canonical():
     }
 
 
+def test_fable_5_rates_are_double_opus_4x():
+    f = pricing.rate_for("claude-fable-5")
+    o = pricing.rate_for("claude-opus-4-8")
+    assert f == {
+        "fresh": 10.00, "create_5m": 12.50, "create_1h": 20.00,
+        "read": 1.00, "output": 50.00,
+    }
+    assert all(f[k] == 2 * o[k] for k in f)
+    # model ids carry suffixes like claude-fable-5[1m]
+    assert pricing.rate_for("claude-fable-5[1m]") == f
+
+
+def test_opus_4_8_does_not_misroute_to_legacy_opus_4():
+    r = pricing.rate_for("claude-opus-4-8")
+    assert r["fresh"] == 5.00 and r["output"] == 25.00
+
+
 def test_sonnet_4_5_rates():
     r = pricing.rate_for("claude-sonnet-4-5")
     assert r["fresh"] == 3.00 and r["create_5m"] == 3.75
