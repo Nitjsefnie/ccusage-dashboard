@@ -30,6 +30,8 @@ const COL = {
 };
 
 const MODEL_COLORS = {
+  'fable-5':     'oklch(0.78 0.17 330)',  // magenta — top tier
+  'opus-4-8':    'oklch(0.70 0.17 5)',    // rose
   'opus-4-7':    'oklch(0.72 0.16 25)',   // coral
   'opus-4-6':    'oklch(0.78 0.14 55)',   // amber
   'opus-4-5':    'oklch(0.85 0.14 90)',   // gold
@@ -73,6 +75,59 @@ function fmtDate(ts, opts = {}) {
   if (opts.full) return `${M[d.getUTCMonth()]} ${String(d.getUTCDate()).padStart(2,'0')} ${String(d.getUTCHours()).padStart(2,'0')}:${String(d.getUTCMinutes()).padStart(2,'0')}`;
   return d.toISOString();
 }
+
+// Adaptive UTC x-axis ticks: months when the span is wide, day starts
+// for medium spans, hours for narrow ones. Month-only ticks (the old
+// behavior in every panel) left the x-axis completely unlabeled on the
+// 24h / 7d / 30d range presets. Returns [{ts, label}].
+function timeTicksUTC(start, end) {
+  const HOUR = 3600_000, DAY = 24 * HOUR;
+  const span = Math.max(1, end - start);
+  const ticks = [];
+  if (span >= 80 * DAY) {
+    // Month starts, thinned to ≤ ~12 labels.
+    const all = [];
+    const d = new Date(start);
+    let m = d.getUTCMonth(), y = d.getUTCFullYear();
+    for (let it = 0; it < 60; it++) {
+      const t = Date.UTC(y, m, 1);
+      if (t > end) break;
+      if (t > start) all.push(t);
+      m++; if (m > 11) { m = 0; y++; }
+    }
+    const step = Math.max(1, Math.ceil(all.length / 12));
+    for (let i = 0; i < all.length; i += step) {
+      ticks.push({ ts: all[i], label: fmtDate(all[i], { month: true }) });
+    }
+  } else if (span >= 3 * DAY) {
+    // Day starts.
+    const stepDays = span > 50 * DAY ? 7 : span > 25 * DAY ? 4 : span > 12 * DAY ? 2 : 1;
+    const d0 = new Date(start);
+    let t = Date.UTC(d0.getUTCFullYear(), d0.getUTCMonth(), d0.getUTCDate());
+    while (t <= end) {
+      if (t > start) ticks.push({ ts: t, label: fmtDate(t, { day: true }) });
+      t += stepDays * DAY;
+    }
+  } else {
+    // Hour marks.
+    const stepH = span > 36 * HOUR ? 6 : span > 18 * HOUR ? 3 : span > 8 * HOUR ? 2 : 1;
+    let t = Math.ceil(start / (stepH * HOUR)) * (stepH * HOUR);
+    while (t <= end) {
+      const d = new Date(t);
+      ticks.push({ ts: t, label: `${String(d.getUTCHours()).padStart(2, '0')}:00` });
+      t += stepH * HOUR;
+    }
+  }
+  return ticks;
+}
+
+// Human label for a bin width ("5m", "6h", "1d") — used by axis legends.
+function binMsLabel(ms) {
+  if (ms < HOUR_MS) return (ms / 60_000) + 'm';
+  if (ms < 24 * HOUR_MS) return (ms / HOUR_MS) + 'h';
+  return (ms / (24 * HOUR_MS)) + 'd';
+}
+const HOUR_MS = 3600_000;
 
 // --- Tooltip primitive (positioned in container, follows the cursor) ---
 // Flips left/up when it would overflow the viewport right/bottom edges.
@@ -187,14 +242,7 @@ function TimeSeriesPanel({ title, events, valueKey, color, isCurrency, range, bi
   const yBar = v => padT + plotH - (v / maxBin) * plotH;
   const yCum = v => padT + plotH - (v / maxCum) * plotH;
 
-  const ticks = [];
-  const startD = new Date(range.start);
-  let m = startD.getUTCMonth(), y = startD.getUTCFullYear();
-  for (let it = 0; it < 24; it++) {
-    const t = Date.UTC(y, m, 1);
-    if (t > range.start && t < range.end) ticks.push(t);
-    m++; if (m > 11) { m = 0; y++; }
-  }
+  const ticks = timeTicksUTC(range.start, range.end);
 
   function niceTicks(maxV, n = 4) {
     const step0 = maxV / n;
@@ -290,9 +338,9 @@ function TimeSeriesPanel({ title, events, valueKey, color, isCurrency, range, bi
           </text>
         ))}
         {ticks.map((t, idx) => (
-          <text key={'x'+idx} x={xScale(t)} y={h - padB + 14}
+          <text key={'x'+idx} x={xScale(t.ts)} y={h - padB + 14}
             fontSize="9" fill={TH.textDim} textAnchor="middle" fontFamily="monospace">
-            {fmtDate(t, { month: true })}
+            {t.label}
           </text>
         ))}
 
@@ -301,7 +349,7 @@ function TimeSeriesPanel({ title, events, valueKey, color, isCurrency, range, bi
 
         <text x={12} y={padT + plotH/2} fontSize="9" fill={TH.textDim}
           textAnchor="middle" fontFamily="monospace"
-          transform={`rotate(-90 12 ${padT + plotH/2})`}>per 1d</text>
+          transform={`rotate(-90 12 ${padT + plotH/2})`}>per {binMsLabel(binMs)}</text>
         <text x={w - 12} y={padT + plotH/2} fontSize="9" fill={TH.textDim}
           textAnchor="middle" fontFamily="monospace"
           transform={`rotate(-90 ${w - 12} ${padT + plotH/2})`}>cumulative</text>
@@ -341,7 +389,9 @@ function HBar({ title, rows, totalForPct, fmt, fixedColors }) {
     return () => ro.disconnect();
   }, []);
 
-  const h = 40 + rows.length * 44;
+  // Rows render on a 36px pitch from padT — size the SVG to exactly
+  // that (the old 40 + rows*44 left ~8px of dead space per row).
+  const h = 32 + rows.length * 36 + 18;
   // Dynamic left pad: fits the widest label at 11px monospace
   // (~6.6px/char), clamped so the bar still has room.
   const FONT_CHAR_PX = 6.6;
@@ -350,7 +400,7 @@ function HBar({ title, rows, totalForPct, fmt, fixedColors }) {
     Math.max(60, w * 0.45),
     Math.ceil(longestLabelChars * FONT_CHAR_PX) + 16
   );
-  const padR = 60, padT = 32, padB = 18;
+  const padR = 60, padT = 32;
   const plotW = Math.max(10, w - padL - padR);
   const max = Math.max(1, ...rows.map(r => r.value));
   const xMax = max * 1.4;
@@ -559,14 +609,7 @@ function BurnRatePanel({ events, sessions, limitHits, range: propRange, windowBo
   const yTicks = [];
   for (let p = Math.ceil(logYMin); p <= Math.floor(logYMax); p++) yTicks.push(Math.pow(10, p));
 
-  const xTicks = [];
-  const startD = new Date(range.start);
-  let mn = startD.getUTCMonth(), yr = startD.getUTCFullYear();
-  for (let it = 0; it < 24; it++) {
-    const t = Date.UTC(yr, mn, 1);
-    if (t > range.start && t < range.end) xTicks.push(t);
-    mn++; if (mn > 11) { mn = 0; yr++; }
-  }
+  const xTicks = timeTicksUTC(range.start, range.end);
 
   // Find nearest session dot to cursor
   function onMove(e) {
@@ -736,9 +779,9 @@ function BurnRatePanel({ events, sessions, limitHits, range: propRange, windowBo
         ))}
         </g>
         {xTicks.map((t, i) => (
-          <text key={'x'+i} x={xScale(t)} y={h - padB + 14}
+          <text key={'x'+i} x={xScale(t.ts)} y={h - padB + 14}
             fontSize="10" fill={TH.textDim} textAnchor="middle" fontFamily="monospace">
-            {fmtDate(t, { month: true })}
+            {t.label}
           </text>
         ))}
         <text x={14} y={padT + plotH/2} fontSize="10" fill={TH.textDim}
@@ -772,3 +815,4 @@ window.modelColors = MODEL_COLORS;
 window.humanFmt = humanFmt;
 window.humanCurrency = humanCurrency;
 window.fmtDate = fmtDate;
+window.timeTicksUTC = timeTicksUTC;

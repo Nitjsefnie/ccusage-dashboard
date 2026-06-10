@@ -98,8 +98,7 @@ function ContextGrowthView({ tx }) {
   for (const r of rows) counts[r.model] = (counts[r.model] || 0) + 1;
   let dom = '', max = 0;
   for (const [m, c] of Object.entries(counts)) if (c > max) { max = c; dom = m; }
-  const isOpus = dom.toLowerCase().includes('opus');
-  const cap = isOpus ? 1_000_000 : 200_000;
+  const cap = window.capForModel(shortModel(dom));
 
   const peakCtx = Math.max(...rows.map(r => r.ctx));
   const peakOut = Math.max(...rows.map(r => r.output));
@@ -182,8 +181,9 @@ function SummaryStat({ label, value }) {
 
 function shortModel(m) {
   if (!m) return '?';
-  const mm = String(m).match(/(opus|sonnet|haiku)[-_]?(\d[-_]?\d?)/i);
-  return mm ? `${mm[1].toLowerCase()}-${mm[2].replace('_','-')}` : m;
+  // Canonical short name shared with the dashboard ("claude-fable-5[1m]"
+  // → "fable-5"). The old regex here only knew opus/sonnet/haiku.
+  return window.shortModelName ? window.shortModelName(m) : m;
 }
 
 function ContextChart({ rows, cap, hoverIdx, setHoverIdx }) {

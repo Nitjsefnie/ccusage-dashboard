@@ -120,15 +120,8 @@ function CacheTTLPanel({ events, range, binMs }) {
   }
   const yTicks = niceTicks(maxBin);
 
-  // x ticks (months)
-  const xTicks = [];
-  const startD = new Date(useRange.start);
-  let mn = startD.getUTCMonth(), yr = startD.getUTCFullYear();
-  for (let it = 0; it < 24; it++) {
-    const t = Date.UTC(yr, mn, 1);
-    if (t > useRange.start && t < useRange.end) xTicks.push(t);
-    mn++; if (mn > 11) { mn = 0; yr++; }
-  }
+  // x ticks (adaptive: months / days / hours)
+  const xTicks = window.timeTicksUTC(useRange.start, useRange.end);
 
   // Share strip Y origin
   const shareTop = padT + plotH + gap;
@@ -332,9 +325,9 @@ function CacheTTLPanel({ events, range, binMs }) {
 
         {/* X-axis labels (under share strip) */}
         {xTicks.map((t, i) => (
-          <text key={'x'+i} x={xScale(t)} y={shareBot + 14}
+          <text key={'x'+i} x={xScale(t.ts)} y={shareBot + 14}
             fontSize="9" fill={TH_X.textDim} textAnchor="middle" fontFamily="monospace">
-            {fmtDate_X(t, { month: true })}
+            {t.label}
           </text>
         ))}
 
@@ -354,15 +347,19 @@ function CacheTTLPanel({ events, range, binMs }) {
 
 const CTX_TURN_CAP = Infinity;
 const MODEL_CAPS = {
+  'fable-5':    1_000_000,
+  'opus-4-8':   1_000_000,
   'opus-4-7':   1_000_000,
   'opus-4-6':   1_000_000,
   'opus-4-5':   1_000_000,
-  'sonnet-4-6':   200_000,
+  'sonnet-4-6': 1_000_000,
   'sonnet-4-5':   200_000,
   'haiku-4-5':    200_000,
 };
 function capForModel(m) {
-  return MODEL_CAPS[m] || (String(m).toLowerCase().includes('opus') ? 1_000_000 : 200_000);
+  const s = String(m).toLowerCase();
+  return MODEL_CAPS[m]
+    || ((s.includes('opus') || s.includes('fable')) ? 1_000_000 : 200_000);
 }
 
 function buildSessionTurns(events) {
@@ -572,6 +569,19 @@ function ContextSubPanel({ title, sessions, color, cap, w, h }) {
           </g>
         )}
 
+        {/* Sessions-still-active area (bottom strip) — the "active"
+            legend swatch refers to this; it had stopped being drawn. */}
+        {(() => {
+          const pts = [];
+          for (let i = 0; i < turns.length; i++) {
+            pts.push(`${xScale(turns[i])},${countY(count[i] || 0)}`);
+          }
+          if (pts.length < 2) return null;
+          const d = `M ${xScale(turns[0])},${padT + plotH} L ` + pts.join(' L ')
+            + ` L ${xScale(turns[turns.length - 1])},${padT + plotH} Z`;
+          return <path d={d} fill={color} fillOpacity="0.18" stroke="none" />;
+        })()}
+
         {/* Per-session traces */}
         {sessions.map((s, i) => {
           const pts = [];
@@ -692,7 +702,8 @@ function shortModelName(m) {
   if (!m) return 'unknown';
   let s = String(m).toLowerCase();
   if (s.startsWith('claude-')) s = s.slice('claude-'.length);
-  // Strip trailing -YYYYMMDD date
+  // Strip trailing [variant] tag (e.g. "claude-fable-5[1m]"), then -YYYYMMDD date
+  s = s.replace(/\[[^\]]*\]$/, '');
   s = s.replace(/-\d{8}$/, '');
   return s;
 }
@@ -793,7 +804,10 @@ function ContextGrowthPanel({ events, realSessions, ctxTraces }) {
     setOverrides(prev => ({ ...prev, [m]: !sel.has(m) }));
   }
 
-  const cellW = Math.max(280, (w - 16) / 2);
+  // Two cells + 24px row padding + 12px gap + 2px border per cell.
+  // (w-16)/2 overflowed the card by ~20px and showed up as horizontal
+  // bleed whenever the window was resized.
+  const cellW = Math.max(280, (w - 24 - 12 - 4) / 2);
   const cellH = 230;
   const cmpW = w;
   const cmpH = 240;
@@ -869,7 +883,7 @@ function ContextGrowthPanel({ events, realSessions, ctxTraces }) {
             const sessions = byModel[m.model] || [];
             let maxCtx = 0;
             for (const s of sessions) for (const p of s.seq) if (p.ctx > maxCtx) maxCtx = p.ctx;
-            const cap = m.model.includes('opus') ? 1_000_000 : 200_000;
+            const cap = capForModel(m.model);
             const color = (window.modelColors && window.modelColors[m.model]) || '#888';
             return (
               <ContextSubPanel key={m.model} title={m.model} sessions={sessions}
@@ -902,7 +916,7 @@ function ComparisonRow({ models, byModel, w, h }) {
   // expand if the data exceeds it.
   let observedMax = 0;
   for (const s of series) for (const v of s.stats.p90) if (v && v > observedMax) observedMax = v;
-  const baseCap = series.some(s => s.model.includes('opus')) ? 1_000_000 : 200_000;
+  const baseCap = Math.max(200_000, ...series.map(s => capForModel(s.model)));
   const cap = Math.max(baseCap, observedMax * 1.05);
   const yMax = cap * 1.05;
   // Dynamic x-domain: max turn across all checked models
@@ -1201,15 +1215,8 @@ function ResponseSizesPanel({ data, bucketS }) {
   const yTicks = [];
   for (let p = Math.ceil(logYMin); p <= Math.floor(logYMax); p++) yTicks.push(Math.pow(10, p));
 
-  // X-axis: month labels (UTC).
-  const xTicks = [];
-  const startD = new Date(tMin);
-  let mn = startD.getUTCMonth(), yr = startD.getUTCFullYear();
-  for (let it = 0; it < 36; it++) {
-    const t = Date.UTC(yr, mn, 1);
-    if (t > tMin && t < tMax) xTicks.push(t);
-    mn++; if (mn > 11) { mn = 0; yr++; }
-  }
+  // X-axis: adaptive labels (UTC).
+  const xTicks = window.timeTicksUTC(tMin, tMax);
 
   function onMove(e) {
     // Use the SVG's own bounding rect — the panel wraps the SVG in a
@@ -1361,11 +1368,11 @@ function ResponseSizesPanel({ data, bucketS }) {
               {window.humanFmt(v)}
             </text>
           ))}
-          {/* X labels (month) */}
+          {/* X labels */}
           {xTicks.map((t, i) => (
-            <text key={'xl'+i} x={xScale(t)} y={h - padB + 14}
+            <text key={'xl'+i} x={xScale(t.ts)} y={h - padB + 14}
               fontSize="9" fill={TH_X.textDim} textAnchor="middle" fontFamily="monospace">
-              {fmtDate_X(t, { month: true })}
+              {t.label}
             </text>
           ))}
           <text x={14} y={padT + plotH/2} fontSize="9" fill={TH_X.textDim}
@@ -1471,7 +1478,8 @@ function ToolErrorRatePanel({ project, range, nonce }) {
       .sort((a, b) => b.total - a.total);
   }, [byModel]);
 
-  const cellW = Math.max(280, (w - 16) / 2);
+  // Two cells + 16px row padding + 8px gap + 2px border per cell.
+  const cellW = Math.max(280, (w - 16 - 8 - 4) / 2);
   const cellH = 230;
 
   // Pair sub-panels into rows of 2.
@@ -1995,17 +2003,8 @@ function ToolUsagePanel({ models, project, range, nonce }) {
 
   // Y-axis ticks at 0/25/50/75/100%.
   const yTicks = [0, 0.25, 0.5, 0.75, 1.0];
-  // X-axis: month labels.
-  const xTicks = [];
-  if (isFinite(tMin) && isFinite(tMax)) {
-    const startD = new Date(tMin);
-    let mn = startD.getUTCMonth(), yr = startD.getUTCFullYear();
-    for (let it = 0; it < 36; it++) {
-      const t = Date.UTC(yr, mn, 1);
-      if (t > tMin && t < tMax) xTicks.push(t);
-      mn++; if (mn > 11) { mn = 0; yr++; }
-    }
-  }
+  // X-axis: adaptive labels.
+  const xTicks = (isFinite(tMin) && isFinite(tMax)) ? window.timeTicksUTC(tMin, tMax) : [];
 
   function onMove(e) {
     const rect = e.currentTarget.getBoundingClientRect();
@@ -2210,11 +2209,11 @@ function ToolUsagePanel({ models, project, range, nonce }) {
               {(v * 100).toFixed(0)}%
             </text>
           ))}
-          {/* X labels (month) */}
+          {/* X labels */}
           {xTicks.map((t, i) => (
-            <text key={'xl'+i} x={xScale(t)} y={h - padB + 14}
+            <text key={'xl'+i} x={xScale(t.ts)} y={h - padB + 14}
               fontSize="9" fill={TH_X.textDim} textAnchor="middle" fontFamily="monospace">
-              {fmtDate_X(t, { month: true })}
+              {t.label}
             </text>
           ))}
           {tip && (
@@ -2361,17 +2360,8 @@ function ReplyLatencyPanel({ project, range, nonce, models }) {
   const yTicks = [];
   for (let p = Math.ceil(logYMin); p <= Math.floor(logYMax); p++) yTicks.push(Math.pow(10, p));
 
-  // X month labels.
-  const xTicks = [];
-  if (isFinite(tMin) && isFinite(tMax)) {
-    const startD = new Date(tMin);
-    let mn = startD.getUTCMonth(), yr = startD.getUTCFullYear();
-    for (let it = 0; it < 36; it++) {
-      const t = Date.UTC(yr, mn, 1);
-      if (t > tMin && t < tMax) xTicks.push(t);
-      mn++; if (mn > 11) { mn = 0; yr++; }
-    }
-  }
+  // X adaptive labels.
+  const xTicks = (isFinite(tMin) && isFinite(tMax)) ? window.timeTicksUTC(tMin, tMax) : [];
 
   function fmtSecs(s) {
     if (s < 1) return s.toFixed(2) + 's';
@@ -2573,9 +2563,9 @@ function ReplyLatencyPanel({ project, range, nonce, models }) {
             </text>
           ))}
           {xTicks.map((t, i) => (
-            <text key={'xl'+i} x={xScale(t)} y={h - padB + 14}
+            <text key={'xl'+i} x={xScale(t.ts)} y={h - padB + 14}
               fontSize="9" fill={TH_X.textDim} textAnchor="middle" fontFamily="monospace">
-              {fmtDate_X(t, { month: true })}
+              {t.label}
             </text>
           ))}
           <text x={14} y={padT + plotH/2} fontSize="9" fill={TH_X.textDim}
@@ -2592,6 +2582,7 @@ window.CacheTTLPanel = CacheTTLPanel;
 window.ContextGrowthPanel = ContextGrowthPanel;
 window.DashTooltip = DashTooltip;
 window.shortModelName = shortModelName;
+window.capForModel = capForModel;
 window.ResponseSizesPanel = ResponseSizesPanel;
 window.ToolUsagePanel = ToolUsagePanel;
 window.ToolErrorRatePanel = ToolErrorRatePanel;

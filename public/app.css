@@ -224,7 +224,7 @@ a.loadbtn { display: inline-block; text-decoration: none; }
 
 .dash-summary {
   display: grid;
-  grid-template-columns: repeat(6, 1fr);
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 0;
   background: var(--panel-2);
   border: 1px solid var(--border);
@@ -243,7 +243,12 @@ a.loadbtn { display: inline-block; text-decoration: none; }
 }
 .dash-grid > div { height: 340px; }  /* was 320 */
 
-.dash-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+/* minmax(0,1fr) + min-width:0 — grid items default to min-width:auto,
+   so the fixed-width SVG inside pins the column and the panels can
+   never shrink back when the window narrows (Cost by Model / Token
+   Breakdown didn't autoresize). */
+.dash-grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.dash-grid-2 > div { min-width: 0; }
 
 .dash-ttl     { min-height: 340px; }
 .dash-foot { font-size: 14px; padding: 4px 4px 24px; }
@@ -284,6 +289,7 @@ code {
   border: 1px solid var(--border);
   border-radius: var(--r-md);
   overflow: hidden;
+  overflow-x: auto;   /* fixed-px row grid: scroll, don't clip, on narrow windows */
   box-shadow: var(--shadow-card);
 }
 .srow {
@@ -348,7 +354,7 @@ code {
 }
 
 .session-header {
-  display: grid; grid-template-columns: repeat(9, 1fr);
+  display: grid; grid-template-columns: repeat(9, minmax(0, 1fr));
   background: var(--panel-2); border-bottom: 1px solid var(--border);
 }
 .session-header .stat { border-right: 1px solid var(--border); padding: 12px 16px; }
@@ -584,4 +590,28 @@ button:focus-visible, .navbtn:focus-visible, .chip:focus-visible, .fchip:focus-v
   color: var(--fg-2);
   margin-top: 8px;
   font-family: var(--mono);
+}
+
+/* ── Responsive: window-resize behavior ─────────────────────────── */
+/* SVG panels track their container via ResizeObserver, but the fixed
+   2-column grids and the 480px inspector sidebar don't leave them
+   enough room on narrow windows — collapse to one column instead. */
+@media (max-width: 1200px) {
+  .dash-summary { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .dash-summary .stat:nth-child(4n) { border-right: 0; }
+}
+@media (max-width: 1000px) {
+  .dash-grid,
+  .dash-grid-2 { grid-template-columns: minmax(0, 1fr); }
+  .session-header { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 860px) {
+  .dash-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .dash-summary .stat:nth-child(2n) { border-right: 0; }
+  .session-body { grid-template-columns: 1fr; }
+  .session-side {
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+    max-height: 45vh;
+  }
 }
