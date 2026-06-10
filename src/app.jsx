@@ -314,7 +314,7 @@ function App() {
 
   return (
     <div className="app-root">
-      <TopBar route={route} setRoute={setRoute} isGuest={isGuest} backendOn={backendOn} range={activeRange} project={activeProject} loadFiles={loadFiles} />
+      <TopBar route={route} setRoute={setRoute} isGuest={isGuest} backendOn={backendOn} range={activeRange} project={activeProject} />
       {backendOn && !isGuest && projects && (
         <ProjectPicker
           projects={projects}
@@ -338,7 +338,7 @@ function App() {
           <window.ContextGrowthAgg project={activeProject} range={activeRange} />
         </div>
       )}
-      {route === 'session' && <SessionView tx={tx} loadFile={loadFile} />}
+      {route === 'session' && <SessionView tx={tx} loadFile={loadFile} loadFiles={loadFiles} />}
     </div>
   );
 }
@@ -513,8 +513,7 @@ function backendDashToShape(b) {
   };
 }
 
-function TopBar({ route, setRoute, isGuest, backendOn, range, project, loadFiles }) {
-  const fileRef = useRef(null);
+function TopBar({ route, setRoute, isGuest, backendOn, range, project }) {
   return (
     <header className="topbar">
       <div className="topbar-left">
@@ -537,17 +536,6 @@ function TopBar({ route, setRoute, isGuest, backendOn, range, project, loadFiles
         )}
       </nav>
       <div className="topbar-right">
-        {!isGuest && (
-          <>
-            <input ref={fileRef} type="file" multiple accept=".jsonl,.json,.txt,.zip"
-              style={{ display: 'none' }}
-              onChange={e => { loadFiles(e.target.files); e.target.value = ''; }} />
-            <button className="loadbtn" onClick={() => fileRef.current && fileRef.current.click()}
-              title="Load one or more .jsonl transcripts (or a .zip of them) — parsed in your browser">
-              Load .jsonl
-            </button>
-          </>
-        )}
         {backendOn && !isGuest && (
           <ExportButton range={range} project={project} />
         )}
@@ -890,7 +878,7 @@ function SessionsList({ synth, onOpen }) {
 // Session view
 // ─────────────────────────────────────────────────────────────────
 
-function SessionView({ tx, loadFile }) {
+function SessionView({ tx, loadFile, loadFiles }) {
   const [selected, setSelected] = useState(0);
   const [filter, setFilter] = useState({ user: true, asst: true, think: true, tool: true, result: true });
   const [search, setSearch] = useState('');
@@ -904,7 +892,13 @@ function SessionView({ tx, loadFile }) {
     const leave = () => el.classList.remove('drag');
     const drop = e => {
       e.preventDefault(); el.classList.remove('drag');
-      if (e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]);
+      const files = e.dataTransfer.files;
+      if (!files || !files.length) return;
+      const isZip = files[0].name.toLowerCase().endsWith('.zip');
+      // Single transcript → inspector; several files or a zip → the
+      // multi-file merge path (cross-file uuid dedup → dashboard).
+      if (files.length === 1 && !isZip) loadFile(files[0]);
+      else loadFiles(files);
     };
     el.addEventListener('dragover', over);
     el.addEventListener('dragleave', leave);
@@ -922,7 +916,7 @@ function SessionView({ tx, loadFile }) {
         <div className="drop-card">
           <div className="drop-glyph">⬇</div>
           <div className="drop-title">Drop a .jsonl transcript here</div>
-          <div className="drop-sub">Or use the <em>Load .jsonl</em> button up top. Files are parsed in your browser — nothing leaves the page.</div>
+          <div className="drop-sub">Drop several files (or a .zip of transcripts) to merge them into the dashboard. Files are parsed in your browser — nothing leaves the page.</div>
           <div className="drop-hints">
             <span>~/.claude/projects/&lt;hash&gt;/&lt;session-uuid&gt;.jsonl</span>
           </div>
