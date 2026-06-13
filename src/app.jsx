@@ -117,7 +117,7 @@ function txToDashData(tx) {
 function App() {
   const [route, setRoute] = useState('dashboard'); // dashboard | sessions | session
   const [tx, setTx] = useState(null); // parsed transcript {events, meta, stats}
-  const [filename, setFilename] = useState('');
+  const [, setFilename] = useState('');
   const [synth, setSynth] = useState(null);
   const [useSynth, setUseSynth] = useState(true);
   const [backendDash, setBackendDash] = useState(null);
@@ -192,9 +192,6 @@ function App() {
   const dashData = backendDash
     ? backendDashToShape(backendDash)
     : ((!useSynth && liveData) ? liveData : synth);
-  const dataLabel = backendDash
-    ? `backend: ${activeProject || 'all projects'}`
-    : ((!useSynth && liveData) ? `live: ${filename}` : 'synthetic preview');
 
   function loadFile(file) {
     const reader = new FileReader();
@@ -325,7 +322,7 @@ function App() {
       {backendOn && (
         <RangePicker active={activeRange} onChange={setActiveRange} />
       )}
-      {route === 'dashboard' && dashData && <Dashboard synth={dashData} dataLabel={dataLabel} models={models} backendOn={backendOn} activeProject={activeProject} activeRange={activeRange} dashNonce={dashNonce} />}
+      {route === 'dashboard' && dashData && <Dashboard synth={dashData} models={models} backendOn={backendOn} activeProject={activeProject} activeRange={activeRange} dashNonce={dashNonce} />}
       {route === 'sessions' && dashData && (
         <SessionsList
           synth={dashData}
@@ -572,7 +569,106 @@ function computeSessions(events) {
   return { sessions, windowBoundaries };
 }
 
-function Dashboard({ synth, dataLabel, models, backendOn, activeProject, activeRange, dashNonce }) {
+// Compute Token Breakdown rows (tokens + TTL-split cost per type) from a
+// set of hourly events. Shared by TokenBreakdownPanel; the per-panel model
+// filter passes a pre-filtered subset of events. Cost is always TTL-split
+// (eph5 × c5, eph1h × c1h, unsplit cache_create charged at the 5m rate).
+function computeTokenBreakdown(events) {
+  const t = { input: 0, output: 0, cc: 0, cr: 0, eph5: 0, eph1h: 0 };
+  for (const e of events) {
+    t.input += e.input_tokens; t.output += e.output_tokens;
+    t.cc += e.cache_create; t.cr += e.cache_read;
+    t.eph5 += e.ephemeral_5m; t.eph1h += e.ephemeral_1h;
+  }
+  const tokenTotal = t.input + t.output + t.cc + t.cr;
+  const ccUnsplit = Math.max(0, t.cc - t.eph5 - t.eph1h);
+
+  const c = { input: 0, output: 0, eph5: 0, eph1h: 0, ccUnsplit: 0, cr: 0 };
+  if (window.rateForModel) {
+    for (const e of events) {
+      const r = window.rateForModel(e.model);
+      const unsplit = Math.max(0, (e.cache_create || 0) - (e.ephemeral_5m || 0) - (e.ephemeral_1h || 0));
+      c.input     += (e.input_tokens   || 0) * r.fresh;
+      c.output    += (e.output_tokens  || 0) * r.out;
+      c.eph5      += (e.ephemeral_5m   || 0) * r.c5;
+      c.eph1h     += (e.ephemeral_1h   || 0) * r.c1h;
+      c.ccUnsplit += unsplit                  * r.c5;  // unsplit at 5m rate
+      c.cr        += (e.cache_read     || 0) * r.read;
+    }
+    for (const k of Object.keys(c)) c[k] = c[k] / 1_000_000;
+  }
+  const costTotal = c.input + c.output + c.eph5 + c.eph1h + c.ccUnsplit + c.cr;
+
+  const rows = [
+    { label: 'Input',             value: t.input,  cost: c.input,     color: window.dashboardCol.inputTokens },
+    { label: 'Output',            value: t.output, cost: c.output,    color: window.dashboardCol.outputTokens },
+    { label: 'Cache Create (5m)', value: t.eph5,   cost: c.eph5,      color: window.dashboardCol.cacheCreateTokens },
+    { label: 'Cache Create (1h)', value: t.eph1h,  cost: c.eph1h,     color: '#d488ff' },
+    ...(ccUnsplit > 0
+      ? [{ label: 'Cache Create (unsplit)', value: ccUnsplit, cost: c.ccUnsplit, color: '#7733aa' }]
+      : []),
+    { label: 'Cache Read',        value: t.cr,     cost: c.cr,        color: window.dashboardCol.cacheReadTokens },
+  ].filter(r => r.value > 0).sort((a, b) => b.cost - a.cost);
+
+  return { rows, tokenTotal: tokenTotal || 1, costTotal: costTotal || 1 };
+}
+
+// Paired token/cost breakdown bars with a per-panel model filter, mirroring
+// the model select on Tool Usage Ratio over Time. The filter is client-side
+// (events are already loaded) and applies to both bars at once.
+function TokenBreakdownPanel({ events }) {
+  const [activeModel, setActiveModel] = useState('');
+
+  // Model options derived from the events actually present (already short
+  // names via backendDashToShape), ordered by cost desc.
+  const modelOpts = useMemo(() => {
+    const byModel = {};
+    for (const e of events) {
+      if (!e.model || e.model === '<synthetic>' || e.model === 'synthetic') continue;
+      byModel[e.model] = (byModel[e.model] || 0) + (e.cost_usd || 0);
+    }
+    return Object.entries(byModel).sort((a, b) => b[1] - a[1]).map(([k]) => k);
+  }, [events]);
+
+  const filtered = useMemo(
+    () => (activeModel ? events.filter(e => e.model === activeModel) : events),
+    [events, activeModel]);
+  const { rows, tokenTotal, costTotal } = useMemo(
+    () => computeTokenBreakdown(filtered), [filtered]);
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'flex-end',
+        gap: 8, fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)',
+      }}>
+        <span>model:</span>
+        <select
+          value={activeModel}
+          onChange={e => setActiveModel(e.target.value)}
+          style={{
+            background: 'var(--panel-2)', color: 'var(--fg)',
+            border: '1px solid var(--border)', borderRadius: 4,
+            padding: '3px 6px', fontFamily: 'var(--mono)', fontSize: 11,
+            cursor: 'pointer',
+          }}>
+          <option value="">All</option>
+          {modelOpts.map(m => <option key={m} value={m}>{m}</option>)}
+        </select>
+      </div>
+      <window.HBar
+        title="Token Breakdown — by tokens"
+        rows={[...rows].sort((a, b) => b.value - a.value)}
+        fmt={r => `${window.humanFmt(r.value)} (${(r.value / tokenTotal * 100).toFixed(1)}%)`} />
+      <window.HBar
+        title="Token Breakdown — by cost"
+        rows={[...rows].map(r => ({ ...r, value: r.cost })).sort((a, b) => b.value - a.value)}
+        fmt={r => `${window.humanCurrency(r.value)} (${(r.value / costTotal * 100).toFixed(1)}%)`} />
+    </div>
+  );
+}
+
+function Dashboard({ synth, models, backendOn, activeProject, activeRange, dashNonce }) {
   const { events, limitHits, range, costByModel: backendByModel, sessionsOverride, totalSessions, mainWUsage, mainEmpty, subagentFiles, subagentOnlySessions, totalPrompts, totalTurns, responseSizes, ctxTraces, bucketS } = synth;
   const hasBackendByModel = backendByModel && Object.keys(backendByModel).length > 0;
   const computed = useMemo(() => computeSessions(events), [events]);
@@ -609,45 +705,6 @@ function Dashboard({ synth, dataLabel, models, backendOn, activeProject, activeR
     binMs = b;
   }
 
-  // Cache Create is split into 5m and 1h ephemerals; any leftover
-  // (legacy SDK rows that didn't carry the ephemeral_* split) is
-  // bucketed under "Cache Create (unsplit)" so it stays visible.
-  const ccUnsplit = Math.max(0, totals.cc - totals.eph5 - totals.eph1h);
-
-  // Per-token-type cost — sum tokens × per-model rate over hourly
-  // events using the shared rate table from parser.js. Lets the Token
-  // Breakdown panel show "{tokens} ({tok%}), ${cost} ({cost%})" per row.
-  const costByType = useMemo(() => {
-    const c = { input: 0, output: 0, eph5: 0, eph1h: 0, ccUnsplit: 0, cr: 0, total: 0 };
-    if (!window.rateForModel) return c;
-    for (const e of events) {
-      const r = window.rateForModel(e.model);
-      const unsplit = Math.max(0, (e.cache_create || 0) - (e.ephemeral_5m || 0) - (e.ephemeral_1h || 0));
-      c.input     += (e.input_tokens   || 0) * r.fresh;
-      c.output    += (e.output_tokens  || 0) * r.out;
-      c.eph5      += (e.ephemeral_5m   || 0) * r.c5;
-      c.eph1h     += (e.ephemeral_1h   || 0) * r.c1h;
-      c.ccUnsplit += unsplit                  * r.c5;  // unsplit at 5m rate
-      c.cr        += (e.cache_read     || 0) * r.read;
-    }
-    for (const k of Object.keys(c)) c[k] = c[k] / 1_000_000;
-    c.total = c.input + c.output + c.eph5 + c.eph1h + c.ccUnsplit + c.cr;
-    return c;
-  }, [events]);
-
-  const tokenBreakdown = [
-    { label: 'Input',             value: totals.input,  cost: costByType.input,     color: window.dashboardCol.inputTokens },
-    { label: 'Output',            value: totals.output, cost: costByType.output,    color: window.dashboardCol.outputTokens },
-    { label: 'Cache Create (5m)', value: totals.eph5,   cost: costByType.eph5,      color: window.dashboardCol.cacheCreateTokens },
-    { label: 'Cache Create (1h)', value: totals.eph1h,  cost: costByType.eph1h,     color: '#d488ff' },
-    ...(ccUnsplit > 0
-      ? [{ label: 'Cache Create (unsplit)', value: ccUnsplit, cost: costByType.ccUnsplit, color: '#7733aa' }]
-      : []),
-    { label: 'Cache Read',        value: totals.cr,     cost: costByType.cr,        color: window.dashboardCol.cacheReadTokens },
-  ].filter(r => r.value > 0).sort((a, b) => b.cost - a.cost);
-  const tokenBreakdownTotal = totals.total || 1;
-  const tokenBreakdownCostTotal = costByType.total || 1;
-
   const costByModel = Object.entries(totals.byModel)
     .filter(([, v]) => v > 0)
     .sort((a, b) => b[1] - a[1])
@@ -657,7 +714,6 @@ function Dashboard({ synth, dataLabel, models, backendOn, activeProject, activeR
 
   return (
     <div className="dashboard">
-      <div className="muted" style={{ padding: '0 2px' }}>data: {dataLabel}</div>
       <div className="dash-summary">
         <Stat label="window" value={`${window.fmtDate(range.start, {day:true})} – ${window.fmtDate(range.end, {day:true})}`} />
         <Stat label="main sessions with usage" value={(mainWUsage != null ? mainWUsage : (totalSessions != null ? totalSessions : (events.reduce((s, e) => s + (e.session_count || 0), 0) || sessions.length))).toLocaleString()} />
@@ -695,18 +751,7 @@ function Dashboard({ synth, dataLabel, models, backendOn, activeProject, activeR
           rows={costByModel}
           fixedColors={window.modelColors}
           fmt={r => window.humanCurrency(r.value)} />
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <window.HBar
-            title="Token Breakdown — by tokens"
-            rows={[...tokenBreakdown].sort((a, b) => b.value - a.value)}
-            fmt={r => `${window.humanFmt(r.value)} (${(r.value / tokenBreakdownTotal * 100).toFixed(1)}%)`} />
-          <window.HBar
-            title="Token Breakdown — by cost"
-            rows={[...tokenBreakdown]
-              .map(r => ({ ...r, value: r.cost }))
-              .sort((a, b) => b.value - a.value)}
-            fmt={r => `${window.humanCurrency(r.value)} (${(r.value / tokenBreakdownCostTotal * 100).toFixed(1)}%)`} />
-        </div>
+        <TokenBreakdownPanel events={events} />
       </div>
 
       <div className="dash-ttl">
