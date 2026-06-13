@@ -636,11 +636,19 @@ function TokenBreakdownPanel({ events }) {
   const { rows, tokenTotal, costTotal } = useMemo(
     () => computeTokenBreakdown(filtered), [filtered]);
 
+  // One bordered card (matching the sibling "Cost by Model" card) so the
+  // shared model filter visibly belongs to the whole Token Breakdown panel
+  // — the two bars are the same data sorted by tokens vs by cost, so a
+  // single picker drives both.
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+    <div style={{
+      background: 'var(--bg-card)', border: '1px solid var(--border)',
+      borderRadius: 4, display: 'flex', flexDirection: 'column',
+    }}>
       <div style={{
         display: 'flex', alignItems: 'center', justifyContent: 'flex-end',
-        gap: 8, fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)',
+        gap: 8, padding: '8px 14px 0',
+        fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)',
       }}>
         <span>model:</span>
         <select
@@ -657,10 +665,12 @@ function TokenBreakdownPanel({ events }) {
         </select>
       </div>
       <window.HBar
+        embedded
         title="Token Breakdown — by tokens"
         rows={[...rows].sort((a, b) => b.value - a.value)}
         fmt={r => `${window.humanFmt(r.value)} (${(r.value / tokenTotal * 100).toFixed(1)}%)`} />
       <window.HBar
+        embedded
         title="Token Breakdown — by cost"
         rows={[...rows].map(r => ({ ...r, value: r.cost })).sort((a, b) => b.value - a.value)}
         fmt={r => `${window.humanCurrency(r.value)} (${(r.value / costTotal * 100).toFixed(1)}%)`} />

@@ -376,7 +376,7 @@ function TimeSeriesPanel({ title, events, valueKey, color, isCurrency, range, bi
 }
 
 // --- Horizontal bar chart ---
-function HBar({ title, rows, totalForPct, fmt, fixedColors }) {
+function HBar({ title, rows, totalForPct, fmt, fixedColors, embedded }) {
   const ref = React.useRef(null);
   const [w, setW] = React.useState(600);
   const [hover, setHover] = React.useState(null);
@@ -422,7 +422,8 @@ function HBar({ title, rows, totalForPct, fmt, fixedColors }) {
 
   return (
     <div ref={ref} style={{
-      background: TH.bgAxes, border: `1px solid ${TH.border}`,
+      background: embedded ? 'transparent' : TH.bgAxes,
+      border: embedded ? 'none' : `1px solid ${TH.border}`,
       borderRadius: 4, padding: 0, position: 'relative',
     }}
     onMouseMove={e => {
