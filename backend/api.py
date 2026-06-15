@@ -879,9 +879,18 @@ async def get_sidecar(
     if path.startswith("/") or ".." in path.split("/"):
         raise HTTPException(400, "bad path")
     full_key = session_prefix + path
-    try:
-        body = r2.get_object(full_key)
-    except (PermissionError, FileNotFoundError):
+    # Data files may be stored xz-compressed (`<name>.xz`); try the plain key
+    # first, then the compressed one. r2.get_object inflates `.xz` transparently,
+    # so the response body is the original bytes either way and the media type
+    # still keys off the un-suffixed `path`.
+    body = None
+    for candidate in (full_key, full_key + ".xz"):
+        try:
+            body = r2.get_object(candidate)
+            break
+        except Exception:
+            continue
+    if body is None:
         raise HTTPException(404, "sidecar not found")
     media = "text/plain"
     if path.endswith(".jsonl"):

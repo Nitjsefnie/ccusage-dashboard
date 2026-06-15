@@ -1,3 +1,4 @@
+import lzma
 import os
 import shutil
 import tempfile
@@ -42,6 +43,26 @@ def test_list_keys_with_prefix(mini_r2):
 
 def test_get_object(mini_r2):
     assert r2.get_object("proj-a/sess-1/sess-1.jsonl") == b"hello\n"
+
+
+def test_get_object_inflates_xz(mini_r2):
+    # An xz-compressed object inflates transparently to its plain bytes.
+    plain = b'{"type":"user"}\n{"type":"assistant"}\n'
+    key = "proj-a/sess-1/sess-1.jsonl.xz"
+    (mini_r2 / "proj-a" / "sess-1" / "sess-1.jsonl.xz").write_bytes(
+        lzma.compress(plain)
+    )
+    assert r2.get_object(key) == plain
+
+
+def test_get_stream_inflates_xz(mini_r2):
+    # Streaming a `.xz` key yields the decompressed lines.
+    plain = b"alpha\nbeta\ngamma\n"
+    (mini_r2 / "proj-a" / "sess-1" / "s.jsonl.xz").write_bytes(
+        lzma.compress(plain)
+    )
+    with r2.get_stream("proj-a/sess-1/s.jsonl.xz") as fh:
+        assert fh.read() == plain
 
 
 def test_path_traversal_blocked(mini_r2):

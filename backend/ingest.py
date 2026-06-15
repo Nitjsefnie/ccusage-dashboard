@@ -57,7 +57,15 @@ def run_ingest(trigger: str) -> dict:
         seen_projects: dict[str, dict] = {}
 
         for obj in r2.list_keys():
-            if not obj.key.endswith(".jsonl"):
+            # Objects may be stored plain or per-object xz-compressed; r2
+            # get_object/get_stream inflate `.xz` transparently. Strip the
+            # matched suffix so the stem (and thus is_main) is unaffected by
+            # compression.
+            if obj.key.endswith(".jsonl.xz"):
+                suffix_len = len(".jsonl.xz")
+            elif obj.key.endswith(".jsonl"):
+                suffix_len = len(".jsonl")
+            else:
                 continue
             parts = obj.key.split("/")
             if len(parts) < 3:
@@ -65,7 +73,7 @@ def run_ingest(trigger: str) -> dict:
             project_id = parts[0]
             session_dir = parts[1]
             fname = parts[-1]
-            stem = fname[: -len(".jsonl")]
+            stem = fname[:-suffix_len]
             is_main = (stem == session_dir)
             session_id = session_dir
             listed += 1

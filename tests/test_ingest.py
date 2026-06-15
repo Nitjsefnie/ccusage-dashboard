@@ -1,3 +1,4 @@
+import lzma
 import os
 import shutil
 import tempfile
@@ -179,6 +180,36 @@ def test_first_seen_at_uses_least(fresh_db, mini_r2_env):
             "SELECT first_seen_at FROM projects WHERE project_id = 'projA'"
         ).fetchone()[0]
     assert after < before, f"first_seen_at should move backward: was {before}, now {after}"
+
+
+def test_xz_compressed_jsonl_ingests_transparently(fresh_db, mini_r2_env):
+    """A `*.jsonl.xz` object ingests like its plain form: r2.get_object
+    inflates it, the `.jsonl.xz` suffix is stripped for the stem so is_main
+    still holds, and records populate. Here sess-A's main file is replaced
+    by an xz copy — still 5 files, still 4 main, with records for sess-A."""
+    plain = mini_r2_env / "projA" / "sess-A" / "sess-A.jsonl"
+    raw = plain.read_bytes()
+    (plain.parent / "sess-A.jsonl.xz").write_bytes(lzma.compress(raw))
+    plain.unlink()
+
+    result = ingest.run_ingest(trigger="manual")
+    assert result["error"] is None
+    assert result["inserted"] == 5
+    with db.viz_conn() as c:
+        row = c.execute(
+            "SELECT file_key, is_main, session_id FROM files "
+            "WHERE file_key LIKE '%sess-A.jsonl.xz'"
+        ).fetchone()
+        assert row is not None, "compressed file should ingest"
+        assert row[0].endswith("sess-A/sess-A.jsonl.xz")
+        assert row[1] is True, "stem after stripping .jsonl.xz == sess-A → is_main"
+        assert row[2] == "sess-A"
+        n_main = c.execute("SELECT COUNT(*) FROM files WHERE is_main").fetchone()[0]
+        assert n_main == 4
+        n_rec = c.execute(
+            "SELECT COUNT(*) FROM records WHERE file_key LIKE '%sess-A.jsonl.xz'"
+        ).fetchone()[0]
+        assert n_rec > 0, "records populate from decompressed bytes"
 
 
 def test_ingest_flushes_response_cache(fresh_db, mini_r2_env):
