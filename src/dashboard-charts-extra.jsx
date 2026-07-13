@@ -2598,7 +2598,7 @@ function ActivityHeatmapPanel({ models, project, range, nonce }) {
   const [tip, setTip] = React.useState(null);
   const [cells, setCells] = React.useState([]);
   const [activeModel, setActiveModel] = React.useState('');
-  const [metric, setMetric] = React.useState('requests');
+  const [metric, setMetric] = React.useState('cost_usd');
 
   React.useEffect(() => {
     if (!ref.current) return;

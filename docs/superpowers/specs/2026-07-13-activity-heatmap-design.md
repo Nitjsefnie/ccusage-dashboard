@@ -72,7 +72,7 @@ day maps two UTC hours onto local hour 02 (it happens twice).
   deduped short-model list.
 - Refetches on `[project, range, activeModel, nonce]` (SSE `ingest_done` bumps
   `nonce` upstream — live updates for free).
-- **Metric toggle**: Requests (default) / Output tokens / Cost — three radio
+- **Metric toggle**: Requests / Output tokens / Cost (default) — three radio
   chips; the toggle switches which metric drives cell intensity.
 - **Grid**: SVG, 7 rows Mon→Sun top-to-bottom (English labels, Monday first —
   Czech week convention), 24 columns `0`–`23`. ~2px gaps between cells,
