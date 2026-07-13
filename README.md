@@ -52,7 +52,7 @@ with multi-user auth, R2 ingest, and live updates.
 - **Activity Heatmap** — weekday × hour grid of request activity in
   Czech local time (`Europe/Prague`, DST-aware via Postgres
   `AT TIME ZONE`), with requests / output-tokens / cost metric toggle
-  and a per-panel model filter.
+  and a per-panel model filter, plus Σ margin totals per weekday and per hour.
 - **Cross-file uuid dedup** at query time so sub-agent JSONLs roll
   into their parent session without double-counting.
 - **Rate-limit hit** detection (Claude Code's `out of extra usage`

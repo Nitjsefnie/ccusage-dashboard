@@ -2631,27 +2631,42 @@ function ActivityHeatmapPanel({ models, project, range, nonce }) {
 
   const mspec = _HEAT_METRICS.find(m => m.key === metric) || _HEAT_METRICS[0];
 
-  const { byCell, maxVal } = React.useMemo(() => {
+  const { byCell, maxVal, rowTotals, colTotals, grand, rowMax, colMax } = React.useMemo(() => {
     const byCell = new Map();               // dow*100+hour -> cell
     let maxVal = 0;
+    const zero = () => ({ requests: 0, output_tokens: 0, cost_usd: 0 });
+    const rowTotals = Array.from({ length: 7 }, zero);
+    const colTotals = Array.from({ length: 24 }, zero);
+    const grand = zero();
     for (const c of cells || []) {
       byCell.set(c.dow * 100 + c.hour, c);
       maxVal = Math.max(maxVal, c[metric] || 0);
+      const r = rowTotals[c.dow - 1];
+      const col = colTotals[c.hour];
+      for (const k of ['requests', 'output_tokens', 'cost_usd']) {
+        const v = c[k] || 0;
+        r[k] += v; col[k] += v; grand[k] += v;
+      }
     }
-    return { byCell, maxVal };
+    const rowMax = Math.max(...rowTotals.map(r => r[metric]), 0);
+    const colMax = Math.max(...colTotals.map(c => c[metric]), 0);
+    return { byCell, maxVal, rowTotals, colTotals, grand, rowMax, colMax };
   }, [cells, metric]);
 
-  // Geometry — 24 columns × 7 rows, label gutters left + top.
+  // Geometry — 25 columns × 8 rows (24 hours + Σ, 7 days + Σ), label gutters left + top.
   const padL = 44, padR = 14, padT = 24, padB = 10, gap = 2;
-  const cellW = Math.max(8, (w - padL - padR - 23 * gap) / 24);
+  const SUM_GAP = 8;
+  const cellW = Math.max(8, (w - padL - padR - SUM_GAP - 23 * gap) / 25);
   const cellH = Math.min(34, Math.max(18, cellW * 0.8));
-  const h = padT + 7 * cellH + 6 * gap + padB;
+  const h = padT + 7 * cellH + 6 * gap + SUM_GAP + cellH + padB;
+  const sumColX = padL + 23 * (cellW + gap) + cellW + SUM_GAP;
+  const sumRowY = padT + 6 * (cellH + gap) + cellH + SUM_GAP;
 
   // Sequential single-hue ramp on the dark surface: intensity = opacity
   // of the metric hue; sqrt keeps the heavy-tailed mid-range readable.
-  function fillFor(v) {
-    if (!v || maxVal <= 0) return TH_X.bgDark;
-    const t = Math.sqrt(v / maxVal);
+  function fillFor(v, scaleMax) {
+    if (!v || scaleMax <= 0) return { color: TH_X.bgDark, opacity: 1 };
+    const t = Math.sqrt(v / scaleMax);
     return { color: mspec.color, opacity: Math.max(0.08, t) };
   }
 
@@ -2674,6 +2689,56 @@ function ActivityHeatmapPanel({ models, project, range, nonce }) {
         ['output tok', humanFmt_X(c.output_tokens)],
         ['cost',       window.humanCurrency(c.cost_usd)],
       ] : [['activity', 'none']],
+    });
+  }
+
+  function onSumColEnter(e, dow) {
+    const rect = ref.current.getBoundingClientRect();
+    const r = rowTotals[dow - 1];
+    const v = r[metric];
+    const pct = grand[metric] > 0 ? (v / grand[metric] * 100).toFixed(1) : '0.0';
+    setTip({
+      x: e.clientX - rect.left, y: e.clientY - rect.top,
+      title: `${_HEAT_DOW[dow - 1]} · all hours`,
+      accent: mspec.color,
+      lines: [
+        ['requests',   r.requests.toLocaleString()],
+        ['output tok', humanFmt_X(r.output_tokens)],
+        ['cost',       window.humanCurrency(r.cost_usd)],
+        ['share',      pct + '% of total'],
+      ],
+    });
+  }
+
+  function onSumRowEnter(e, hour) {
+    const rect = ref.current.getBoundingClientRect();
+    const c = colTotals[hour];
+    const v = c[metric];
+    const pct = grand[metric] > 0 ? (v / grand[metric] * 100).toFixed(1) : '0.0';
+    setTip({
+      x: e.clientX - rect.left, y: e.clientY - rect.top,
+      title: `${String(hour).padStart(2, '0')}:00–${String((hour + 1) % 24).padStart(2, '0')}:00 · all days`,
+      accent: mspec.color,
+      lines: [
+        ['requests',   c.requests.toLocaleString()],
+        ['output tok', humanFmt_X(c.output_tokens)],
+        ['cost',       window.humanCurrency(c.cost_usd)],
+        ['share',      pct + '% of total'],
+      ],
+    });
+  }
+
+  function onCornerEnter(e) {
+    const rect = ref.current.getBoundingClientRect();
+    setTip({
+      x: e.clientX - rect.left, y: e.clientY - rect.top,
+      title: 'Total',
+      accent: mspec.color,
+      lines: [
+        ['requests',   grand.requests.toLocaleString()],
+        ['output tok', humanFmt_X(grand.output_tokens)],
+        ['cost',       window.humanCurrency(grand.cost_usd)],
+      ],
     });
   }
 
@@ -2727,36 +2792,90 @@ function ActivityHeatmapPanel({ models, project, range, nonce }) {
 
       <svg width="100%" height={h} style={{ display: 'block' }}
            onMouseLeave={() => setTip(null)}>
+        {/* Separator lines in the SUM_GAP bands — margins read as distinct. */}
+        <line x1={padL + 23 * (cellW + gap) + cellW + SUM_GAP / 2}
+              x2={padL + 23 * (cellW + gap) + cellW + SUM_GAP / 2}
+              y1={padT} y2={sumRowY + cellH}
+              stroke={TH_X.border} strokeWidth="1" />
+        <line x1={padL}
+              x2={sumColX + cellW}
+              y1={padT + 6 * (cellH + gap) + cellH + SUM_GAP / 2}
+              y2={padT + 6 * (cellH + gap) + cellH + SUM_GAP / 2}
+              stroke={TH_X.border} strokeWidth="1" />
+
         {/* hour labels every 3h */}
         {[0, 3, 6, 9, 12, 15, 18, 21].map(hr => (
           <text key={hr} x={cellRect(1, hr).x + cellW / 2} y={padT - 8}
                 textAnchor="middle" fill={TH_X.textDim}
                 fontFamily="monospace" fontSize="9">{hr}</text>
         ))}
+        {/* Σ column header */}
+        <text x={sumColX + cellW / 2} y={padT - 8}
+              textAnchor="middle" fill={TH_X.textDim}
+              fontFamily="monospace" fontSize="9">Σ</text>
+
         {/* weekday labels */}
         {_HEAT_DOW.map((d, i) => (
           <text key={d} x={padL - 8} y={padT + i * (cellH + gap) + cellH / 2 + 3}
                 textAnchor="end" fill={TH_X.textDim}
                 fontFamily="monospace" fontSize="9">{d}</text>
         ))}
+        {/* Σ row label */}
+        <text x={padL - 8} y={sumRowY + cellH / 2 + 3}
+              textAnchor="end" fill={TH_X.textDim}
+              fontFamily="monospace" fontSize="9">Σ</text>
+
         {/* cells */}
         {Array.from({ length: 7 }, (_, di) => di + 1).map(dow =>
           Array.from({ length: 24 }, (_, hour) => {
             const { x, y } = cellRect(dow, hour);
             const c = byCell.get(dow * 100 + hour);
             const v = c ? (c[metric] || 0) : 0;
-            const f = fillFor(v);
+            const f = fillFor(v, maxVal);
             return (
               <rect key={`${dow}-${hour}`} x={x} y={y}
                     width={cellW} height={cellH} rx="2"
-                    fill={typeof f === 'string' ? f : f.color}
-                    fillOpacity={typeof f === 'string' ? 1 : f.opacity}
+                    fill={f.color} fillOpacity={f.opacity}
                     stroke={v > 0 ? 'none' : TH_X.border}
                     strokeWidth={v > 0 ? 0 : 0.5}
                     onMouseMove={e => onCellEnter(e, dow, hour)} />
             );
           })
         )}
+
+        {/* Σ column (per-weekday totals) */}
+        {Array.from({ length: 7 }, (_, i) => i + 1).map(dow => {
+          const v = rowTotals[dow - 1][metric];
+          const f = fillFor(v, rowMax);
+          return (
+            <rect key={`sumcol-${dow}`} x={sumColX}
+                  y={padT + (dow - 1) * (cellH + gap)}
+                  width={cellW} height={cellH} rx="2"
+                  fill={f.color} fillOpacity={f.opacity}
+                  stroke={v > 0 ? 'none' : TH_X.border}
+                  strokeWidth={v > 0 ? 0 : 0.5}
+                  onMouseMove={e => onSumColEnter(e, dow)} />
+          );
+        })}
+
+        {/* Σ row (per-hour totals) */}
+        {Array.from({ length: 24 }, (_, hour) => {
+          const v = colTotals[hour][metric];
+          const f = fillFor(v, colMax);
+          return (
+            <rect key={`sumrow-${hour}`} x={padL + hour * (cellW + gap)}
+                  y={sumRowY} width={cellW} height={cellH} rx="2"
+                  fill={f.color} fillOpacity={f.opacity}
+                  stroke={v > 0 ? 'none' : TH_X.border}
+                  strokeWidth={v > 0 ? 0 : 0.5}
+                  onMouseMove={e => onSumRowEnter(e, hour)} />
+          );
+        })}
+
+        {/* Corner grand total (outline only; value in tooltip) */}
+        <rect x={sumColX} y={sumRowY} width={cellW} height={cellH} rx="2"
+              fill="none" stroke={TH_X.border} strokeWidth="0.5"
+              onMouseMove={onCornerEnter} />
       </svg>
 
       <div style={{
@@ -2774,7 +2893,7 @@ function ActivityHeatmapPanel({ models, project, range, nonce }) {
           <rect x="0" y="0" width={legendW} height="10" rx="2" fill="url(#heatLegendGrad)" />
         </svg>
         <span>{maxVal > 0 ? mspec.fmt(maxVal) : 'no data'}</span>
-        <span style={{ marginLeft: 'auto' }}>intensity ∝ √(value / max)</span>
+        <span style={{ marginLeft: 'auto' }}>intensity ∝ √(value / max) · Σ margins scaled independently</span>
       </div>
 
       {tip && <window.DashTooltip tip={tip} />}

@@ -90,6 +90,10 @@ day maps two UTC hours onto local hour 02 (it happens twice).
 - The `.dash-heatmap` wrapper div needs no CSS rule — sibling wrappers
   (`.dash-tools`, `.dash-latency`) have none either; the panel styles
   itself inline.
+- **Σ margins**: a per-weekday totals column (right) and per-hour totals row
+  (bottom), separated from the grid, each intensity-scaled independently of the
+  cells and of each other; the corner cell is the grand total (outline only,
+  numbers in its tooltip).
 
 ## Tests (`tests/test_api.py`)
 
