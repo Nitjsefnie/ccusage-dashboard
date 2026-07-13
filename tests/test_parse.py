@@ -231,3 +231,27 @@ def test_user_text_lines_drive_turn_boundaries():
     assert out["ctx_turns"][0]["output"] == 2
     assert out["ctx_turns"][1]["input"] == 200  # a3 wins turn 2
     assert out["ctx_turns"][1]["delta"] == 100  # 200 - 100
+
+
+def test_reply_latency_terminated_by_list_form_interrupt():
+    """List-form interrupt content must terminate the reply-latency window,
+    not be ignored. Regression: bogus ~1h latency outlier after interrupts."""
+    out = parse.parse_file(
+        "k/sess-interrupt/sess-interrupt.jsonl",
+        _read("interrupt_list_content.jsonl"),
+    )
+    assert len(out["records"]) == 1
+    assert out["records"][0]["reply_latency_s"] is None
+    assert out["prompt_count"] == 1  # interrupt must not count as a prompt
+
+
+def test_reply_latency_anchored_by_list_form_user_text():
+    """Genuine user text in list-form content anchors the latency window
+    and counts toward prompt_count."""
+    out = parse.parse_file(
+        "k/sess-list/sess-list.jsonl",
+        _read("list_content_anchor.jsonl"),
+    )
+    assert len(out["records"]) == 1
+    assert out["records"][0]["reply_latency_s"] == pytest.approx(10.0)
+    assert out["prompt_count"] == 1

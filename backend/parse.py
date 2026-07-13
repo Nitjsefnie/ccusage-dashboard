@@ -152,6 +152,25 @@ def parse_file(file_key: str, blob: bytes) -> dict:
     # terminator since all assistant content blocks share its ts).
     last_user_ts: datetime | None = None
 
+    def _handle_user_text(text: str, line_num: int, ts_str: str) -> None:
+        """Apply instrumentation/interrupt/anchor logic to a user text string.
+
+        Mirrors the string-content branch for list-form text blocks.
+        """
+        nonlocal last_user_ts
+        if not text.strip():
+            return
+        stripped = text.lstrip()
+        if any(stripped.startswith(p) for p in _INSTRUMENTATION_USER_PREFIXES):
+            return
+        if stripped.startswith(_INTERRUPT_MARKER):
+            last_user_ts = None
+            return
+        user_text_lines.append(line_num)
+        ts_dt = _to_dt(ts_str)
+        if ts_dt is not None:
+            last_user_ts = ts_dt
+
     for line_num, raw in enumerate(blob.splitlines(), 1):
         if not raw:
             continue
@@ -195,34 +214,28 @@ def parse_file(file_key: str, blob: bytes) -> dict:
         if role == "user":
             content = msg.get("content")
             if isinstance(content, str) and content.strip():
-                text = content.lstrip()
-                # Instrumentation user msgs (bash IO + caveat) are
-                # explicitly "DO NOT respond" and never anchor a
-                # reply-latency window. Interrupt markers terminate
-                # an open window without anchoring a new one. Plain
-                # user text supersedes any existing anchor with its ts.
-                if any(text.startswith(p) for p in _INSTRUMENTATION_USER_PREFIXES):
-                    pass
-                elif text.startswith(_INTERRUPT_MARKER):
-                    last_user_ts = None
-                else:
-                    user_text_lines.append(line_num)
-                    ts_dt = _to_dt(obj.get("timestamp", "") or "")
-                    if ts_dt is not None:
-                        last_user_ts = ts_dt
+                _handle_user_text(content, line_num, obj.get("timestamp", "") or "")
             elif isinstance(content, list):
-                # Tool results live here. Each block with type=tool_result
-                # carries tool_use_id (referencing the assistant's
-                # tool_use.id) and an optional is_error flag.
                 for blk in content:
                     if not isinstance(blk, dict):
                         continue
-                    if blk.get("type") != "tool_result":
-                        continue
-                    tu_id = blk.get("tool_use_id")
-                    if not tu_id:
-                        continue
-                    tool_result_is_error[str(tu_id)] = bool(blk.get("is_error", False))
+                    btype = blk.get("type")
+                    if btype == "tool_result":
+                        # Tool results live here. Each block carries
+                        # tool_use_id (referencing the assistant's
+                        # tool_use.id) and an optional is_error flag.
+                        tu_id = blk.get("tool_use_id")
+                        if not tu_id:
+                            continue
+                        tool_result_is_error[str(tu_id)] = bool(
+                            blk.get("is_error", False)
+                        )
+                    elif btype == "text":
+                        text = blk.get("text", "") or ""
+                        if isinstance(text, str) and text.strip():
+                            _handle_user_text(
+                                text, line_num, obj.get("timestamp", "") or ""
+                            )
             continue
 
         if role != "assistant":
