@@ -442,3 +442,74 @@ def test_dashboard_response_is_cached_and_fresh_bypasses(app_with_data):
 
     fresh = app_with_data.get("/api/dashboard?range=all&fresh=1").json()
     assert fresh["cost_by_model"] == []          # fresh=1 sees the empty DB
+
+
+# ---------------------------------------------------------------- heatmap
+
+def _insert_tz_probe_rows():
+    """Two records with a unique model, one in winter (CET, UTC+1) and one
+    in summer (CEST, UTC+2), to prove the endpoint is DST-aware."""
+    import psycopg
+    with psycopg.connect(os.environ["DATABASE_URL_VIZ"]) as conn, conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO projects (project_id, display_name, first_seen_at, last_seen_at) "
+            "VALUES ('projTZ', 'projTZ', now(), now()) ON CONFLICT DO NOTHING"
+        )
+        cur.execute(
+            "INSERT INTO files (file_key, project_id, session_id, is_main, r2_etag, "
+            "r2_size_bytes, r2_last_modified, parsed_at, parser_version) "
+            "VALUES ('projTZ/tz.jsonl', 'projTZ', 'tzsess', TRUE, 'etag-tz', 1, now(), now(), 'test')"
+        )
+        cur.execute(
+            "INSERT INTO records (file_key, line_num, uuid, ts, model, output_tokens, cost_usd) VALUES "
+            # 2026-01-15 is a Thursday (ISODOW 4); 10:30Z in CET (UTC+1) is 11:30 local.
+            "('projTZ/tz.jsonl', 1, 'uuid-tz-winter', '2026-01-15T10:30:00Z', 'tz-probe-model', 10, 0.01), "
+            # 2026-07-15 is a Wednesday (ISODOW 3); 10:30Z in CEST (UTC+2) is 12:30 local.
+            "('projTZ/tz.jsonl', 2, 'uuid-tz-summer', '2026-07-15T10:30:00Z', 'tz-probe-model', 20, 0.02)"
+        )
+        conn.commit()
+
+
+def test_activity_heatmap_shape(app_with_data):
+    r = app_with_data.get("/api/activity-heatmap?range=3650d")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["tz"] == "Europe/Prague"
+    assert body["cells"], "mini fixture must produce at least one cell"
+    for c in body["cells"]:
+        assert 1 <= c["dow"] <= 7
+        assert 0 <= c["hour"] <= 23
+        assert c["requests"] >= 1
+        assert c["output_tokens"] >= 0
+        assert c["cost_usd"] >= 0
+
+
+def test_activity_heatmap_requests_match_dashboard(app_with_data):
+    # Both endpoints read through the same DISTINCT ON (uuid) dedup, so
+    # total request counts must agree for the same range.
+    heat = app_with_data.get("/api/activity-heatmap?range=3650d").json()
+    dash = app_with_data.get("/api/dashboard?range=3650d").json()
+    assert sum(c["requests"] for c in heat["cells"]) == \
+           sum(h["requests"] for h in dash["hourly"])
+
+
+def test_activity_heatmap_dst_awareness(app_with_data):
+    _insert_tz_probe_rows()
+    r = app_with_data.get("/api/activity-heatmap?range=3650d&model=tz-probe-model")
+    assert r.status_code == 200
+    cells = {(c["dow"], c["hour"]): c for c in r.json()["cells"]}
+    assert set(cells) == {(4, 11), (3, 12)}, cells
+    assert cells[(4, 11)]["requests"] == 1   # winter: 10:30Z -> 11:30 CET, Thu
+    assert cells[(3, 12)]["requests"] == 1   # summer: 10:30Z -> 12:30 CEST, Wed
+    assert cells[(3, 12)]["output_tokens"] == 20
+
+
+def test_activity_heatmap_project_filter(app_with_data):
+    both = app_with_data.get("/api/activity-heatmap?range=3650d").json()
+    one = app_with_data.get("/api/activity-heatmap?range=3650d&project=projA").json()
+    assert sum(c["requests"] for c in one["cells"]) < \
+           sum(c["requests"] for c in both["cells"])
+
+
+def test_activity_heatmap_bad_range_400(app_with_data):
+    assert app_with_data.get("/api/activity-heatmap?range=bogus").status_code == 400
