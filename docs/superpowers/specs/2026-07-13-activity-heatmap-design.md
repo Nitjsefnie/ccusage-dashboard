@@ -87,8 +87,9 @@ day maps two UTC hours onto local hour 02 (it happens twice).
   45.6k output tok · $1.23` — all three metrics shown regardless of toggle.
 - **Legend/header**: small min→max gradient strip with the max value labeled,
   and a header note `Europe/Prague (CET/CEST)` so the timezone is explicit.
-- New `.dash-heatmap` grid wrapper class in `public/app.css` (mirror
-  `.dash-tools`).
+- The `.dash-heatmap` wrapper div needs no CSS rule — sibling wrappers
+  (`.dash-tools`, `.dash-latency`) have none either; the panel styles
+  itself inline.
 
 ## Tests (`tests/test_api.py`)
 
@@ -124,6 +125,6 @@ Add the panel to the feature lists in `README.md` and `AGENTS.md`.
 ## Files touched
 
 `backend/api.py`, `src/dashboard-charts-extra.jsx`, `src/app.jsx`,
-`public/app.css`, `tests/test_api.py`, `README.md`, `AGENTS.md`.
+`tests/test_api.py`, `README.md`, `AGENTS.md`.
 
 No schema change, no parser change → **no `PARSER_VERSION` bump**.
