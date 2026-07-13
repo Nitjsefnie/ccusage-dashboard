@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Design spec — Activity Heatmap panel (ccudash)</title>
+  <style>
+    :root {
+      --ivory:    #1B1A17;
+      --slate:    #F5F3EC;
+      --clay:     #D97757;
+      --oat:      #3A352B;
+      --olive:    #8FA56E;
+      --rust:     #E08B7F;
+      --gray-150: #2E2C27;
+      --gray-300: #3A3833;
+      --gray-500: #8F8D82;
+      --gray-700: #CFCCC2;
+      --white:    #252420;
+
+      --serif: ui-serif, Georgia, 'Times New Roman', serif;
+      --sans:  system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+      --mono:  ui-monospace, 'SF Mono', Menlo, Monaco, monospace;
+
+      --radius: 12px;
+      --border: 1.5px solid var(--gray-300);
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: var(--sans);
+      background: var(--ivory);
+      color: var(--gray-700);
+      line-height: 1.58;
+      padding: 56px 32px 120px;
+      -webkit-font-smoothing: antialiased;
+    }
+    .page { margin: 0 auto; max-width: 980px; }
+
+    header.page-head { margin-bottom: 40px; max-width: 840px; }
+    .eyebrow {
+      font-family: var(--mono);
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--gray-500);
+      margin-bottom: 12px;
+    }
+    h1 {
+      font-family: var(--serif);
+      font-weight: 500;
+      font-size: 38px;
+      line-height: 1.14;
+      color: var(--slate);
+      margin-bottom: 18px;
+      letter-spacing: -0.01em;
+    }
+    .context-box {
+      background: var(--gray-150);
+      border: var(--border);
+      border-radius: var(--radius);
+      padding: 16px 20px;
+      font-size: 14.5px;
+      color: var(--gray-700);
+    }
+    .context-box .label {
+      font-family: var(--mono);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--gray-500);
+      display: block;
+      margin-bottom: 6px;
+    }
+
+    nav.toc {
+      background: var(--white);
+      border: var(--border);
+      border-radius: var(--radius);
+      padding: 14px 20px;
+      margin-bottom: 40px;
+      font-size: 13.5px;
+    }
+    nav.toc .label {
+      font-family: var(--mono);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--gray-500);
+      display: block;
+      margin-bottom: 6px;
+    }
+    nav.toc a { color: var(--gray-700); text-decoration: none; margin-right: 18px; }
+    nav.toc a:hover { color: var(--clay); }
+
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+      margin-bottom: 56px;
+    }
+    @media (max-width: 900px) { .summary { grid-template-columns: repeat(2, 1fr); } }
+    .summary .cell {
+      background: var(--white);
+      border: var(--border);
+      border-radius: var(--radius);
+      padding: 18px 20px;
+    }
+    .summary .k {
+      font-family: var(--mono);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--gray-500);
+      margin-bottom: 6px;
+    }
+    .summary .v { font-size: 17px; color: var(--slate); font-weight: 600; }
+    .summary .v.accent  { color: var(--clay); }
+    .summary .v.ok      { color: var(--olive); }
+
+    .decision {
+      background: var(--white);
+      border: var(--border);
+      border-left: 4px solid var(--clay);
+      border-radius: var(--radius);
+      padding: 22px 26px;
+      margin-bottom: 56px;
+    }
+    .decision .d-tag {
+      font-family: var(--mono);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      color: var(--clay);
+      margin-bottom: 8px;
+    }
+    .decision .d-head {
+      font-family: var(--serif);
+      font-size: 22px;
+      font-weight: 500;
+      color: var(--slate);
+      margin-bottom: 10px;
+      letter-spacing: -0.01em;
+    }
+    .decision .d-body { font-size: 14.5px; color: var(--gray-700); max-width: 760px; }
+    .decision .d-body + .d-body { margin-top: 8px; }
+
+    section { margin-bottom: 60px; }
+    .sec-head {
+      display: flex;
+      align-items: baseline;
+      gap: 14px;
+      margin-bottom: 8px;
+    }
+    .sec-head .num {
+      font-family: var(--mono);
+      font-size: 12px;
+      background: var(--oat);
+      color: var(--slate);
+      padding: 3px 9px;
+      border-radius: 8px;
+    }
+    .sec-head h2 {
+      font-family: var(--serif);
+      font-weight: 500;
+      font-size: 26px;
+      color: var(--slate);
+      letter-spacing: -0.01em;
+    }
+    .sec-intro {
+      font-size: 14.5px;
+      color: var(--gray-500);
+      max-width: 740px;
+      margin-bottom: 24px;
+    }
+    p.body { font-size: 14.5px; max-width: 760px; margin-bottom: 14px; }
+    p.body strong { color: var(--slate); }
+    code {
+      font-family: var(--mono);
+      font-size: 0.88em;
+      background: var(--gray-150);
+      border: 1px solid var(--gray-300);
+      border-radius: 5px;
+      padding: 1px 5px;
+      color: #C9B98A;
+    }
+    pre {
+      background: var(--gray-150);
+      border: var(--border);
+      border-radius: var(--radius);
+      padding: 14px 18px;
+      font-family: var(--mono);
+      font-size: 12.5px;
+      overflow-x: auto;
+      max-width: 760px;
+      margin-bottom: 14px;
+      color: #C9B98A;
+    }
+    pre code { background: none; border: none; padding: 0; }
+
+    .compare {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+    }
+    @media (max-width: 820px) { .compare { grid-template-columns: 1fr; } }
+    .compare .col {
+      background: var(--white);
+      border: var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+    .compare .col-head {
+      padding: 12px 18px;
+      font-family: var(--mono);
+      font-size: 11.5px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      border-bottom: var(--border);
+    }
+    .compare .col.bad  .col-head { background: #2E211C; color: var(--rust); }
+    .compare .col.good .col-head { background: #232A1C; color: var(--olive); }
+    .compare .col-body { padding: 16px 18px; font-size: 13.5px; }
+    .compare .col-body ul { list-style: none; }
+    .compare .col-body li { margin: 7px 0; padding-left: 18px; position: relative; }
+    .compare .col.bad  li:before { content: '\2715'; position: absolute; left: 0; color: var(--rust); }
+    .compare .col.good li:before { content: '\2713'; position: absolute; left: 0; color: var(--olive); }
+
+    .changes { display: flex; flex-direction: column; gap: 12px; }
+    .change {
+      background: var(--white);
+      border: var(--border);
+      border-radius: var(--radius);
+      padding: 16px 20px;
+      display: grid;
+      grid-template-columns: 260px 1fr;
+      gap: 4px 24px;
+    }
+    @media (max-width: 720px) { .change { grid-template-columns: 1fr; } }
+    .change .file {
+      font-family: var(--mono);
+      font-size: 12.5px;
+      color: var(--clay);
+      word-break: break-all;
+    }
+    .change .what { font-size: 14px; color: var(--gray-700); }
+    .change .what .lead { color: var(--slate); font-weight: 600; }
+
+    .checklist { display: flex; flex-direction: column; gap: 10px; max-width: 760px; }
+    .check {
+      display: flex;
+      gap: 12px;
+      align-items: flex-start;
+      background: var(--white);
+      border: var(--border);
+      border-radius: 10px;
+      padding: 12px 16px;
+    }
+    .check .box {
+      width: 18px; height: 18px;
+      border-radius: 5px;
+      border: 2px solid var(--gray-500);
+      flex-shrink: 0;
+      margin-top: 2px;
+    }
+    .check .ck-text { font-size: 14px; color: var(--gray-700); }
+    .check .ck-text strong { color: var(--slate); }
+
+    .deferred { display: flex; flex-direction: column; gap: 14px; max-width: 840px; }
+    .defer {
+      background: var(--white);
+      border: var(--border);
+      border-left: 4px solid var(--gray-500);
+      border-radius: 10px;
+      padding: 16px 20px;
+    }
+    .defer .dt { font-weight: 600; font-size: 15px; color: var(--slate); margin-bottom: 4px; }
+    .defer .dd { font-size: 13.5px; color: var(--gray-500); }
+
+    .footer {
+      color: var(--gray-500);
+      font-size: 13px;
+      margin-top: 64px;
+      padding-top: 22px;
+      border-top: 1px solid var(--gray-300);
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+
+    <header class="page-head">
+      <div class="eyebrow">Design spec · ccudash (session-viz)</div>
+      <h1>Activity Heatmap panel — hours × weekdays in Czech local time</h1>
+      <div class="context-box">
+        <span class="label">Context</span>
+        ccudash visualises Claude Code session transcripts from R2/Postgres.
+        The user requested a new dashboard panel: an activity heatmap
+        distributed as hours × weekdays, using the Czech timezone with
+        correct summer-time handling. This spec decides where the
+        timezone-aware bucketing happens and how the panel is built.
+      </div>
+    </header>
+
+    <nav class="toc">
+      <span class="label">Contents</span>
+      <a href="#backend">01 Backend</a>
+      <a href="#dst">02 DST semantics</a>
+      <a href="#frontend">03 Frontend</a>
+      <a href="#changes">04 Change inventory</a>
+      <a href="#tests">05 Verification</a>
+      <a href="#oos">06 Out of scope</a>
+    </nav>
+
+    <div class="summary">
+      <div class="cell"><div class="k">Scope</div><div class="v accent">1 endpoint + 1 panel</div></div>
+      <div class="cell"><div class="k">Files touched</div><div class="v">7</div></div>
+      <div class="cell"><div class="k">Schema / parser</div><div class="v ok">No change</div></div>
+      <div class="cell"><div class="k">Timezone</div><div class="v">Europe/Prague</div></div>
+    </div>
+
+    <div class="decision">
+      <div class="d-tag">Decision</div>
+      <div class="d-head">Group weekday × hour in SQL with <code>AT TIME ZONE 'Europe/Prague'</code>; ship a self-fetching backend-gated panel.</div>
+      <div class="d-body">Postgres tzdata knows the exact CET↔CEST transition
+        instants, so summer-time correctness is inherited rather than
+        reimplemented. The panel follows the established
+        <code>ToolUsagePanel</code> contract (per-panel model filter, SSE-driven
+        refetch, <code>backendOn</code> gate).</div>
+      <div class="d-body">Deliberately not done: client-side bucketing from
+        dashboard <code>events</code> — those are adaptive buckets up to 1 day
+        wide (ts = bucket center), which destroys hour-of-day information at
+        long ranges.</div>
+    </div>
+
+    <section id="backend">
+      <div class="sec-head"><span class="num">01</span><h2>Backend — <code>GET /api/activity-heatmap</code></h2></div>
+      <p class="sec-intro">One new read endpoint in <code>backend/api.py</code>, mirroring <code>tool_usage</code> for params, auth, validation, and caching.</p>
+      <p class="body">Query params <code>range</code> (default <code>30d</code>), <code>project</code>, <code>model</code>;
+        <code>@cache_response</code>; 400 on bad range via <code>_parse_range</code>. Module constant
+        <code>HEATMAP_TZ = "Europe/Prague"</code> passed as a <strong>bound SQL parameter</strong>, never interpolated.
+        Cross-file uuid dedup at read time (SV-PARSER-SPEC) reuses the <code>dashboard</code> endpoint's
+        <code>DISTINCT ON (r.uuid) … UNION ALL … uuid IS NULL</code> body, with <code>ts &gt;= since</code>,
+        optional <code>f.project_id = %s</code> and <code>r.model LIKE %s</code> filters.</p>
+      <pre><code>SELECT EXTRACT(ISODOW FROM (d.ts AT TIME ZONE %s))::int AS dow,   -- 1=Mon … 7=Sun
+       EXTRACT(HOUR   FROM (d.ts AT TIME ZONE %s))::int AS hour,  -- 0 … 23
+       COUNT(*)             AS requests,
+       SUM(d.output_tokens) AS output_tokens,
+       SUM(d.cost_usd)      AS cost_usd
+FROM deduped d
+WHERE d.ts IS NOT NULL
+GROUP BY 1, 2</code></pre>
+      <p class="body">Response is sparse (only non-empty cells):</p>
+      <pre><code>{"range": "30d", "tz": "Europe/Prague",
+ "cells": [{"dow": 1, "hour": 9, "requests": 42,
+            "output_tokens": 12345, "cost_usd": 1.23}, …]}</code></pre>
+    </section>
+
+    <section id="dst">
+      <div class="sec-head"><span class="num">02</span><h2>DST semantics — the load-bearing bit</h2></div>
+      <div class="compare">
+        <div class="col bad">
+          <div class="col-head">Rejected: fixed-offset / client-side math</div>
+          <div class="col-body"><ul>
+            <li>UTC+1/+2 constants reimplement DST transition rules by hand and rot silently.</li>
+            <li>Dashboard <code>events</code> lose hour-of-day fidelity at long ranges (1-day buckets).</li>
+          </ul></div>
+        </div>
+        <div class="col good">
+          <div class="col-head">Chosen: Postgres tzdata</div>
+          <div class="col-body"><ul>
+            <li><code>timestamptz AT TIME ZONE 'Europe/Prague'</code> → CET (UTC+1) winter, CEST (UTC+2) summer, transitions at the true instants.</li>
+            <li>Spring-forward day: local hour 02 doesn't exist → gets no events. Correct.</li>
+            <li>Fall-back day: local hour 02 happens twice → receives two UTC hours. Correct.</li>
+          </ul></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="frontend">
+      <div class="sec-head"><span class="num">03</span><h2>Frontend — <code>ActivityHeatmapPanel</code></h2></div>
+      <p class="sec-intro">SVG 7×24 grid in <code>src/dashboard-charts-extra.jsx</code>, mounted in <code>Dashboard</code> behind the <code>backendOn</code> gate.</p>
+      <p class="body"><strong>Contract:</strong> props <code>{models, project, range, nonce}</code> —
+        identical to <code>ToolUsagePanel</code>, including the per-panel model select and refetch on
+        <code>[project, range, activeModel, nonce]</code> (SSE <code>ingest_done</code> bumps <code>nonce</code> → live updates for free).</p>
+      <p class="body"><strong>Grid:</strong> rows Mon→Sun top-to-bottom (Monday-first, Czech week
+        convention), columns 0–23; ~2px cell gaps, rounded cells, ResizeObserver width.</p>
+      <p class="body"><strong>Color:</strong> sequential single-hue ramp, theme surface at 0 →
+        one accent at max; intensity <code>sqrt(v / max)</code> (activity is heavy-tailed). Zero cells
+        stay at surface with a faint border. Labels wear theme text colors, never the accent.</p>
+      <p class="body"><strong>Interaction:</strong> per-cell hover tooltip via <code>window.DashTooltip</code> —
+        <code>Tue 14:00–15:00 · 123 requests · 45.6k output tok · $1.23</code> (all three metrics, regardless of toggle).
+        Metric toggle: Requests (default) / Output tokens / Cost. Min→max gradient legend with the max labeled;
+        header notes <code>Europe/Prague (CET/CEST)</code>.</p>
+    </section>
+
+    <section id="changes">
+      <div class="sec-head"><span class="num">04</span><h2>Change inventory</h2></div>
+      <div class="changes">
+        <div class="change">
+          <div class="file">backend/api.py</div>
+          <div class="what"><span class="lead">Add endpoint.</span> <code>GET /api/activity-heatmap</code> + <code>HEATMAP_TZ</code> constant, dedup CTE + ISODOW/HOUR grouping.</div>
+        </div>
+        <div class="change">
+          <div class="file">src/dashboard-charts-extra.jsx</div>
+          <div class="what"><span class="lead">Add panel.</span> <code>ActivityHeatmapPanel</code> — fetch, model select, metric toggle, SVG grid, tooltip, legend.</div>
+        </div>
+        <div class="change">
+          <div class="file">src/app.jsx</div>
+          <div class="what"><span class="lead">Mount panel.</span> <code>{backendOn && &lt;div className="dash-heatmap"&gt;…}</code> after Tool Error Rate.</div>
+        </div>
+        <div class="change">
+          <div class="file">public/app.css</div>
+          <div class="what"><span class="lead">Add wrapper class.</span> <code>.dash-heatmap</code>, mirroring <code>.dash-tools</code>.</div>
+        </div>
+        <div class="change">
+          <div class="file">tests/test_api.py</div>
+          <div class="what"><span class="lead">Add tests.</span> Shape, dedup-consistency, DST winter/summer, filters, bad-range-400.</div>
+        </div>
+        <div class="change">
+          <div class="file">README.md · AGENTS.md</div>
+          <div class="what"><span class="lead">Document.</span> Add the panel to both feature lists.</div>
+        </div>
+      </div>
+    </section>
+
+    <section id="tests">
+      <div class="sec-head"><span class="num">05</span><h2>Verification</h2></div>
+      <p class="sec-intro">How the implementer confirms correctness — concrete, runnable.</p>
+      <div class="checklist">
+        <div class="check"><div class="box"></div><div class="ck-text"><strong>Shape.</strong> On <code>app_with_data</code> (r2_mini), <code>?range=3650d</code> → 200, <code>tz == "Europe/Prague"</code>, all cells <code>dow ∈ 1..7</code>, <code>hour ∈ 0..23</code>.</div></div>
+        <div class="check"><div class="box"></div><div class="ck-text"><strong>Dedup consistency.</strong> Σ <code>cells[].requests</code> == Σ dashboard hourly <code>requests</code> for the same range.</div></div>
+        <div class="check"><div class="box"></div><div class="ck-text"><strong>DST winter.</strong> Synthetic record at <code>2026-01-15T10:30:00Z</code> (Thu, CET) lands in <code>dow=4, hour=11</code>.</div></div>
+        <div class="check"><div class="box"></div><div class="ck-text"><strong>DST summer.</strong> Synthetic record at <code>2026-07-15T10:30:00Z</code> (Wed, CEST) lands in <code>dow=3, hour=12</code>.</div></div>
+        <div class="check"><div class="box"></div><div class="ck-text"><strong>Filters + errors.</strong> <code>model=</code>/<code>project=</code> subset the cells; bad range → 400. Full suite: <code>python3 -m pytest tests/ -q</code> green.</div></div>
+      </div>
+    </section>
+
+    <section id="oos">
+      <div class="sec-head"><span class="num">06</span><h2>Out of scope</h2></div>
+      <p class="sec-intro">Explicitly deferred — considered, not missed.</p>
+      <div class="deferred">
+        <div class="defer">
+          <div class="dt">Offline (drag-drop) heatmap</div>
+          <div class="dd">Consistent with the three newest panels (Tool Usage, Reply Latency, Tool Error Rate), all backend-only. Offline per-record events retain full fidelity, so this can be added later without redesign.</div>
+        </div>
+        <div class="defer">
+          <div class="dt">Configurable timezone</div>
+          <div class="dd">YAGNI — the operator is in CZ. <code>HEATMAP_TZ</code> is one constant, trivially parameterizable later.</div>
+        </div>
+        <div class="defer">
+          <div class="dt">/api/export PNG parity</div>
+          <div class="dd">The matplotlib export script doesn't know this panel; separate effort if ever wanted.</div>
+        </div>
+      </div>
+    </section>
+
+    <div class="footer">
+      <p>Design spec · generated 2026-07-13 · repo copy: <code>docs/superpowers/specs/2026-07-13-activity-heatmap-design.md</code></p>
+    </div>
+
+  </div>
+</body>
+</html>
