@@ -2796,12 +2796,12 @@ function ActivityHeatmapPanel({ models, project, range, nonce }) {
         <line x1={padL + 23 * (cellW + gap) + cellW + SUM_GAP / 2}
               x2={padL + 23 * (cellW + gap) + cellW + SUM_GAP / 2}
               y1={padT} y2={sumRowY + cellH}
-              stroke={TH_X.textDim} strokeWidth="1" strokeOpacity={0.6} />
+              stroke="#fff" strokeWidth="1" strokeOpacity={0.85} />
         <line x1={padL}
               x2={sumColX + cellW}
               y1={padT + 6 * (cellH + gap) + cellH + SUM_GAP / 2}
               y2={padT + 6 * (cellH + gap) + cellH + SUM_GAP / 2}
-              stroke={TH_X.textDim} strokeWidth="1" strokeOpacity={0.6} />
+              stroke="#fff" strokeWidth="1" strokeOpacity={0.85} />
 
         {/* hour labels every 3h */}
         {[0, 3, 6, 9, 12, 15, 18, 21].map(hr => (
