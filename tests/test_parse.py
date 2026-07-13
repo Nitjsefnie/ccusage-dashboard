@@ -255,3 +255,16 @@ def test_reply_latency_anchored_by_list_form_user_text():
     assert len(out["records"]) == 1
     assert out["records"][0]["reply_latency_s"] == pytest.approx(10.0)
     assert out["prompt_count"] == 1
+
+
+def test_reply_latency_ignores_replayed_prompt():
+    """A verbatim re-dispatched user record (same uuid, different line)
+    must not anchor reply-latency windows. Regression: bogus ~25m outliers
+    on re-dispatched subagent transcripts."""
+    out = parse.parse_file(
+        "k/sess-rp/sess-rp.jsonl", _read("replayed_prompt.jsonl")
+    )
+    assert len(out["records"]) == 2
+    assert out["records"][0]["reply_latency_s"] == pytest.approx(5.0)
+    assert out["records"][1]["reply_latency_s"] is None
+    assert out["prompt_count"] == 2

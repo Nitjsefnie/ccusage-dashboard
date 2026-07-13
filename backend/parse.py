@@ -151,11 +151,20 @@ def parse_file(file_key: str, blob: bytes) -> dict:
     # message granularity (we treat the assistant message line as the
     # terminator since all assistant content blocks share its ts).
     last_user_ts: datetime | None = None
+    # Per-file first-seen line for each user-record uuid. A user record
+    # whose uuid already appeared on an EARLIER, DIFFERENT line is a
+    # replay and is invisible to reply-latency anchoring/superseding.
+    seen_user_uuids: dict[str, int] = {}
 
-    def _handle_user_text(text: str, line_num: int, ts_str: str) -> None:
+    def _handle_user_text(
+        text: str, line_num: int, ts_str: str, mutate_anchor: bool = True
+    ) -> None:
         """Apply instrumentation/interrupt/anchor logic to a user text string.
 
         Mirrors the string-content branch for list-form text blocks.
+        Replayed user records pass ``mutate_anchor=False`` so they still
+        count toward ``prompt_count`` and ctx-turn boundaries but never
+        touch the latency anchor.
         """
         nonlocal last_user_ts
         if not text.strip():
@@ -164,11 +173,12 @@ def parse_file(file_key: str, blob: bytes) -> dict:
         if any(stripped.startswith(p) for p in _INSTRUMENTATION_USER_PREFIXES):
             return
         if stripped.startswith(_INTERRUPT_MARKER):
-            last_user_ts = None
+            if mutate_anchor:
+                last_user_ts = None
             return
         user_text_lines.append(line_num)
         ts_dt = _to_dt(ts_str)
-        if ts_dt is not None:
+        if ts_dt is not None and mutate_anchor:
             last_user_ts = ts_dt
 
     for line_num, raw in enumerate(blob.splitlines(), 1):
@@ -212,9 +222,22 @@ def parse_file(file_key: str, blob: bytes) -> dict:
         msg = obj.get("message") or {}
         role = msg.get("role")
         if role == "user":
+            uuid = obj.get("uuid") or ""
+            is_replay = False
+            if uuid:
+                first_line = seen_user_uuids.get(uuid)
+                if first_line is None:
+                    seen_user_uuids[uuid] = line_num
+                elif first_line != line_num:
+                    is_replay = True
+            mutate_anchor = not is_replay
+
             content = msg.get("content")
             if isinstance(content, str) and content.strip():
-                _handle_user_text(content, line_num, obj.get("timestamp", "") or "")
+                _handle_user_text(
+                    content, line_num, obj.get("timestamp", "") or "",
+                    mutate_anchor=mutate_anchor,
+                )
             elif isinstance(content, list):
                 for blk in content:
                     if not isinstance(blk, dict):
@@ -234,7 +257,8 @@ def parse_file(file_key: str, blob: bytes) -> dict:
                         text = blk.get("text", "") or ""
                         if isinstance(text, str) and text.strip():
                             _handle_user_text(
-                                text, line_num, obj.get("timestamp", "") or ""
+                                text, line_num, obj.get("timestamp", "") or "",
+                                mutate_anchor=mutate_anchor,
                             )
             continue
 
