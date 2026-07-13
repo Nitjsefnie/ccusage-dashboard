@@ -803,6 +803,16 @@ function Dashboard({ synth, models, backendOn, activeProject, activeRange, dashN
         </div>
       )}
 
+      {backendOn && (
+        <div className="dash-heatmap">
+          <window.ActivityHeatmapPanel
+            models={models}
+            project={activeProject}
+            range={activeRange}
+            nonce={dashNonce} />
+        </div>
+      )}
+
       <div className="dash-context">
         <window.ContextGrowthPanel events={events} realSessions={sessionsOverride} ctxTraces={ctxTraces} />
       </div>

@@ -49,6 +49,10 @@ with multi-user auth, R2 ingest, and live updates.
   is the gap from each anchored user message to its assistant reply,
   computed at parse time (instrumentation/bash-IO and interrupt-marker
   user messages don't anchor a window).
+- **Activity Heatmap** — weekday × hour grid of request activity in
+  Czech local time (`Europe/Prague`, DST-aware via Postgres
+  `AT TIME ZONE`), with requests / output-tokens / cost metric toggle
+  and a per-panel model filter.
 - **Cross-file uuid dedup** at query time so sub-agent JSONLs roll
   into their parent session without double-counting.
 - **Rate-limit hit** detection (Claude Code's `out of extra usage`
