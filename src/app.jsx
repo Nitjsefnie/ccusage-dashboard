@@ -409,11 +409,32 @@ function ExportButton({ range, project }) {
   );
 }
 
+// /api/projects returns every project ordered by total_cost DESC, which is
+// enough chips to push the dashboard below the fold. Page the list; "All" and
+// the pager stay pinned outside it so the reset control and the page controls
+// are reachable from every page.
+const PROJECTS_PER_PAGE = 24;
+
 function ProjectPicker({ projects, active, onChange }) {
+  const [page, setPage] = useState(0);
+
+  const pageCount = Math.max(1, Math.ceil(projects.length / PROJECTS_PER_PAGE));
+  // Clamp rather than store a corrected page: if `projects` shrinks under us
+  // (refetch with fewer rows), a stale index would strand the user on a blank
+  // page with no chips to click their way out of.
+  const safePage = Math.min(page, pageCount - 1);
+  const start = safePage * PROJECTS_PER_PAGE;
+  const shown = projects.slice(start, start + PROJECTS_PER_PAGE);
+
+  // The active chip may live on another page. Nothing renders as `on` then —
+  // including "All" — so surface the selection instead of leaving the filtered
+  // dashboard looking unfiltered.
+  const activeOffPage = active !== '' && !shown.some(p => p.project_id === active);
+
   return (
     <div className="project-picker">
       <button className={'pp-btn ' + (active === '' ? 'on' : '')} onClick={() => onChange('')}>All</button>
-      {projects.map(p => (
+      {shown.map(p => (
         <button
           key={p.project_id}
           className={'pp-btn ' + (active === p.project_id ? 'on' : '')}
@@ -421,6 +442,32 @@ function ProjectPicker({ projects, active, onChange }) {
           title={`${p.session_count} sessions · $${p.total_cost.toFixed(2)}`}
         >{p.display_name}</button>
       ))}
+      {pageCount > 1 && (
+        <span className="pp-pager">
+          <button
+            className="pp-btn pp-nav"
+            onClick={() => setPage(safePage - 1)}
+            disabled={safePage === 0}
+            title="Previous page"
+          >‹</button>
+          <span className="pp-count">{safePage + 1} / {pageCount}</span>
+          <button
+            className="pp-btn pp-nav"
+            onClick={() => setPage(safePage + 1)}
+            disabled={safePage >= pageCount - 1}
+            title="Next page"
+          >›</button>
+          {activeOffPage && (
+            <button
+              className="pp-btn on pp-jump"
+              onClick={() => setPage(Math.floor(
+                projects.findIndex(p => p.project_id === active) / PROJECTS_PER_PAGE
+              ))}
+              title="Jump to the selected project"
+            >{active} ↩</button>
+          )}
+        </span>
+      )}
     </div>
   );
 }

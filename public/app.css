@@ -481,6 +481,35 @@ button:focus-visible, .navbtn:focus-visible, .chip:focus-visible, .fchip:focus-v
   color: var(--accent);
   border-color: var(--accent-line);
 }
+.pp-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.pp-btn:disabled:hover { color: var(--muted); border-color: var(--border); }
+
+/* Pager sits inline in the chip flow; margin-left pushes it clear of the
+   last chip on rows that don't wrap. */
+.pp-pager {
+  display: inline-flex; align-items: center; gap: 6px;
+  margin-left: auto;
+}
+.pp-nav { padding: 4px 9px; line-height: 1; }
+.pp-count {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  min-width: 44px;
+  text-align: center;
+}
+/* The off-page selection marker can be a full project path — keep it from
+   stretching the pager across the row. */
+.pp-jump {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 /* Cache view — replica of parse_session.py --cache terminal output */
 .cache-view {
