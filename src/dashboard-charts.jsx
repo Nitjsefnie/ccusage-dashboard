@@ -35,6 +35,7 @@ const MODEL_COLORS = {
   'opus-4-7':    'oklch(0.72 0.16 25)',   // coral
   'opus-4-6':    'oklch(0.78 0.14 55)',   // amber
   'opus-4-5':    'oklch(0.85 0.14 90)',   // gold
+  'sonnet-5':    'oklch(0.75 0.15 275)',  // indigo
   'sonnet-4-6':  'oklch(0.78 0.14 245)',  // blue
   'sonnet-4-5':  'oklch(0.72 0.16 305)',  // violet
   'haiku-4-5':   'oklch(0.78 0.14 175)',  // teal — matches --accent
