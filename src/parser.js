@@ -302,6 +302,7 @@ window.modelRates = {
   'claude-opus-4-5':   { fresh: 5,    c5: 6.25,  c1h: 10,   read: 0.5,  out: 25 },
   'claude-opus-4-1':   { fresh: 15,   c5: 18.75, c1h: 30,   read: 1.5,  out: 75 },
   'claude-opus-4':     { fresh: 15,   c5: 18.75, c1h: 30,   read: 1.5,  out: 75 },
+  'claude-sonnet-5':   { fresh: 3,    c5: 3.75,  c1h: 6,    read: 0.3,  out: 15 },
   'claude-sonnet-4-6': { fresh: 3,    c5: 3.75,  c1h: 6,    read: 0.3,  out: 15 },
   'claude-sonnet-4-5': { fresh: 3,    c5: 3.75,  c1h: 6,    read: 0.3,  out: 15 },
   'claude-sonnet-4':   { fresh: 3,    c5: 3.75,  c1h: 6,    read: 0.3,  out: 15 },
