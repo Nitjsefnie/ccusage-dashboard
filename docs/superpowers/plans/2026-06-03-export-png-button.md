@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add a logged-in-only **Export PNG** button to the ccudash dashboard that renders the full 8-panel matplotlib usage dashboard for the currently-active project + time-range filters and downloads it.
+**Goal:** Add a logged-in-only **Export PNG** button to the claudit dashboard that renders the full 8-panel matplotlib usage dashboard for the currently-active project + time-range filters and downloads it.
 
 **Architecture:** A new `GET /api/export` endpoint subprocesses system `/usr/bin/python3` running `scripts/plots/ccusage_plot_db.py` (reused verbatim, plus a new `--project` arg) with an explicit `--db-url`, single-flighted behind an `asyncio.Semaphore(1)` with a 120s timeout, and streams the PNG back as an attachment. Guests are blocked in the existing `session.py` auth middleware and never see the button.
 
@@ -80,7 +80,7 @@ In `scripts/plots/ccusage_plot_db.py`, change the `load_events` signature and SQ
 
 ```python
 def load_events(cutoff=None, end=None, project=None):
-    """Read assistant usage events from the ccudash `records` table.
+    """Read assistant usage events from the claudit `records` table.
 
     The records table is post-Phase-1: per-file (file_key, request_id)
     streaming-merge already happened at ingest. Phase 2 (cross-file uuid
@@ -174,7 +174,7 @@ Expected: PASS
 Run (against the live dev DB):
 ```bash
 python3 scripts/plots/ccusage_plot_db.py -p 7d -o /tmp/exp_all.png
-python3 scripts/plots/ccusage_plot_db.py -p 7d --project "$(psql claude_viz -tAc 'select project_id from files limit 1')" -o /tmp/exp_proj.png
+python3 scripts/plots/ccusage_plot_db.py -p 7d --project "$(psql claudit -tAc 'select project_id from files limit 1')" -o /tmp/exp_proj.png
 ls -la /tmp/exp_all.png /tmp/exp_proj.png
 ```
 Expected: both PNGs written; the `--project` one is the project-scoped subset (smaller cost/token totals in its panels).
@@ -367,7 +367,7 @@ async def export_png(
     Logged-in only (guests are blocked in session.auth_middleware)."""
     _parse_range(range)  # validation only — raises HTTPException(400) on garbage
     db_url = os.environ["DATABASE_URL_VIZ"]
-    fd, out_path = tempfile.mkstemp(suffix=".png", prefix="ccudash_export_")
+    fd, out_path = tempfile.mkstemp(suffix=".png", prefix="claudit_export_")
     os.close(fd)
     try:
         argv = _build_export_argv(range, project, out_path, db_url)
@@ -573,5 +573,5 @@ Co-Authored-By: <model> <noreply@anthropic.com>"
 
 - **Co-Author trailer:** replace `<model>` with your own model name (e.g. `Kimi K2.6 <noreply@kimi.com>` for a kimi subagent, `Claude Opus 4.8 (1M context) <noreply@anthropic.com>` for claude). Every commit needs the trailer.
 - **`EXPORT_PYTHON`:** tests never invoke the real subprocess (the render seam is monkeypatched), so `/usr/bin/python3` not having matplotlib in CI is fine. Production relies on system python3 having matplotlib + psycopg (verified on this box).
-- **Deploy:** the service runs in-place from `/root/session-viz` (the real `ccudash.service` unit; `examples/`'s `/opt/ccudash` is only a sample), so `systemctl restart ccudash` picks up the repo directly — no deploy-sync step.
+- **Deploy:** the service runs in-place from `/root/session-viz` (the real `claudit.service` unit; `examples/`'s `/opt/claudit` is only a sample), so `systemctl restart claudit` picks up the repo directly — no deploy-sync step.
 - **Post-review correction (commit `4768ab5`):** the shipped code differs from Tasks 2/3/5 above in two ways the review mandated — (a) the DSN is NOT passed in argv (the subprocess inherits `DATABASE_URL_VIZ` from the env; keeps the password out of the process list), so `_build_export_argv` takes no `db_url`; (b) the frontend uses `fetch`+blob with an `.ok` check instead of a plain `<a href>`, so error responses (incl. the reachable empty-data 500) render inline rather than ejecting the SPA. Also added: fail-fast 503 when a render is already in flight, a matplotlib-absent guard in `plot_timeline`, and timeout→503 / exit→500 tests.

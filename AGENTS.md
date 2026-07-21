@@ -1,11 +1,11 @@
 <!-- From: /root/session-viz/AGENTS.md -->
-# ccudash
+# claudit
 
 @README.md
 
 ## Project overview
 
-**ccudash** (Claude Code Usage Dashboard) is a self-hosted web application that visualises Claude Code session JSONL transcripts. It ingests transcripts from Cloudflare R2 (or a local `file://` mirror), parses them into Postgres, and serves dashboards and raw transcripts to a React frontend rendered via in-browser Babel (no npm/build step).
+**claudit** (Claude Code Usage Dashboard) is a self-hosted web application that visualises Claude Code session JSONL transcripts. It ingests transcripts from Cloudflare R2 (or a local `file://` mirror), parses them into Postgres, and serves dashboards and raw transcripts to a React frontend rendered via in-browser Babel (no npm/build step).
 
 The dashboard panels include: Session Burn Rate, Cost by Model, Token Breakdown, Prompt-Cache TTL Split, Per-Session Context Growth, Response Sizes, Tool Usage Ratio, Reply Latency, Tool Error Rate, and Activity Heatmap.
 
@@ -13,12 +13,12 @@ The dashboard panels include: Session Burn Rate, Cost by Model, Token Breakdown,
 
 - **Backend**: Python 3.13+, FastAPI, Uvicorn, psycopg3 (with connection pooling)
 - **Frontend**: React 18 (loaded from CDN), in-browser Babel transpilation, vanilla JS/JSX — no webpack, vite, or npm install
-- **Database**: PostgreSQL (two separate DBs: `claude_viz` for app data, external auth DB for user credentials)
+- **Database**: PostgreSQL (two separate DBs: `claudit` for app data, external auth DB for user credentials)
 - **Object storage**: Cloudflare R2 via S3-compatible API, or local filesystem mirror (`file://`)
 - **Scheduling**: APScheduler (BackgroundScheduler) for hourly ingest
 - **Serialization**: orjson for fast JSON parsing
 - **Testing**: pytest, pytest-asyncio, httpx (for TestClient)
-- **Deployment**: systemd service (see `examples/ccudash.service`)
+- **Deployment**: systemd service (see `examples/claudit.service`)
 
 ## Project structure
 
@@ -44,7 +44,7 @@ backend/          — FastAPI application
   session.py      — HMAC-signed session cookie mint/verify, auth middleware,
                     guest-mode sentinel (user_id=0, per-process secret).
   events.py       — Thread-safe SSE broadcaster (asyncio.Queue per client).
-  db.py           — Two psycopg pools: viz_pool (claude_viz) and auth_pool
+  db.py           — Two psycopg pools: viz_pool (claudit) and auth_pool
                     (read-only auth DB). Pools never join across DBs.
   cache.py        — In-process LRU with idle-time eviction for raw transcript
                     bytes (256 MB, 20-min idle).
@@ -96,7 +96,7 @@ fixtures/         — Small JSONL + zip samples for parser and API tests.
   r2_mini/        — Mini filesystem mirror (2 projects, 4 sessions, 1 peer,
                     1 cross-session shared uuid) for ingest/API tests.
 
-examples/         — Sample systemd service file (ccudash.service).
+examples/         — Sample systemd service file (claudit.service).
 
 docs/             — Design docs and specs.
 .claude/rules/    — Local doctrine (SV-PARSER-SPEC, SV-COST-SPLIT, etc.).
@@ -108,8 +108,8 @@ docs/             — Design docs and specs.
 
 ```bash
 # 1. Create the app database and apply schema
-createdb claude_viz
-psql claude_viz -f backend/schema.sql
+createdb claudit
+psql claudit -f backend/schema.sql
 
 # 2. Configure environment
 cp backend/.env.example .env
@@ -156,10 +156,10 @@ curl -X POST http://127.0.0.1:8000/admin/ingest \
 # runs on every boot of backend/app.py — equivalent to the curl above
 # for any case where the admin token isn't handy or the service was
 # already going to be restarted for another reason).
-systemctl restart ccudash
+systemctl restart claudit
 
 # Re-apply schema migrations (idempotent)
-psql claude_viz -f backend/schema.sql
+psql claudit -f backend/schema.sql
 ```
 
 ## Code style guidelines
@@ -189,7 +189,7 @@ psql claude_viz -f backend/schema.sql
 
 ## Deployment process
 
-Intended to run under systemd behind a reverse proxy. Key settings from `examples/ccudash.service`:
+Intended to run under systemd behind a reverse proxy. Key settings from `examples/claudit.service`:
 
 - `--timeout-graceful-shutdown 5` so SSE connections drain quickly.
 - `TimeoutStopSec=10` for fast restarts.
@@ -198,9 +198,9 @@ Intended to run under systemd behind a reverse proxy. Key settings from `example
 
 ```bash
 # Typical systemd workflow
-systemctl restart ccudash
-systemctl status ccudash
-journalctl -u ccudash -f
+systemctl restart claudit
+systemctl status claudit
+journalctl -u claudit -f
 ```
 
 Schema migrations are idempotent — re-apply `backend/schema.sql` after any schema change. Bump `PARSER_VERSION` in `.env` whenever parser semantics or `pricing.py` rates change; every file reparses on the next ingest.

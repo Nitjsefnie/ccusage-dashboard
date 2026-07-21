@@ -1,7 +1,7 @@
 """Postgres connection pools.
 
 Two pools:
-- viz_pool   → claude_viz (this app's tables)
+- viz_pool   → claudit (this app's tables)
 - auth_pool  → external users DB (read-only access to users.config for auth)
 
 The pools never join across DBs.
@@ -53,7 +53,7 @@ def auth_conn():
 def schema_check() -> None:
     """Fail fast at startup if either DB's required shape is missing.
 
-    For claude_viz: 'files' table exists.
+    For claudit: 'files' table exists.
     For the auth DB: 'users' table has a JSONB 'config' column.
     Raises RuntimeError on any mismatch.
     """
@@ -63,7 +63,7 @@ def schema_check() -> None:
         ).fetchone()
         if row is None or row[0] is None:
             raise RuntimeError(
-                "claude_viz.files missing — run backend/schema.sql"
+                "claudit.files missing — run backend/schema.sql"
             )
     with auth_conn() as c:
         row = c.execute(

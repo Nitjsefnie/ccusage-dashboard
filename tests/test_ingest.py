@@ -14,7 +14,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 @pytest.fixture
 def fresh_db(monkeypatch):
     """Per-test schema reset on a separate DB."""
-    test_db = "claude_viz_test"
+    test_db = "claudit_test"
     os.system(f"dropdb --if-exists {test_db} 2>/dev/null")
     os.system(f"createdb {test_db} 2>/dev/null")
     os.system(f"psql {test_db} -f {_REPO_ROOT / 'backend/schema.sql'} >/dev/null")

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Plot Claude Code usage by reading the ccudash Postgres DB.
+"""Plot Claude Code usage by reading the claudit Postgres DB.
 
 Mirror of ccusage_plot.py (upstream nhz-io/ccusage-plot) with the JSONL
-walker swapped for a `claude_viz` SELECT — uses backend/parse.py's already-
+walker swapped for a `claudit` SELECT — uses backend/parse.py's already-
 deduped + cost-priced `records` rows. DSN comes from DATABASE_URL_VIZ in
 the env or .env at the repo root."""
 
@@ -303,7 +303,7 @@ def _resolve_db_url(cli_url: str | None) -> str:
 
 
 def load_events(cutoff=None, end=None, project=None):
-    """Read assistant usage events from the ccudash `records` table.
+    """Read assistant usage events from the claudit `records` table.
 
     The records table is post-Phase-1: per-file (file_key, request_id)
     streaming-merge already happened at ingest. Phase 2 (cross-file uuid
@@ -1258,7 +1258,7 @@ def check_update(target_path=None):
 def main():
     global DB_URL
     parser = argparse.ArgumentParser(
-        description="Plot Claude Code usage from the ccudash Postgres DB"
+        description="Plot Claude Code usage from the claudit Postgres DB"
     )
     parser.add_argument(
         "-v", "--version",
@@ -1380,7 +1380,7 @@ def main():
         end = now
         period_label = "24h"
 
-    print(f"Reading records from claude_viz ({DB_URL.split('@')[-1] if '@' in DB_URL else DB_URL}) ...", file=sys.stderr)
+    print(f"Reading records from claudit ({DB_URL.split('@')[-1] if '@' in DB_URL else DB_URL}) ...", file=sys.stderr)
     events = load_events(start, end, project=args.project)
 
     if not events:

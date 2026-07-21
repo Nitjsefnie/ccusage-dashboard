@@ -118,7 +118,7 @@ def app_with_data(monkeypatch):
 
     Bypasses auth via a clean FastAPI app with only the api router.
     """
-    test_db = "claude_viz_test_api"
+    test_db = "claudit_test_api"
     os.system(f"dropdb --if-exists {test_db} 2>/dev/null")
     os.system(f"createdb {test_db} 2>/dev/null")
     os.system(f"psql {test_db} -f {_REPO_ROOT / 'backend/schema.sql'} >/dev/null")
@@ -327,7 +327,7 @@ def app_with_rl_data(monkeypatch):
     rate-limit hits by file mtime (r2_last_modified) rather than the hit's
     own ts. Yields (client, in_range_ts, out_of_range_ts).
     """
-    test_db = "claude_viz_test_api_rl"
+    test_db = "claudit_test_api_rl"
     os.system(f"dropdb --if-exists {test_db} 2>/dev/null")
     os.system(f"createdb {test_db} 2>/dev/null")
     os.system(f"psql {test_db} -f {_REPO_ROOT / 'backend/schema.sql'} >/dev/null")

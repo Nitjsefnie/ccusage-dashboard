@@ -5,7 +5,7 @@
 
 ## Summary
 
-Add an **Export PNG** button to the ccudash dashboard that renders the full
+Add an **Export PNG** button to the claudit dashboard that renders the full
 matplotlib usage dashboard (the 8-panel figure produced by
 `scripts/plots/ccusage_plot_db.py`) for the **currently-active project and
 time-range filters**, and downloads it to the browser.
@@ -62,7 +62,7 @@ event loop. Matches the "since it works" intent.
     password into the process list and was redundant. (The script keeps its
     `--db-url` CLI flag for standalone use.) **Deployment note:** the service
     actually runs in-place from **`/root/session-viz`** (the real
-    `ccudash.service` unit; the `examples/` file's `/opt/ccudash` is only a
+    `claudit.service` unit; the `examples/` file's `/opt/claudit` is only a
     sample), so no deploy-sync step is needed — a restart picks up the repo
     directly.
   - `-o <tempfile>` — a `tempfile.mkstemp(suffix=".png")` path.
@@ -159,8 +159,8 @@ record set from Postgres, so the PNG matches the on-screen panels.
 ## Deployment notes
 
 - The service runs in-place from **`/root/session-viz`** (real
-  `ccudash.service` unit; `examples/ccudash.service`'s `/opt/ccudash` is only
-  a sample). So **no deploy-sync step** — `systemctl restart ccudash` picks up
+  `claudit.service` unit; `examples/claudit.service`'s `/opt/claudit` is only
+  a sample). So **no deploy-sync step** — `systemctl restart claudit` picks up
   the repo directly, including `scripts/plots/ccusage_plot_db.py`.
 - Requires system `/usr/bin/python3` to have `matplotlib` + `psycopg`
   (verified present); the service itself runs under `.venv` (no matplotlib),

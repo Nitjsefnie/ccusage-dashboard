@@ -55,7 +55,7 @@ ALTER TABLE tool_uses ADD COLUMN IF NOT EXISTS is_error BOOLEAN;
 - [ ] **Step 2: Apply schema**
 
 ```bash
-psql claude_viz -f backend/schema.sql
+psql claudit -f backend/schema.sql
 ```
 
 Expected: no errors. The `ADD COLUMN IF NOT EXISTS` is idempotent.
@@ -63,7 +63,7 @@ Expected: no errors. The `ADD COLUMN IF NOT EXISTS` is idempotent.
 - [ ] **Step 3: Verify column exists**
 
 ```bash
-psql claude_viz -c "\d tool_uses" | grep is_error
+psql claudit -c "\d tool_uses" | grep is_error
 ```
 
 Expected output: `is_error  | boolean`
@@ -477,8 +477,8 @@ async def tool_error_rate(
 - [ ] **Step 2: Restart the backend and smoke-test the endpoint**
 
 ```bash
-systemctl restart ccudash
-curl -sS -b "session=$(cat ~/.claude/ccudash.cookie 2>/dev/null || echo '')" \
+systemctl restart claudit
+curl -sS -b "session=$(cat ~/.claude/claudit.cookie 2>/dev/null || echo '')" \
   'http://127.0.0.1:8000/api/tool-error-rate?range=30d' | python3 -m json.tool | head -30
 ```
 
@@ -926,7 +926,7 @@ In `src/app.jsx`, after the closing `</div>` of the
 - [ ] **Step 2: Restart, reload, visually verify**
 
 ```bash
-systemctl restart ccudash
+systemctl restart claudit
 ```
 
 Open the dashboard in a browser. Scroll past Reply Latency. The new
@@ -941,7 +941,7 @@ ingest:
 curl -sS -X POST -H "X-Admin-Token: $ADMIN_TOKEN" http://127.0.0.1:8000/admin/ingest
 ```
 
-Wait for `ingest_done` (visible in `journalctl -u ccudash -f`),
+Wait for `ingest_done` (visible in `journalctl -u claudit -f`),
 reload the page (the SSE listener auto-refetches; no manual refresh
 needed if the tab was open, but a reload is fine).
 

@@ -196,7 +196,7 @@ async def export_png(
     _parse_range(range)  # validation only — raises HTTPException(400) on garbage
     if _export_lock.locked():
         raise HTTPException(503, "an export is already in progress; try again shortly")
-    fd, out_path = tempfile.mkstemp(suffix=".png", prefix="ccudash_export_")
+    fd, out_path = tempfile.mkstemp(suffix=".png", prefix="claudit_export_")
     os.close(fd)
     try:
         argv = _build_export_argv(range, project, out_path)

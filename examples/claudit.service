@@ -1,14 +1,14 @@
 [Unit]
-Description=ccudash — Claude Code usage dashboard
+Description=claudit — Claude Code usage dashboard
 After=network.target postgresql.service
 Wants=postgresql.service
 
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/opt/ccudash
-EnvironmentFile=/opt/ccudash/.env
-ExecStart=/opt/ccudash/.venv/bin/python -m uvicorn backend.app:app \
+WorkingDirectory=/opt/claudit
+EnvironmentFile=/opt/claudit/.env
+ExecStart=/opt/claudit/.venv/bin/python -m uvicorn backend.app:app \
     --host 127.0.0.1 --port 8000 \
     --proxy-headers --forwarded-allow-ips '127.0.0.1' \
     --timeout-graceful-shutdown 5

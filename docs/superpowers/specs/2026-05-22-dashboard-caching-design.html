@@ -55,7 +55,7 @@
 <body>
 <div class="page">
 
-<div class="eyebrow">ccudash · design spec · 2026-05-22</div>
+<div class="eyebrow">claudit · design spec · 2026-05-22</div>
 <h1>Dashboard load-time caching</h1>
 
 <div class="ctx">
@@ -70,7 +70,7 @@
   <code>/api/dashboard</code> issues ~6 separate SQL statements, and
   <em>every one re-runs the same <code>deduped</code> CTE</em> — a
   <code>DISTINCT ON (uuid)</code> over <code>records&nbsp;⋈&nbsp;files</code>
-  with the time-range filter. Measured on the live <code>claude_viz</code> DB
+  with the time-range filter. Measured on the live <code>claudit</code> DB
   (114k records, 42k in the 30d window):
 </p>
 

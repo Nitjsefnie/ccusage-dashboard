@@ -1,6 +1,6 @@
 # Canonical Cross-Check — 2026-05-07
 
-End-to-end correctness check: ccudash's per-session aggregates vs. the
+End-to-end correctness check: claudit's per-session aggregates vs. the
 canonical `parse_session.py --cache` walked over the same R2 mirror.
 
 ## Mirror
@@ -13,9 +13,9 @@ canonical `parse_session.py --cache` walked over the same R2 mirror.
   `data/subagents` dirs at depth 8 + a few outliers)
 - Bucket size on disk: **1.4 GiB**
 
-## ccudash ingest
+## claudit ingest
 
-Lifespan startup ingest, fresh `claude_viz` DB:
+Lifespan startup ingest, fresh `claudit` DB:
 
 | field | value |
 |---|---|
@@ -63,7 +63,7 @@ Walked the same `/tmp/analyst.BCYKic3p/r2/` tree. Wall: 20.1 s.
 
 ## Deltas
 
-| field | ccudash | canonical | Δ | Δ % |
+| field | claudit | canonical | Δ | Δ % |
 |---|---|---|---|---|
 | TOTAL cost | $14,585.78 | $14,626.34 | -$40.56 | -0.28% |
 | Turns/requests | 82,522 | 83,217 | -695 | -0.83% |
@@ -88,7 +88,7 @@ Walked the same `/tmp/analyst.BCYKic3p/r2/` tree. Wall: 20.1 s.
 `backend/ingest._list_main_jsonls` skips folders without a main file
 (`stem != session_dir`), but `parse_session.py` walks all `*.jsonl`
 recursively and dedups by inner-record uuid — so canonical includes the
-agent transcripts as part of the global walk while ccudash drops them.
+agent transcripts as part of the global walk while claudit drops them.
 
 These appear to be sub-agent transcripts whose parent session folder was
 deleted (the parent `<uuid>.jsonl` was cleaned up but the sub-agent

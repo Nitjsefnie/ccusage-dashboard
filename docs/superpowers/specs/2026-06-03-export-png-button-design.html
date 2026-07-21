@@ -4,7 +4,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Design spec — Export PNG button (ccudash)</title>
+  <title>Design spec — Export PNG button (claudit)</title>
   <style>
     :root {
       --ivory:    #1B1A17;
@@ -344,7 +344,7 @@
   <div class="page">
 
     <header class="page-head">
-      <div class="eyebrow">Design spec · ccudash</div>
+      <div class="eyebrow">Design spec · claudit</div>
       <h1>Export PNG button — render the dashboard for the active filters</h1>
       <div class="context-box">
         <span class="label">Context</span>
@@ -382,7 +382,7 @@
         <code>.ok</code> check rather than a plain <code>&lt;a href&gt;</code>, so error
         responses render inline instead of ejecting the SPA. The service runs
         in-place from <code>/root/session-viz</code> (the <code>examples/</code> unit's
-        <code>/opt/ccudash</code> is only a sample), so a restart needs no deploy-sync.</div>
+        <code>/opt/claudit</code> is only a sample), so a restart needs no deploy-sync.</div>
     </div>
 
     <section>
@@ -398,8 +398,8 @@
       <p class="body">Two gaps remain: <strong>(a)</strong> the script has no
         project filter (its <code>load_events</code> is a bare
         <code>FROM records r</code>), and <strong>(b)</strong> nothing connects it
-        to the web app. The deployed service runs from <code>/opt/ccudash</code> as
-        root with <code>EnvironmentFile=/opt/ccudash/.env</code>, and the only
+        to the web app. The deployed service runs from <code>/opt/claudit</code> as
+        root with <code>EnvironmentFile=/opt/claudit/.env</code>, and the only
         interpreter with matplotlib is system <code>/usr/bin/python3</code> — the
         app <code>.venv</code> does not have it.</p>
     </section>
@@ -576,7 +576,7 @@
     </section>
 
     <div class="footer">
-      <p>Design spec · ccudash · 2026-06-03 · companion to <code>docs/superpowers/specs/2026-06-03-export-png-button-design.md</code></p>
+      <p>Design spec · claudit · 2026-06-03 · companion to <code>docs/superpowers/specs/2026-06-03-export-png-button-design.md</code></p>
     </div>
 
   </div>

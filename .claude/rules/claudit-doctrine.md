@@ -1,6 +1,6 @@
-# ccudash Doctrine
+# claudit Doctrine
 
-Local rules for the ccudash repo. Global rules under `~/.claude/rules/**` still apply.
+Local rules for the claudit repo. Global rules under `~/.claude/rules/**` still apply.
 
 ## Parser-spec ownership (SV-PARSER-SPEC)
 
@@ -49,7 +49,7 @@ come from R2, owned by the same operator).
 
 ## Bundle distribution NOT applicable (SV-NO-BUNDLE)
 
-ccudash does not ship via `claude-setup.zip`. Distribution path is
+claudit does not ship via `claude-setup.zip`. Distribution path is
 git (this repo) + `pip install -r backend/requirements.txt`.
 
 ## Test fixtures stay small (SV-FIXTURE-SIZE)
@@ -62,7 +62,7 @@ Don't grow either by accident — larger samples go under
 
 ## Read-only on canonical paths (SV-READ-ONLY-CANONICAL)
 
-ccudash NEVER edits `~/.claude/scripts/parse_session.py` or
+claudit NEVER edits `~/.claude/scripts/parse_session.py` or
 `~/.claude/scripts/discord_mb.py`. Those are owned by analyst, and per
 global doctrine they are NOT copied, symlinked, or hardlinked into this
 repo — invoke them by absolute path under `~/.claude/scripts/`.
@@ -70,7 +70,7 @@ repo — invoke them by absolute path under `~/.claude/scripts/`.
 ## Schema fail-fast (SV-SCHEMA-FAIL-FAST)
 
 `backend/db.schema_check()` runs at every server startup. It verifies
-(a) `claude_viz.files` exists and (b) the auth DB's `users.config` is a
+(a) `claudit.files` exists and (b) the auth DB's `users.config` is a
 JSONB column. Either failure aborts startup with a clear error rather
 than silently degrading to a broken auth flow at first login.
 

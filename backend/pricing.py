@@ -1,6 +1,6 @@
 """Per-model cost rates (USD per million tokens).
 
-SINGLE SOURCE OF TRUTH for cost in ccudash. Mirrored by src/parser.js
+SINGLE SOURCE OF TRUTH for cost in claudit. Mirrored by src/parser.js
 (SV-PARSER-SPEC) — keep both in lockstep. Bump PARSER_VERSION when this
 table changes; every session reparses.
 
@@ -11,7 +11,7 @@ Cache writes are split by TTL:
 Tokens recorded as cache_creation_input_tokens with NO ephemeral_5m/1h
 split (older SDK versions) are charged at the 5m rate — conservative
 undercount, not overcount. See SV-COST-SPLIT in
-.claude/rules/ccudash-doctrine.md.
+.claude/rules/claudit-doctrine.md.
 
 Three resolution behaviours matter, in priority order:
 

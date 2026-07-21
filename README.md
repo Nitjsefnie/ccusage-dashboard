@@ -1,4 +1,4 @@
-# ccudash
+# claudit
 
 **Claude Code Usage Dashboard** — a self-hosted web app for visualising Claude
 Code session JSONL transcripts.
@@ -69,7 +69,7 @@ with multi-user auth, R2 ingest, and live updates.
 ```
 R2 (claude bucket)
   ↓  hourly ingest  (APScheduler @ :15 UTC, or POST /admin/ingest)
-Postgres `claude_viz`
+Postgres `claudit`
   • projects     (project_id PK)
   • files        (file_key PK, ctx_turns JSONB, rate_limit_hits JSONB)
   • records      (file_key, line_num PK, per-request tokens + cost
@@ -97,8 +97,8 @@ in `.env` when rates change to force a full reparse).
 ## Quick start
 
 ```bash
-createdb claude_viz
-psql claude_viz -f backend/schema.sql
+createdb claudit
+psql claudit -f backend/schema.sql
 cp backend/.env.example .env  # edit values
 python3 -m venv .venv && . .venv/bin/activate
 pip install -r backend/requirements.txt
@@ -118,23 +118,23 @@ client falls back to walking the directory tree.
 ## Operations
 
 The deploy is intended to run under systemd. See
-[`examples/ccudash.service`](examples/ccudash.service) for a sample
+[`examples/claudit.service`](examples/claudit.service) for a sample
 unit file. Key settings:
 
 - `--timeout-graceful-shutdown 5` so SSE connections drain quickly.
 - `TimeoutStopSec=10` for fast restarts.
 
 ```bash
-systemctl restart ccudash
-systemctl status ccudash
-journalctl -u ccudash -f
+systemctl restart claudit
+systemctl status claudit
+journalctl -u claudit -f
 ```
 
 Schema migrations are idempotent — re-apply after editing
 `backend/schema.sql`:
 
 ```bash
-psql claude_viz -f backend/schema.sql
+psql claudit -f backend/schema.sql
 ```
 
 ## Auth

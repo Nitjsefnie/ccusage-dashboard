@@ -563,7 +563,7 @@ function TopBar({ route, setRoute, isGuest, backendOn, range, project }) {
       <div className="topbar-left">
         <div className="logo">
           <span className="logo-mark">{'>'}</span>
-          <span className="logo-text">CCUSAGE</span>
+          <span className="logo-text">CLAUDIT</span>
           <span className="logo-sub">session inspector{isGuest ? ' · guest' : ''}</span>
         </div>
       </div>

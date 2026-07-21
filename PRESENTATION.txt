@@ -1,4 +1,4 @@
-**ccudash** — Claude Code Usage Dashboard
+**claudit** — Claude Code Usage Dashboard
 *Self-hosted visual analytics for Claude Code sessions*
 
 📊 **9 Interactive Panels**
@@ -7,7 +7,7 @@
 
 ```
 ┌──────────────────────┬─────────────┬─────────────────┐
-│                      │  ccusage    │    ccudash      │
+│                      │  ccusage    │    claudit      │
 │                      │   -plot     │   (this repo)   │
 ├──────────────────────┼─────────────┼─────────────────┤
 │ Delivery             │ matplotlib  │ SVG / React     │
@@ -33,7 +33,7 @@ Backend: per-file `requestId` max-merge at ingest time, cross-file uuid dedup at
 
 🏃 **One-liner start**
 ```bash
-createdb claude_viz && psql claude_viz -f backend/schema.sql
+createdb claudit && psql claudit -f backend/schema.sql
 pip install -r backend/requirements.txt
 python3 -m uvicorn backend.app:app --host 127.0.0.1 --port 8000
 ```
