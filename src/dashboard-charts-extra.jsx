@@ -446,6 +446,22 @@ function perTurnStats(sessions) {
 function ContextSubPanel({ title, sessions, color, cap, w, h }) {
   const ref = React.useRef(null);
   const [tip, setTip] = React.useState(null);
+  const legRef = React.useRef(null);
+  const [legendAdv, setLegendAdv] = React.useState(0);
+
+  // Advance of the 8.5px legend mono, measured from a rendered label. See the
+  // axis-gutter note in dashboard-charts.jsx: predicted advances disagree
+  // with the real one because app.css adds letter-spacing.
+  React.useLayoutEffect(() => {
+    const g = legRef.current;
+    if (!g) return;
+    const t = g.querySelector('text');
+    if (!t || !t.getComputedTextLength) return;
+    const n = (t.textContent || '').length;
+    if (!n) return;
+    const a = t.getComputedTextLength() / n;
+    if (a > 0 && Math.abs(a - legendAdv) > 0.05) setLegendAdv(a);
+  });
 
   // Legend now sits below the plot, so padB grows (x-ticks + legend).
   const padL = 50, padR = 16, padT = 38, padB = 50;
@@ -544,17 +560,43 @@ function ContextSubPanel({ title, sessions, color, cap, w, h }) {
           {nSess.toLocaleString()} agent files · longest: {longest} · max ctx: {humanFmt_X(maxCtx)}
         </text>
 
-        {/* Mini legend, BELOW the plot */}
-        <g transform={`translate(${padL}, ${h - 14})`}>
-          <rect x={0} y={0} width={14} height={8} fill={color} fillOpacity="0.18" />
-          <text x={18} y={7} fontSize="8.5" fill={TH_X.textDim} fontFamily="monospace">active</text>
-          <line x1={52} x2={66} y1={4} y2={4} stroke={color} strokeWidth="0.7" strokeOpacity="0.6" />
-          <text x={70} y={7} fontSize="8.5" fill={TH_X.textDim} fontFamily="monospace">sessions</text>
-          <line x1={108} x2={122} y1={4} y2={4} stroke="#fff" strokeWidth="1.8" />
-          <text x={126} y={7} fontSize="8.5" fill={TH_X.text} fontFamily="monospace">median</text>
-          <rect x={158} y={1} width={14} height={6} fill={color} fillOpacity="0.4" />
-          <text x={176} y={7} fontSize="8.5" fill={TH_X.textDim} fontFamily="monospace">p25–p75</text>
-        </g>
+        {/* Mini legend, BELOW the plot. Entries are placed cumulatively from
+            their own text widths. At the previous fixed x (18/70/126/176) the
+            labels varied in width and ran into the NEXT entry's swatch:
+            "sessions" overlapped the median rule by 6.9px and "median"
+            overlapped the p25–p75 block by 1.6px. */}
+        {(() => {
+          const adv = legendAdv || 5.6;
+          const SW = 14, GAP = 4, SPACING = 12;
+          const items = [
+            { key: 'active', label: 'active', dim: true,
+              mark: <rect x={0} y={0} width={SW} height={8} fill={color} fillOpacity="0.18" /> },
+            { key: 'sessions', label: 'sessions', dim: true,
+              mark: <line x1={0} x2={SW} y1={4} y2={4} stroke={color} strokeWidth="0.7" strokeOpacity="0.6" /> },
+            { key: 'median', label: 'median', dim: false,
+              mark: <line x1={0} x2={SW} y1={4} y2={4} stroke="#fff" strokeWidth="1.8" /> },
+            { key: 'iqr', label: 'p25–p75', dim: true,
+              mark: <rect x={0} y={1} width={SW} height={6} fill={color} fillOpacity="0.4" /> },
+          ];
+          let cx = 0;
+          // h - 18, not h - 14: at 14 the legend's glyph boxes ended 3.5px
+          // from the panel's bottom edge.
+          return (
+            <g ref={legRef} transform={`translate(${padL}, ${h - 18})`}>
+              {items.map(it => {
+                const at = cx;
+                cx += SW + GAP + it.label.length * adv + SPACING;
+                return (
+                  <g key={it.key} transform={`translate(${at}, 0)`}>
+                    {it.mark}
+                    <text x={SW + GAP} y={7} fontSize="8.5"
+                      fill={it.dim ? TH_X.textDim : TH_X.text} fontFamily="monospace">{it.label}</text>
+                  </g>
+                );
+              })}
+            </g>
+          );
+        })()}
 
         {/* Y grid */}
         {yTicks.map((v, i) => (
@@ -638,7 +680,7 @@ function ContextSubPanel({ title, sessions, color, cap, w, h }) {
 
         {/* Y labels */}
         {yTicks.map((v, i) => (
-          <text key={'yl'+i} x={padL - 6} y={yScale(v) + 3}
+          <text key={'yl'+i} x={padL - 9} y={yScale(v) + 3}
             fontSize="8.5" fill={TH_X.textDim} textAnchor="end" fontFamily="monospace">
             {humanFmt_X(v)}
           </text>
@@ -1056,7 +1098,7 @@ function ComparisonRow({ models, byModel, w, h }) {
             and the two labels overlapped. The cap label wins, being the
             one that carries meaning. */}
         {yTicks.filter(v => Math.abs(yScale(v) - yScale(cap)) >= 12).map((v, i) => (
-          <text key={'yl'+i} x={padL - 6} y={yScale(v) + 3}
+          <text key={'yl'+i} x={padL - 9} y={yScale(v) + 3}
             fontSize="9" fill={TH_X.textDim} textAnchor="end" fontFamily="monospace">
             {humanFmt_X(v)}
           </text>
@@ -1376,7 +1418,7 @@ function ResponseSizesPanel({ data, bucketS }) {
 
           {/* Y labels */}
           {yTicks.map((v, i) => (
-            <text key={'yl'+i} x={padL - 6} y={yScale(v) + 3}
+            <text key={'yl'+i} x={padL - 9} y={yScale(v) + 3}
               fontSize="9" fill={TH_X.textDim} textAnchor="end" fontFamily="monospace">
               {window.humanFmt(v)}
             </text>
@@ -1654,7 +1696,10 @@ function ToolErrorSubPanel({ modelName, modelData, w, h, bucketMs }) {
   const xMin = modelData.buckets.length ? modelData.buckets[0] : 0;
   const xMax = modelData.buckets.length ? modelData.buckets[modelData.buckets.length - 1] + bucketMs : 1;
 
-  const padL = 38, padR = 6, padT = 22, padB = 22;
+  // padL 50, not 38: y labels are end-anchored at padL - 5 and a 5-char
+  // percentage ("0.00%", "15.7%") renders 29.3px wide, which left only 3.7px
+  // to the panel edge. 50 gives 15.7px, and still ~10px for a 6-char label.
+  const padL = 50, padR = 6, padT = 22, padB = 22;
   const plotW = Math.max(1, w - padL - padR);
   const plotH = Math.max(1, h - padT - padB);
   const xs = (t) => padL + ((t - xMin) / Math.max(1, xMax - xMin)) * plotW;
@@ -2217,7 +2262,7 @@ function ToolUsagePanel({ models, project, range, nonce }) {
 
           {/* Y labels */}
           {yTicks.map((v, i) => (
-            <text key={'yl'+i} x={padL - 6} y={yScale(v) + 3}
+            <text key={'yl'+i} x={padL - 9} y={yScale(v) + 3}
               fontSize="9" fill={TH_X.textDim} textAnchor="end" fontFamily="monospace">
               {(v * 100).toFixed(0)}%
             </text>
@@ -2567,7 +2612,7 @@ function ReplyLatencyPanel({ project, range, nonce, models }) {
           )}
 
           {yTicks.map((v, i) => (
-            <text key={'yl'+i} x={padL - 6} y={yScale(v) + 3}
+            <text key={'yl'+i} x={padL - 9} y={yScale(v) + 3}
               fontSize="9" fill={TH_X.textDim} textAnchor="end" fontFamily="monospace">
               {v < 1 ? v.toFixed(1) + 's'
                : v < 60 ? Math.round(v) + 's'

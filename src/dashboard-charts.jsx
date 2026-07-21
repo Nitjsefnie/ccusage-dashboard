@@ -567,6 +567,21 @@ function BurnRatePanel({ events, sessions, limitHits, range: propRange, windowBo
   const ref = React.useRef(null);
   const [size, setSize] = React.useState({ w: 1200, h: 360 });
   const [tip, setTip] = React.useState(null);
+  const [legendAdv, setLegendAdv] = React.useState(0);
+
+  // Per-character advance of the legend's 10px monospace, measured from a
+  // legend label that actually rendered. Same reasoning as the axis gutters:
+  // a predicted advance disagrees with the real one because app.css adds
+  // letter-spacing that measurement APIs outside the SVG don't see.
+  React.useLayoutEffect(() => {
+    if (!ref.current) return;
+    const t = ref.current.querySelector('text[data-legend-item]');
+    if (!t || !t.getComputedTextLength) return;
+    const n = (t.textContent || '').length;
+    if (!n) return;
+    const a = t.getComputedTextLength() / n;
+    if (a > 0 && Math.abs(a - legendAdv) > 0.05) setLegendAdv(a);
+  });
 
   React.useEffect(() => {
     if (!ref.current) return;
@@ -884,22 +899,41 @@ function BurnRatePanel({ events, sessions, limitHits, range: propRange, windowBo
             {t.label}
           </text>
         ))}
-        <text x={14} y={padT + plotH/2} fontSize="10" fill={TH.textDim}
+        {/* x=18 not 14: rotated text's box extends about one ascent to the
+            left of its baseline, so at 14 it began 3.5px from the edge. */}
+        <text x={18} y={padT + plotH/2} fontSize="10" fill={TH.textDim}
           textAnchor="middle" fontFamily="monospace"
-          transform={`rotate(-90 14 ${padT + plotH/2})`}>Tokens per hour (EMA) / 100 × Cost per hour</text>
+          transform={`rotate(-90 18 ${padT + plotH/2})`}>Tokens per hour (EMA) / 100 × Cost per hour</text>
 
-        <g transform={`translate(${padL + 20}, ${h - 22})`}>
-          {Object.entries(series).map(([k, s], i) => (
-            <g key={k} transform={`translate(${i * 130}, 0)`}>
-              <line x1={0} x2={20} y1={6} y2={6} stroke={s.color} strokeWidth="2" />
-              <text x={26} y={10} fontSize="10" fill={TH.text} fontFamily="monospace">{s.label} (EMA)</text>
+        {/* Legend entries are laid out cumulatively from their own widths,
+            not on a fixed pitch. At the old 130px pitch "Cache Create (EMA)"
+            (18 chars = 115.2px, plus a 20px swatch and 6px gap = 141.2px)
+            overran its slot and the NEXT entry's swatch was drawn 11.2px
+            inside it. Advance is measured, seeded at 6.4 for first paint. */}
+        {(() => {
+          const items = Object.entries(series).map(([k, s]) => (
+            { key: k, color: s.color, label: `${s.label} (EMA)` }));
+          items.push({ key: '__ratelimit', color: '#ff3366', label: 'Rate limit hit' });
+          const adv = legendAdv || 6.4;
+          const SWATCH = 20, GAP = 6, SPACING = 24;
+          let cx = 0;
+          const placed = items.map(it => {
+            const at = cx;
+            cx += SWATCH + GAP + it.label.length * adv + SPACING;
+            return { ...it, at };
+          });
+          return (
+            <g transform={`translate(${padL + 20}, ${h - 22})`}>
+              {placed.map(it => (
+                <g key={it.key} transform={`translate(${it.at}, 0)`}>
+                  <line x1={0} x2={SWATCH} y1={6} y2={6} stroke={it.color} strokeWidth="2" />
+                  <text data-legend-item="" x={SWATCH + GAP} y={10} fontSize="10"
+                    fill={TH.text} fontFamily="monospace">{it.label}</text>
+                </g>
+              ))}
             </g>
-          ))}
-          <g transform={`translate(${4 * 130}, 0)`}>
-            <line x1={0} x2={20} y1={6} y2={6} stroke="#ff3366" strokeWidth="2" />
-            <text x={26} y={10} fontSize="10" fill={TH.text} fontFamily="monospace">Rate limit hit</text>
-          </g>
-        </g>
+          );
+        })()}
       </svg>
       <Tooltip tip={tip} />
     </div>
