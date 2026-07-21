@@ -313,12 +313,74 @@ window.modelRates = {
   'claude-3-opus-':    { fresh: 15,   c5: 18.75, c1h: 30,   read: 1.5,  out: 75 },
   'claude-3-haiku-':   { fresh: 0.25, c5: 0.30,  c1h: 0.50, read: 0.03, out: 1.25 },
 };
-window.rateForModel = function rateForModel(model) {
-  const m = String(model || '');
+// Dated overrides, per exact key. Mirrors pricing.DATED_RATES.
+// Claude Sonnet 5 launched at an introductory 2/10; list price takes
+// effect 2026-09-01 UTC (month is 0-based in Date.UTC).
+window.datedRates = {
+  'claude-sonnet-5': [
+    { endExclusive: Date.UTC(2026, 8, 1), rates: { fresh: 2, c5: 2.5, c1h: 4, read: 0.2, out: 10 } },
+  ],
+};
+window.rateEpochs = [Date.UTC(2026, 8, 1)];
+
+// Family fallbacks for unrecognised Claude models — current-generation
+// list rates for the tier, never a dated promotion.
+const _TIER_FALLBACKS = [
+  [/fable|mythos/, 'claude-fable-5'],
+  [/opus/, 'claude-opus-4-8'],
+  [/sonnet/, 'claude-sonnet-5'],
+  [/haiku/, 'claude-haiku-4-5'],
+];
+// A dated snapshot suffix ('-20250514') is the same model; a short version
+// suffix ('-9') or mode suffix ('-fast') is a DIFFERENT model.
+const _SNAPSHOT_SUFFIX = /^-?\d{6,8}$/;
+
+function _normaliseModel(model) {
+  let m = String(model || '').trim().toLowerCase();
+  if (!m) return '';
+  const i = m.indexOf('claude');   // strip provider/region routing prefix
+  if (i > 0) m = m.slice(i);
+  return m.replace(/\./g, '-');
+}
+
+function _matchRateKey(norm) {
   for (const k of Object.keys(window.modelRates)) {
-    if (m.includes(k)) return window.modelRates[k];
+    if (!norm.startsWith(k)) continue;
+    const rest = norm.slice(k.length);
+    if (rest === '' || rest[0] === '[' || rest[0] === '@' || _SNAPSHOT_SUFFIX.test(rest)) return k;
   }
-  return window.modelRates['claude-opus-4-7'];
+  return null;
+}
+
+function _toMillis(ts) {
+  if (ts == null) return null;
+  const t = typeof ts === 'number' ? ts : Date.parse(ts);
+  return Number.isNaN(t) ? null : t;
+}
+
+// Resolve a model id to rates, reporting how confident the match is:
+// 'exact' | 'tier' | 'default'. Anything but 'exact' is an estimate.
+window.resolveModelRate = function resolveModelRate(model, ts) {
+  const norm = _normaliseModel(model);
+  const key = _matchRateKey(norm);
+  if (key) {
+    const t = _toMillis(ts);
+    const windows = window.datedRates[key];
+    if (windows && t != null) {
+      for (const w of windows) {
+        if (t < w.endExclusive) return { rates: w.rates, kind: 'exact', key };
+      }
+    }
+    return { rates: window.modelRates[key], kind: 'exact', key };
+  }
+  for (const [re, tierKey] of _TIER_FALLBACKS) {
+    if (re.test(norm)) return { rates: window.modelRates[tierKey], kind: 'tier', key: null };
+  }
+  return { rates: window.modelRates['claude-opus-4-7'], kind: 'default', key: null };
+};
+
+window.rateForModel = function rateForModel(model, ts) {
+  return window.resolveModelRate(model, ts).rates;
 };
 
 window.computeSessionStats = function (events, meta) {
@@ -358,8 +420,8 @@ window.computeSessionStats = function (events, meta) {
     }
   }
 
-  function rate(model) {
-    return window.rateForModel(model);
+  function rate(model, ts) {
+    return window.rateForModel(model, ts);
   }
 
   for (const m of meta) {
@@ -376,7 +438,7 @@ window.computeSessionStats = function (events, meta) {
     stats.fresh += f; stats.create += cc; stats.read += cr; stats.output += o;
     stats.eph5 += eph5; stats.eph1h += eph1h;
 
-    const r = rate(m.model || '');
+    const r = rate(m.model || '', m.ts);
     const unsplit = Math.max(0, cc - eph5 - eph1h);
     stats.cost += (f * r.fresh + (eph5 + unsplit) * r.c5 + eph1h * r.c1h + cr * r.read + o * r.out) / 1_000_000;
   }

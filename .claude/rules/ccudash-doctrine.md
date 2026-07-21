@@ -100,3 +100,37 @@ change.
 `records` cascades from `files`; `files` cascades from `projects`.
 Reparse is idempotent: deleting a file's `records` rows and
 re-inserting on the next ingest leaves the table byte-identical.
+
+## Rates are a function of (model, timestamp) (SV-DATED-RATES)
+
+`pricing.rate_for(model, ts)` — a model may carry dated overrides in
+`DATED_RATES` (e.g. Claude Sonnet 5's introductory 2/10 through
+2026-08-31 UTC, list 3/15 from 2026-09-01). Cost must be computed against
+the timestamp of the request being priced, never the time of rendering.
+`parse.py` passes each record's own `ts`; omitting `ts` yields LIST price
+(conservative — never silently applies a discount).
+
+Any read path that RE-DERIVES rates from summed tokens must group by
+`pricing.RATE_EPOCHS` (`api.rate_epoch_sql` / `api.fold_per_model`), or
+its per-component breakdown drifts from the `SUM(cost_usd)` total it
+claims to decompose. Totals themselves always come from the stored
+per-record `cost_usd` — do not recompute them at read time.
+
+## Model resolution flags estimates (SV-RATE-ESTIMATES)
+
+`pricing.resolve()` returns `kind`: `exact` | `tier` | `default`.
+
+- Model ids are normalised first: provider/region prefixes stripped
+  (`us.anthropic.`, `anthropic/`) and `.` → `-`, so `claude-opus-4.8`
+  resolves the same as `claude-opus-4-8`.
+- An EXACT match allows only a dated-snapshot (`-20250514`) or bracket
+  (`[1m]`) suffix after a table key. A short version suffix must NOT
+  match a shorter key — billing `claude-opus-4-9` at `claude-opus-4`'s
+  retired 15/75 is a silent 3x overcount.
+- Unmatched Claude models fall back to their family's current-generation
+  LIST rates and are flagged `tier`; anything else is `default`.
+  Non-exact resolutions surface as `estimated_rate` in the API so a
+  guessed figure is never presented as fact.
+
+Never invent a rate for a variant we have no published price for
+(e.g. `-fast`): let it fall back and be flagged.

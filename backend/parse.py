@@ -388,18 +388,22 @@ def parse_file(file_key: str, blob: bytes) -> dict:
         eph5 = int(eph.get("ephemeral_5m_input_tokens", 0) or 0)
         eph1h = int(eph.get("ephemeral_1h_input_tokens", 0) or 0)
         unsplit = max(0, create - eph5 - eph1h)
+        ts = _to_dt(ev["ts"])
         cost = pricing.compute_cost(
             ev["model"],
             fresh=fresh, output=output,
             eph5=eph5, eph1h=eph1h,
             unsplit_create=unsplit, read=read,
+            # Dated rates apply to when the tokens were spent, not to
+            # when this file happens to be parsed.
+            ts=ts,
         )
         records.append({
             "file_key": file_key,
             "line_num": ev["line_num"],
             "uuid": ev["uuid"],
             "request_id": ev["request_id"],
-            "ts": _to_dt(ev["ts"]),
+            "ts": ts,
             "model": ev["model"],
             "fresh_tokens": fresh,
             "cache_creation_tokens": create,

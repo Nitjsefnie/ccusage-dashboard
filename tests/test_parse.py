@@ -268,3 +268,13 @@ def test_reply_latency_ignores_replayed_prompt():
     assert out["records"][0]["reply_latency_s"] == pytest.approx(5.0)
     assert out["records"][1]["reply_latency_s"] is None
     assert out["prompt_count"] == 2
+
+
+def test_dated_rate_prices_each_record_at_its_own_timestamp():
+    # Sonnet 5 introductory pricing runs through 2026-08-31 UTC; a record
+    # on either side of the cutover must be priced by when it was spent,
+    # not by when the file is parsed.
+    out = parse.parse_file("k/sess-d/sess-d.jsonl", _read("dated_rate_sonnet5.jsonl"))
+    intro, listed = out["records"]
+    assert intro["cost_usd"] == pytest.approx(2.00)
+    assert listed["cost_usd"] == pytest.approx(3.00)

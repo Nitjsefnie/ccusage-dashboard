@@ -28,6 +28,105 @@ from fastapi import APIRouter, HTTPException, Query
 from starlette.requests import Request
 from starlette.responses import Response, StreamingResponse
 
+# --- dated-rate helpers ---------------------------------------------------
+# cost_total always comes from SUM(cost_usd) — the per-record cost computed
+# at ingest against that record's own timestamp. cost_buckets, by contrast,
+# is re-derived from summed tokens, so it must be aggregated per rate epoch
+# or it silently disagrees with the total it claims to decompose whenever a
+# range straddles a dated rate change. See backend/pricing.RATE_EPOCHS.
+
+
+def rate_epoch_sql(ts_column: str) -> tuple[str, list]:
+    """SQL expression yielding a 0-based rate-epoch index, plus its params."""
+    from backend import pricing
+
+    cases = [
+        f"(CASE WHEN {ts_column} >= %s THEN 1 ELSE 0 END)"
+        for _ in pricing.RATE_EPOCHS
+    ]
+    expr = " + ".join(["0", *cases]) if cases else "0"
+    return expr, list(pricing.RATE_EPOCHS)
+
+
+def epoch_ts(index: int) -> datetime | None:
+    """A timestamp lying inside rate epoch ``index``, for rate lookup."""
+    from backend import pricing
+
+    if not pricing.RATE_EPOCHS:
+        return None
+    if index <= 0:
+        return pricing.RATE_EPOCHS[0] - timedelta(microseconds=1)
+    return pricing.RATE_EPOCHS[min(index, len(pricing.RATE_EPOCHS)) - 1]
+
+
+def fold_per_model(rows) -> list[dict]:
+    """Fold (model, rate_epoch, ...) aggregate rows into one entry per model.
+
+    Token counts and cost_total sum across epochs; cost_buckets are priced
+    per epoch so they always reconcile with cost_total.
+    """
+    from backend import pricing
+
+    acc: dict[str, dict] = {}
+    for row in rows:
+        model, epoch, turns, fresh, cc, cr, output, eph5, eph1h, cost = row
+        model = model or "unknown"
+        fresh = int(fresh or 0)
+        cc = int(cc or 0)
+        cr = int(cr or 0)
+        output = int(output or 0)
+        eph5 = int(eph5 or 0)
+        eph1h = int(eph1h or 0)
+        unsplit = max(0, cc - eph5 - eph1h)
+
+        rates = pricing.rate_for(model, epoch_ts(int(epoch or 0)))
+        entry = acc.setdefault(
+            model,
+            {
+                "model": model,
+                "turns": 0,
+                "fresh": 0,
+                "cache_create": 0,
+                "cache_read": 0,
+                "output": 0,
+                "eph5": 0,
+                "eph1h": 0,
+                "cost_total": 0.0,
+                "estimated_rate": pricing.resolve(model).estimated,
+                "_buckets": {
+                    "fresh": 0.0, "create_5m": 0.0, "create_1h": 0.0,
+                    "read": 0.0, "output": 0.0,
+                },
+            },
+        )
+        entry["turns"] += int(turns or 0)
+        entry["fresh"] += fresh
+        entry["cache_create"] += cc
+        entry["cache_read"] += cr
+        entry["output"] += output
+        entry["eph5"] += eph5
+        entry["eph1h"] += eph1h
+        entry["cost_total"] += float(cost or 0)
+        b = entry["_buckets"]
+        b["fresh"] += fresh * rates["fresh"] / 1_000_000
+        b["create_5m"] += (eph5 + unsplit) * rates["create_5m"] / 1_000_000
+        b["create_1h"] += eph1h * rates["create_1h"] / 1_000_000
+        b["read"] += cr * rates["read"] / 1_000_000
+        b["output"] += output * rates["output"] / 1_000_000
+
+    out = []
+    for entry in acc.values():
+        buckets = entry.pop("_buckets")
+        total_in = entry["fresh"] + entry["cache_create"] + entry["cache_read"]
+        entry["hit_rate_pct"] = round(
+            (entry["cache_read"] / total_in * 100.0) if total_in else 0.0, 1
+        )
+        entry["cost_total"] = round(entry["cost_total"], 4)
+        entry["cost_buckets"] = {k: round(v, 4) for k, v in buckets.items()}
+        out.append(entry)
+    out.sort(key=lambda e: e["cost_total"], reverse=True)
+    return out
+
 from backend import cache, db, pricing, r2
 from backend.cache import cache_response
 
@@ -648,9 +747,11 @@ async def cache_view(
     """
 
     with db.viz_conn() as c:
+        epoch_expr, epoch_params = rate_epoch_sql("ts")
         per_model_rows = c.execute(
-            base_cte + """
+            base_cte + f"""
             SELECT model,
+                   ({epoch_expr})              AS rate_epoch,
                    COUNT(*)                    AS turns,
                    SUM(fresh_tokens)           AS fresh,
                    SUM(cache_creation_tokens)  AS cache_create,
@@ -660,10 +761,10 @@ async def cache_view(
                    SUM(eph1h_tokens)           AS eph1h,
                    SUM(cost_usd)               AS cost_total
             FROM deduped
-            GROUP BY model
+            GROUP BY model, rate_epoch
             ORDER BY cost_total DESC
             """,
-            args2,
+            args2 + epoch_params,
         ).fetchall()
 
         top_output = c.execute(
@@ -707,43 +808,7 @@ async def cache_view(
             args2,
         ).fetchall()
 
-    def _per_model(row):
-        model, turns, fresh, cc, cr, output, eph5, eph1h, cost = row
-        fresh = int(fresh or 0)
-        cc = int(cc or 0)
-        cr = int(cr or 0)
-        output = int(output or 0)
-        eph5 = int(eph5 or 0)
-        eph1h = int(eph1h or 0)
-        unsplit = max(0, cc - eph5 - eph1h)
-        rates = pricing.rate_for(model)
-        f_cost = fresh * rates["fresh"] / 1_000_000
-        c5_cost = (eph5 + unsplit) * rates["create_5m"] / 1_000_000
-        c1h_cost = eph1h * rates["create_1h"] / 1_000_000
-        rd_cost = cr * rates["read"] / 1_000_000
-        o_cost = output * rates["output"] / 1_000_000
-        total_in = fresh + cc + cr
-        return {
-            "model": model,
-            "turns": int(turns or 0),
-            "fresh": fresh,
-            "cache_create": cc,
-            "cache_read": cr,
-            "output": output,
-            "eph5": eph5,
-            "eph1h": eph1h,
-            "hit_rate_pct": round((cr / total_in * 100.0) if total_in else 0.0, 1),
-            "cost_total": round(float(cost or 0), 4),
-            "cost_buckets": {
-                "fresh": round(f_cost, 4),
-                "create_5m": round(c5_cost, 4),
-                "create_1h": round(c1h_cost, 4),
-                "read": round(rd_cost, 4),
-                "output": round(o_cost, 4),
-            },
-        }
-
-    per_model = [_per_model(r) for r in per_model_rows]
+    per_model = fold_per_model(per_model_rows)
 
     session_total = {
         "turns": sum(m["turns"] for m in per_model),

@@ -633,7 +633,7 @@ function computeTokenBreakdown(events) {
   const c = { input: 0, output: 0, eph5: 0, eph1h: 0, ccUnsplit: 0, cr: 0 };
   if (window.rateForModel) {
     for (const e of events) {
-      const r = window.rateForModel(e.model);
+      const r = window.rateForModel(e.model, e.ts);
       const unsplit = Math.max(0, (e.cache_create || 0) - (e.ephemeral_5m || 0) - (e.ephemeral_1h || 0));
       c.input     += (e.input_tokens   || 0) * r.fresh;
       c.output    += (e.output_tokens  || 0) * r.out;
