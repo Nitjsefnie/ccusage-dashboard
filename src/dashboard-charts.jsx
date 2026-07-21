@@ -68,6 +68,42 @@ function humanCurrency(v) {
   return '$' + v.toFixed(2);
 }
 
+// Per-character advance of the dashboard's monospace face, measured once per
+// font size and cached.
+//
+// It must be measured with getComputedTextLength() on a real SVG text node
+// under a .dashboard ancestor, because app.css applies
+//   .dashboard svg text { font-family: var(--mono); letter-spacing: 0.04em }
+// and letter-spacing is invisible to canvas measureText. At 11px that is
+// 0.44px/char — canvas reports 6.6px/char while the browser actually renders
+// 7.04px/char. The old hard-coded 6.6 constant was exactly that canvas
+// figure, and the missing 6.7% came out of the left margin: HBar's longest
+// model label sat 3.6px from the panel edge.
+function monoAdvancePx(fontSize) {
+  monoAdvancePx._c = monoAdvancePx._c || {};
+  if (monoAdvancePx._c[fontSize]) return monoAdvancePx._c[fontSize];
+  const NS = 'http://www.w3.org/2000/svg';
+  const host = document.createElement('div');
+  host.className = 'dashboard';
+  host.style.cssText =
+    'position:absolute;left:-9999px;top:0;height:0;overflow:hidden;visibility:hidden';
+  const svg = document.createElementNS(NS, 'svg');
+  const text = document.createElementNS(NS, 'text');
+  text.setAttribute('font-size', String(fontSize));
+  text.setAttribute('font-family', 'monospace');
+  const SAMPLE = '0123456789';
+  text.textContent = SAMPLE;
+  svg.appendChild(text);
+  host.appendChild(svg);
+  document.body.appendChild(host);
+  // visibility:hidden still lays out, so this is a real measurement.
+  const adv = text.getComputedTextLength() / SAMPLE.length;
+  document.body.removeChild(host);
+  // The face is monospace, so width === length * advance exactly; verified
+  // against 8-, 9- and 10-character labels, all 7.041px/char at 11px.
+  return (monoAdvancePx._c[fontSize] = adv > 0 ? adv : fontSize * 0.64);
+}
+
 function fmtDate(ts, opts = {}) {
   const d = new Date(ts);
   const M = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -190,6 +226,20 @@ function TimeSeriesPanel({ title, events, valueKey, color, isCurrency, range, bi
   const ref = React.useRef(null);
   const [size, setSize] = React.useState({ w: 600, h: 280 });
   const [tip, setTip] = React.useState(null);
+  const [yLabelPx, setYLabelPx] = React.useState(0);
+
+  // Same reasoning as HBar: measure the rendered labels rather than predict
+  // them from a font metric. Runs before paint, so the corrected padding is
+  // never a visible reflow.
+  React.useLayoutEffect(() => {
+    if (!ref.current) return;
+    let m = 0;
+    ref.current.querySelectorAll('text[data-yl-label]').forEach(t => {
+      const len = t.getComputedTextLength ? t.getComputedTextLength() : 0;
+      if (len > m) m = len;
+    });
+    if (m > 0 && Math.abs(m - yLabelPx) > 0.5) setYLabelPx(m);
+  });
 
   React.useEffect(() => {
     if (!ref.current) return;
@@ -206,7 +256,17 @@ function TimeSeriesPanel({ title, events, valueKey, color, isCurrency, range, bi
   // anchored at padR - 6 from the edge) and the rotated "cumulative" title
   // whose box sits at w-21..w-9. At the old 50 the labels had 23px before
   // the title and "100M" is exactly 23.0px wide, so wider values collided.
-  const padL = 50, padR = 70, padT = 28, padB = 28;
+  const padR = 70, padT = 28, padB = 28;
+  // The left gutter holds the rotated "per <bin>" caption (box 8..20 once
+  // anchored at x=17) and then the y labels, end-anchored at padL - 6. So
+  // the widest label needs padL - 6 - width >= 26 to keep a 6px gap from the
+  // caption. At a fixed 50 that held for "10M" but not for "$500.00", which
+  // renders 40.3px wide and ended up 3.7px from the panel edge — measured,
+  // not estimated, for the same reason as HBar below.
+  const padL = Math.min(
+    Math.max(60, w * 0.25),
+    Math.max(50, Math.ceil(yLabelPx) + 32)
+  );
   const plotW = Math.max(10, w - padL - padR);
   const plotH = Math.max(10, h - padT - padB);
 
@@ -337,7 +397,7 @@ function TimeSeriesPanel({ title, events, valueKey, color, isCurrency, range, bi
         )}
 
         {yTicksL.map((v, idx) => (
-          <text key={'yl'+idx} x={padL - 6} y={yBar(v) + 4}
+          <text data-yl-label="" key={'yl'+idx} x={padL - 6} y={yBar(v) + 4}
             fontSize="9" fill={TH.textDim} textAnchor="end" fontFamily="monospace">
             {humanFmt(v, isCurrency)}
           </text>
@@ -363,16 +423,19 @@ function TimeSeriesPanel({ title, events, valueKey, color, isCurrency, range, bi
         <text x={w/2} y={18} fontSize="13" fontWeight="bold" fill={TH.text}
           textAnchor="middle" fontFamily="monospace">{title}</text>
 
-        <text x={12} y={padT + plotH/2} fontSize="9" fill={TH.textDim}
+        {/* x=17 not 12: at 12 the rotated caption's box started 3px from the
+            panel edge. 17 puts it at 8px, matching the margin the y labels
+            get on the other side of it. */}
+        <text x={17} y={padT + plotH/2} fontSize="9" fill={TH.textDim}
           textAnchor="middle" fontFamily="monospace"
-          transform={`rotate(-90 12 ${padT + plotH/2})`}>per {binMsLabel(binMs)}</text>
+          transform={`rotate(-90 17 ${padT + plotH/2})`}>per {binMsLabel(binMs)}</text>
         <text x={w - 12} y={padT + plotH/2} fontSize="9" fill={TH.textDim}
           textAnchor="middle" fontFamily="monospace"
           transform={`rotate(-90 ${w - 12} ${padT + plotH/2})`}>cumulative</text>
 
         {(() => {
           const totalStr = `Total: ${humanFmt(total, isCurrency)}`;
-          const boxW = Math.round(totalStr.length * 6.6) + 16;
+          const boxW = Math.ceil(totalStr.length * monoAdvancePx(11)) + 16;
           const boxX = w - padR - boxW - 6;
           return (
             <g>
@@ -397,6 +460,24 @@ function HBar({ title, rows, totalForPct, fmt, fixedColors, embedded }) {
   const [w, setW] = React.useState(600);
   const [hover, setHover] = React.useState(null);
   const [mouse, setMouse] = React.useState({ x: 0, y: 0 });
+  const [labelPx, setLabelPx] = React.useState(0);
+
+  // Measure the labels as they actually render instead of predicting their
+  // width from a font metric. A detached probe disagreed with the real thing
+  // — it resolved the generic monospace face (6.489px/char) rather than the
+  // 7.041px/char this dashboard's CSS applies via letter-spacing — and the
+  // wrong figure then sat in a cache for the page's lifetime. This runs
+  // before paint, so the corrected padding never shows up as a visible
+  // reflow, and it self-corrects if the font or CSS ever changes.
+  React.useLayoutEffect(() => {
+    if (!ref.current) return;
+    let m = 0;
+    ref.current.querySelectorAll('text[data-hbar-label]').forEach(t => {
+      const len = t.getComputedTextLength ? t.getComputedTextLength() : 0;
+      if (len > m) m = len;
+    });
+    if (m > 0 && Math.abs(m - labelPx) > 0.5) setLabelPx(m);
+  });
 
   React.useEffect(() => {
     if (!ref.current) return;
@@ -408,13 +489,15 @@ function HBar({ title, rows, totalForPct, fmt, fixedColors, embedded }) {
   // Rows render on a 36px pitch from padT — size the SVG to exactly
   // that (the old 40 + rows*44 left ~8px of dead space per row).
   const h = 32 + rows.length * 36 + 18;
-  // Dynamic left pad: fits the widest label at 11px monospace
-  // (~6.6px/char), clamped so the bar still has room.
-  const FONT_CHAR_PX = 6.6;
-  const longestLabelChars = rows.reduce((m, r) => Math.max(m, (r.label || '').length), 0);
+  // Left pad fits the widest label. Labels are end-anchored at padL - 8, so
+  // +20 buys that 8px plus a 12px margin to the panel edge. labelPx is the
+  // measured width from the layout effect above; the font-metric estimate
+  // only seeds the very first paint, before anything exists to measure.
+  const estLabelPx = monoAdvancePx(11) *
+    rows.reduce((m, r) => Math.max(m, (r.label || '').length), 0);
   const padL = Math.min(
     Math.max(60, w * 0.45),
-    Math.ceil(longestLabelChars * FONT_CHAR_PX) + 16
+    Math.ceil(Math.max(labelPx, estLabelPx)) + 20
   );
   const padR = 60, padT = 32;
   const plotW = Math.max(10, w - padL - padR);
@@ -461,7 +544,7 @@ function HBar({ title, rows, totalForPct, fmt, fixedColors, embedded }) {
               onMouseEnter={() => setHover(idx)}
               style={{ cursor: 'pointer' }}>
               <rect x={0} y={y} width={w} height={32} fill="transparent" />
-              <text x={padL - 8} y={y + 18} fontSize="11" fill={TH.text}
+              <text data-hbar-label="" x={padL - 8} y={y + 18} fontSize="11" fill={TH.text}
                 textAnchor="end" fontFamily="monospace">{r.label}</text>
               <rect x={padL} y={y + 4} width={Math.max(2, barW)} height={26}
                 fill={c} fillOpacity={isHover ? 1 : 0.85}
