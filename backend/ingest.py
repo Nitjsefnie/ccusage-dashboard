@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
 from backend import cache, db, events, parse, r2
@@ -55,6 +56,9 @@ def run_ingest(trigger: str) -> dict:
 
         seen_keys: set[str] = set()
         seen_projects: dict[str, dict] = {}
+        # (obj, proj, project_id, session_id, is_main, stored) per file
+        # needing work; fetched+parsed below on a pool.
+        todo: list[tuple] = []
 
         for obj in r2.list_keys():
             # Objects may be stored plain or per-object xz-compressed; r2
@@ -99,109 +103,38 @@ def run_ingest(trigger: str) -> dict:
             if not need_reparse:
                 continue
 
-            blob = r2.get_object(obj.key)
-            parsed = parse.parse_file(obj.key, blob)
+            todo.append((obj, proj, project_id, session_id, is_main, stored))
 
-            with db.viz_conn() as c, c.cursor() as cur:
-                # Project upsert. first_seen_at uses LEAST so a later
-                # ingest seeing an older file drags it backward.
-                cur.execute(
-                    "INSERT INTO projects (project_id, display_name, "
-                    "first_seen_at, last_seen_at) "
-                    "VALUES (%(project_id)s, %(display_name)s, "
-                    "%(first_seen_at)s, %(last_seen_at)s) "
-                    "ON CONFLICT (project_id) DO UPDATE SET "
-                    "  display_name = EXCLUDED.display_name, "
-                    "  first_seen_at = LEAST(projects.first_seen_at, "
-                    "                        EXCLUDED.first_seen_at), "
-                    "  last_seen_at = GREATEST(projects.last_seen_at, "
-                    "                          EXCLUDED.last_seen_at)",
-                    proj,
-                )
-                # Wipe existing records for this file (we use UPSERT on
-                # files so records need an explicit DELETE before the
-                # bulk INSERT below).
-                cur.execute(
-                    "DELETE FROM records WHERE file_key = %s", (obj.key,)
-                )
-                cur.execute(
-                    """
-                    INSERT INTO files (file_key, project_id, session_id,
-                      is_main, r2_etag, r2_size_bytes, r2_last_modified,
-                      parsed_at, parser_version, ctx_turns, turn_count,
-                      prompt_count, rate_limit_hits)
-                    VALUES (%(file_key)s, %(project_id)s, %(session_id)s,
-                      %(is_main)s, %(r2_etag)s, %(r2_size_bytes)s,
-                      %(r2_last_modified)s, %(parsed_at)s, %(parser_version)s,
-                      %(ctx_turns)s::jsonb, %(turn_count)s,
-                      %(prompt_count)s, %(rate_limit_hits)s::jsonb)
-                    ON CONFLICT (file_key) DO UPDATE SET
-                      project_id = EXCLUDED.project_id,
-                      session_id = EXCLUDED.session_id,
-                      is_main = EXCLUDED.is_main,
-                      r2_etag = EXCLUDED.r2_etag,
-                      r2_size_bytes = EXCLUDED.r2_size_bytes,
-                      r2_last_modified = EXCLUDED.r2_last_modified,
-                      parsed_at = EXCLUDED.parsed_at,
-                      parser_version = EXCLUDED.parser_version,
-                      ctx_turns = EXCLUDED.ctx_turns,
-                      turn_count = EXCLUDED.turn_count,
-                      prompt_count = EXCLUDED.prompt_count,
-                      rate_limit_hits = EXCLUDED.rate_limit_hits
-                    """,
-                    {
-                        "file_key": obj.key,
-                        "project_id": project_id,
-                        "session_id": session_id,
-                        "is_main": is_main,
-                        "r2_etag": obj.etag,
-                        "r2_size_bytes": obj.size,
-                        "r2_last_modified": obj.last_modified,
-                        "parsed_at": datetime.now(timezone.utc),
-                        "parser_version": parser_version,
-                        "ctx_turns": json.dumps(parsed["ctx_turns"], default=str),
-                        "turn_count": parsed["turn_count"],
-                        "prompt_count": parsed["prompt_count"],
-                        "rate_limit_hits": json.dumps(
-                            parsed.get("rate_limit_hits", []), default=str
-                        ),
-                    },
-                )
-                # tool_uses cascades from files; explicit DELETE so a
-                # reparse doesn't leave stale rows behind.
-                cur.execute(
-                    "DELETE FROM tool_uses WHERE file_key = %s", (obj.key,)
-                )
-                if parsed.get("tool_uses"):
-                    cur.executemany(
-                        """
-                        INSERT INTO tool_uses (file_key, line_num, idx, ts, tool_name, is_error)
-                        VALUES (%(file_key)s, %(line_num)s, %(idx)s, %(ts)s, %(tool_name)s, %(is_error)s)
-                        """,
-                        parsed["tool_uses"],
-                    )
-                if parsed["records"]:
-                    cur.executemany(
-                        """
-                        INSERT INTO records (file_key, line_num, uuid,
-                          request_id, ts, model, fresh_tokens,
-                          cache_creation_tokens, cache_read_tokens,
-                          output_tokens, eph5_tokens, eph1h_tokens, cost_usd,
-                          text_chars, reply_latency_s)
-                        VALUES (%(file_key)s, %(line_num)s, %(uuid)s,
-                          %(request_id)s, %(ts)s, %(model)s,
-                          %(fresh_tokens)s, %(cache_creation_tokens)s,
-                          %(cache_read_tokens)s, %(output_tokens)s,
-                          %(eph5_tokens)s, %(eph1h_tokens)s, %(cost_usd)s,
-                          %(text_chars)s, %(reply_latency_s)s)
-                        """,
-                        parsed["records"],
-                    )
-                c.commit()
-            if stored is None:
-                inserted += 1
+        # Fetch + parse is ~88% of per-file wall time and is network-bound
+        # (one R2 GET each), so it runs on a thread pool. Persistence stays
+        # on this thread: the per-file transaction boundary, and therefore
+        # ordering and failure semantics, are exactly as before. Work is
+        # submitted in bounded chunks so an 8k-file reparse does not hold
+        # every inflated blob in memory at once.
+        workers = _worker_count()
+        chunk = max(1, workers * 4)
+        for start in range(0, len(todo), chunk):
+            batch = todo[start:start + chunk]
+            if workers == 1:
+                results = ((item, _fetch_and_parse(item[0].key)) for item in batch)
             else:
-                reparsed += 1
+                with ThreadPoolExecutor(max_workers=workers) as pool:
+                    futures = {
+                        pool.submit(_fetch_and_parse, item[0].key): item
+                        for item in batch
+                    }
+                    results = [
+                        (futures[f], f.result()) for f in as_completed(futures)
+                    ]
+            for (obj, proj, project_id, session_id, is_main, stored), parsed in results:
+                _persist(
+                    obj, proj, project_id, session_id, is_main,
+                    parsed, parser_version,
+                )
+                if stored is None:
+                    inserted += 1
+                else:
+                    reparsed += 1
 
         # Orphan files
         with db.viz_conn() as c, c.cursor() as cur:
@@ -247,3 +180,127 @@ def run_ingest(trigger: str) -> dict:
         cache.response_cache.clear()
         events.broadcast_threadsafe("ingest_done", summary)
     return summary
+
+
+
+def _worker_count() -> int:
+    """Fetch+parse concurrency.
+
+    Unset or unparseable -> auto (network-bound work, so oversubscribe
+    cores). An explicit number is honoured, clamped to at least 1, so
+    INGEST_WORKERS=1 is a real "go sequential" switch for debugging.
+    """
+    auto = min(16, (os.cpu_count() or 4) * 2)
+    raw = os.environ.get("INGEST_WORKERS", "").strip()
+    if not raw:
+        return auto
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return auto
+
+
+def _fetch_and_parse(key: str) -> dict:
+    """Runs on a pool thread. Touches no DB connection."""
+    return parse.parse_file(key, r2.get_object(key))
+
+
+def _persist(obj, proj, project_id, session_id, is_main, parsed,
+             parser_version) -> None:
+    """One file, one transaction — identical to the pre-pool behaviour."""
+    with db.viz_conn() as c, c.cursor() as cur:
+        # Project upsert. first_seen_at uses LEAST so a later
+        # ingest seeing an older file drags it backward.
+        cur.execute(
+            "INSERT INTO projects (project_id, display_name, "
+            "first_seen_at, last_seen_at) "
+            "VALUES (%(project_id)s, %(display_name)s, "
+            "%(first_seen_at)s, %(last_seen_at)s) "
+            "ON CONFLICT (project_id) DO UPDATE SET "
+            "  display_name = EXCLUDED.display_name, "
+            "  first_seen_at = LEAST(projects.first_seen_at, "
+            "                        EXCLUDED.first_seen_at), "
+            "  last_seen_at = GREATEST(projects.last_seen_at, "
+            "                          EXCLUDED.last_seen_at)",
+            proj,
+        )
+        # Wipe existing records for this file (we use UPSERT on
+        # files so records need an explicit DELETE before the
+        # bulk INSERT below).
+        cur.execute(
+            "DELETE FROM records WHERE file_key = %s", (obj.key,)
+        )
+        cur.execute(
+            """
+            INSERT INTO files (file_key, project_id, session_id,
+              is_main, r2_etag, r2_size_bytes, r2_last_modified,
+              parsed_at, parser_version, ctx_turns, turn_count,
+              prompt_count, rate_limit_hits)
+            VALUES (%(file_key)s, %(project_id)s, %(session_id)s,
+              %(is_main)s, %(r2_etag)s, %(r2_size_bytes)s,
+              %(r2_last_modified)s, %(parsed_at)s, %(parser_version)s,
+              %(ctx_turns)s::jsonb, %(turn_count)s,
+              %(prompt_count)s, %(rate_limit_hits)s::jsonb)
+            ON CONFLICT (file_key) DO UPDATE SET
+              project_id = EXCLUDED.project_id,
+              session_id = EXCLUDED.session_id,
+              is_main = EXCLUDED.is_main,
+              r2_etag = EXCLUDED.r2_etag,
+              r2_size_bytes = EXCLUDED.r2_size_bytes,
+              r2_last_modified = EXCLUDED.r2_last_modified,
+              parsed_at = EXCLUDED.parsed_at,
+              parser_version = EXCLUDED.parser_version,
+              ctx_turns = EXCLUDED.ctx_turns,
+              turn_count = EXCLUDED.turn_count,
+              prompt_count = EXCLUDED.prompt_count,
+              rate_limit_hits = EXCLUDED.rate_limit_hits
+            """,
+            {
+                "file_key": obj.key,
+                "project_id": project_id,
+                "session_id": session_id,
+                "is_main": is_main,
+                "r2_etag": obj.etag,
+                "r2_size_bytes": obj.size,
+                "r2_last_modified": obj.last_modified,
+                "parsed_at": datetime.now(timezone.utc),
+                "parser_version": parser_version,
+                "ctx_turns": json.dumps(parsed["ctx_turns"], default=str),
+                "turn_count": parsed["turn_count"],
+                "prompt_count": parsed["prompt_count"],
+                "rate_limit_hits": json.dumps(
+                    parsed.get("rate_limit_hits", []), default=str
+                ),
+            },
+        )
+        # tool_uses cascades from files; explicit DELETE so a
+        # reparse doesn't leave stale rows behind.
+        cur.execute(
+            "DELETE FROM tool_uses WHERE file_key = %s", (obj.key,)
+        )
+        if parsed.get("tool_uses"):
+            cur.executemany(
+                """
+                INSERT INTO tool_uses (file_key, line_num, idx, ts, tool_name, is_error)
+                VALUES (%(file_key)s, %(line_num)s, %(idx)s, %(ts)s, %(tool_name)s, %(is_error)s)
+                """,
+                parsed["tool_uses"],
+            )
+        if parsed["records"]:
+            cur.executemany(
+                """
+                INSERT INTO records (file_key, line_num, uuid,
+                  request_id, ts, model, fresh_tokens,
+                  cache_creation_tokens, cache_read_tokens,
+                  output_tokens, eph5_tokens, eph1h_tokens, cost_usd,
+                  text_chars, reply_latency_s)
+                VALUES (%(file_key)s, %(line_num)s, %(uuid)s,
+                  %(request_id)s, %(ts)s, %(model)s,
+                  %(fresh_tokens)s, %(cache_creation_tokens)s,
+                  %(cache_read_tokens)s, %(output_tokens)s,
+                  %(eph5_tokens)s, %(eph1h_tokens)s, %(cost_usd)s,
+                  %(text_chars)s, %(reply_latency_s)s)
+                """,
+                parsed["records"],
+            )
+        c.commit()

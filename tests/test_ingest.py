@@ -221,3 +221,66 @@ def test_ingest_flushes_response_cache(fresh_db, mini_r2_env):
     ingest.run_ingest(trigger="manual")
 
     assert cache.response_cache.get("stale-key") is None
+
+
+def _snapshot():
+    """Full ingest output, ordered so it is comparable across runs."""
+    with db.viz_conn() as c:
+        files = c.execute(
+            "SELECT file_key, project_id, session_id, is_main, r2_etag, "
+            "turn_count, prompt_count, parser_version FROM files "
+            "ORDER BY file_key"
+        ).fetchall()
+        records = c.execute(
+            "SELECT file_key, line_num, uuid, request_id, model, fresh_tokens, "
+            "cache_creation_tokens, cache_read_tokens, output_tokens, "
+            "eph5_tokens, eph1h_tokens, cost_usd FROM records "
+            "ORDER BY file_key, line_num"
+        ).fetchall()
+        tools = c.execute(
+            "SELECT file_key, line_num, idx, tool_name, is_error FROM tool_uses "
+            "ORDER BY file_key, line_num, idx"
+        ).fetchall()
+        projects = c.execute(
+            "SELECT project_id, first_seen_at, last_seen_at FROM projects "
+            "ORDER BY project_id"
+        ).fetchall()
+    return files, records, tools, projects
+
+
+def test_parallel_ingest_matches_sequential_exactly(
+    fresh_db, mini_r2_env, monkeypatch
+):
+    """Concurrency must not change what lands in the DB.
+
+    Fetch+parse is parallelised; if that leaked into ordering, dedup, or
+    the per-file transaction boundary, the two snapshots would diverge.
+    """
+    monkeypatch.setenv("INGEST_WORKERS", "1")
+    ingest.run_ingest("test-seq")
+    sequential = _snapshot()
+
+    # Wipe and re-ingest the identical mirror with a pool.
+    with db.viz_conn() as c:
+        c.execute("DELETE FROM files")
+        c.execute("DELETE FROM projects")
+        c.commit()
+
+    monkeypatch.setenv("INGEST_WORKERS", "8")
+    ingest.run_ingest("test-par")
+    parallel = _snapshot()
+
+    assert parallel[0] == sequential[0], "files differ"
+    assert parallel[1] == sequential[1], "records differ"
+    assert parallel[2] == sequential[2], "tool_uses differ"
+    assert parallel[3] == sequential[3], "projects differ"
+    assert len(sequential[1]) > 0, "fixture produced no records — vacuous test"
+
+
+def test_ingest_workers_defaults_and_clamps(monkeypatch):
+    monkeypatch.delenv("INGEST_WORKERS", raising=False)
+    assert ingest._worker_count() >= 1
+    monkeypatch.setenv("INGEST_WORKERS", "0")
+    assert ingest._worker_count() == 1
+    monkeypatch.setenv("INGEST_WORKERS", "not-a-number")
+    assert ingest._worker_count() >= 1

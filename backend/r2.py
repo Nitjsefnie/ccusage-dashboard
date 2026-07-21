@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import lzma
 import os
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator, NamedTuple
@@ -135,13 +136,33 @@ def get_stream(key: str):
     return raw
 
 
+_tls = threading.local()
+
+
 def _boto_client():
+    """Per-thread cached S3 client.
+
+    Rebuilding this per object cost ~5ms of botocore setup each time AND
+    threw away the underlying connection pool, so every GET paid a fresh
+    TLS handshake. Caching per thread keeps keep-alive alive; it is
+    thread-local rather than module-global because botocore clients are
+    only documented thread-safe for method calls, and a private client per
+    worker also gives each its own connection pool.
+    """
+    client = getattr(_tls, "client", None)
+    if client is not None:
+        return client
     import boto3
+    from botocore.config import Config
+
     endpoint = os.environ["R2_ENDPOINT"]
-    return boto3.client(
+    client = boto3.client(
         "s3",
         endpoint_url=endpoint,
         aws_access_key_id=os.environ["R2_ACCESS_KEY_ID"],
         aws_secret_access_key=os.environ["R2_SECRET_ACCESS_KEY"],
         region_name="auto",
+        config=Config(max_pool_connections=32, retries={"max_attempts": 3}),
     )
+    _tls.client = client
+    return client
