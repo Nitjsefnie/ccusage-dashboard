@@ -164,6 +164,12 @@ restart).
 - `fixtures/` — small JSONL + zip samples for parser tests.
 - `examples/` — sample systemd service file.
 
+## Contributing
+
+Issues and PRs welcome — including agent-authored ones. See
+[`CONTRIBUTING.md`](CONTRIBUTING.md) for setup, the test suite, and the
+invariants most likely to trip a patch.
+
 ## License
 
 MIT (see [`LICENSE`](LICENSE), © 2026 Nitjsefnie).
