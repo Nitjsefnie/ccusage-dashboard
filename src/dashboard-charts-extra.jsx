@@ -28,7 +28,12 @@ function CacheTTLPanel({ events, range, binMs }) {
   const { w, h } = size;
   const padL = 60, padR = 60, padT = 50, padB = 36;
   const sharePctH = 56;        // bottom strip
-  const gap = 6;
+  // Separates the main plot's baseline from the share strip's ceiling.
+  // This has to clear the *labels*, not just the lines: the main axis "0"
+  // sits in a 12px box centred on the baseline and the strip's "100%" in a
+  // 10px box centred on shareTop, so anything under ~12 makes them collide
+  // (at the old value of 6 they overlapped by 6px).
+  const gap = 16;
   const plotW = Math.max(10, w - padL - padR);
   const plotH = Math.max(40, h - padT - padB - sharePctH - gap);
 
