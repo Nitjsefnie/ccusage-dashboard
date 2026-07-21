@@ -568,19 +568,29 @@ function BurnRatePanel({ events, sessions, limitHits, range: propRange, windowBo
   const [size, setSize] = React.useState({ w: 1200, h: 360 });
   const [tip, setTip] = React.useState(null);
   const [legendAdv, setLegendAdv] = React.useState(0);
+  const [yLabelPx, setYLabelPx] = React.useState(0);
 
-  // Per-character advance of the legend's 10px monospace, measured from a
-  // legend label that actually rendered. Same reasoning as the axis gutters:
-  // a predicted advance disagrees with the real one because app.css adds
-  // letter-spacing that measurement APIs outside the SVG don't see.
+  // Per-character advance of the legend's 10px monospace, plus the widest
+  // rendered y label — both measured from nodes that actually painted. Same
+  // reasoning as the axis gutters elsewhere: a predicted advance disagrees
+  // with the real one because app.css adds letter-spacing that measurement
+  // APIs outside the SVG don't see.
   React.useLayoutEffect(() => {
     if (!ref.current) return;
     const t = ref.current.querySelector('text[data-legend-item]');
-    if (!t || !t.getComputedTextLength) return;
-    const n = (t.textContent || '').length;
-    if (!n) return;
-    const a = t.getComputedTextLength() / n;
-    if (a > 0 && Math.abs(a - legendAdv) > 0.05) setLegendAdv(a);
+    if (t && t.getComputedTextLength) {
+      const n = (t.textContent || '').length;
+      if (n) {
+        const a = t.getComputedTextLength() / n;
+        if (a > 0 && Math.abs(a - legendAdv) > 0.05) setLegendAdv(a);
+      }
+    }
+    let m = 0;
+    ref.current.querySelectorAll('text[data-yl-label]').forEach(e => {
+      const len = e.getComputedTextLength ? e.getComputedTextLength() : 0;
+      if (len > m) m = len;
+    });
+    if (m > 0 && Math.abs(m - yLabelPx) > 0.5) setYLabelPx(m);
   });
 
   React.useEffect(() => {
@@ -613,7 +623,18 @@ function BurnRatePanel({ events, sessions, limitHits, range: propRange, windowBo
     return { start: lo, end: hi };
   })();
   // Top is just title (no legend); bottom has x-tick labels + the legend.
-  const padL = 60, padR = 30, padT = 30, padB = 56;
+  // padL sized from the measured y labels, not fixed at 60. Labels are
+  // end-anchored at padL - 8 and the rotated "Tokens per hour…" caption
+  // occupies roughly x 8..22, so the widest label needs padL - 8 - width to
+  // stay clear of it; +40 keeps ~10px. At the old fixed 60 the current
+  // widest tick ("100K", 25.6px) left only 4.4px — the same shape as the
+  // 100M/cumulative collision on the right gutter, one character from
+  // breaking.
+  const padR = 30, padT = 30, padB = 56;
+  const padL = Math.min(
+    Math.max(60, w * 0.2),
+    Math.max(60, Math.ceil(yLabelPx) + 40)
+  );
   const plotW = Math.max(10, w - padL - padR);
   const plotH = Math.max(10, h - padT - padB);
 
@@ -841,7 +862,7 @@ function BurnRatePanel({ events, sessions, limitHits, range: propRange, windowBo
           Session Burn Rate  |  {fmtDate(range.start, {day:true})} – {fmtDate(range.end, {day:true})}, {new Date(range.end).getUTCFullYear()} UTC  |  {sessions.length.toLocaleString()} sessions, {events.reduce((s,e)=>s+(e.requests==null?1:e.requests),0).toLocaleString()} requests
         </text>
         {yTicks.map((v, i) => (
-          <text key={'yl'+i} x={padL - 8} y={yScale(v) + 4}
+          <text data-yl-label="" key={'yl'+i} x={padL - 8} y={yScale(v) + 4}
             fontSize="10" fill={TH.textDim} textAnchor="end" fontFamily="monospace">
             {humanFmt(v)}
           </text>

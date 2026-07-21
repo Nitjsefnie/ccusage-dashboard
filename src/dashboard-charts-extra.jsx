@@ -14,6 +14,20 @@ function CacheTTLPanel({ events, range, binMs }) {
   const ref = React.useRef(null);
   const [size, setSize] = React.useState({ w: 1200, h: 320 });
   const [tip, setTip] = React.useState(null);
+  const [yLabelPx, setYLabelPx] = React.useState(0);
+
+  // Widest rendered y label. These are token counts, so their width is
+  // unbounded, and a fixed gutter is a budget that gets consumed silently —
+  // the same shape as the 100M/cumulative collision.
+  React.useLayoutEffect(() => {
+    if (!ref.current) return;
+    let m = 0;
+    ref.current.querySelectorAll('text[data-yl-label]').forEach(e => {
+      const len = e.getComputedTextLength ? e.getComputedTextLength() : 0;
+      if (len > m) m = len;
+    });
+    if (m > 0 && Math.abs(m - yLabelPx) > 0.5) setYLabelPx(m);
+  });
 
   React.useEffect(() => {
     if (!ref.current) return;
@@ -26,7 +40,13 @@ function CacheTTLPanel({ events, range, binMs }) {
   }, []);
 
   const { w, h } = size;
-  const padL = 60, padR = 60, padT = 50, padB = 36;
+  // padL grows with the y labels: they sit at padL - 6 and must clear the
+  // rotated captions, whose boxes end at x~17. +35 keeps ~12px.
+  const padR = 60, padT = 50, padB = 36;
+  const padL = Math.min(
+    Math.max(60, size.w * 0.15),
+    Math.max(60, Math.ceil(yLabelPx) + 35)
+  );
   const sharePctH = 56;        // bottom strip
   // Separates the main plot's baseline from the share strip's ceiling.
   // This has to clear the *labels*, not just the lines: the main axis "0"
@@ -234,7 +254,7 @@ function CacheTTLPanel({ events, range, binMs }) {
 
         {/* Y-axis labels */}
         {yTicks.map((v, i) => (
-          <text key={'yl'+i} x={padL - 6} y={yBar(v) + 4}
+          <text data-yl-label="" key={'yl'+i} x={padL - 6} y={yBar(v) + 4}
             fontSize="9" fill={TH_X.textDim} textAnchor="end" fontFamily="monospace">
             {humanFmt_X(v)}
           </text>
@@ -1193,6 +1213,19 @@ function ResponseSizesPanel({ data, bucketS }) {
   const ref = React.useRef(null);
   const [w, setW] = React.useState(1200);
   const [tip, setTip] = React.useState(null);
+  const [yLabelPx, setYLabelPx] = React.useState(0);
+
+  // Widest rendered y label, so the gutter tracks the labels instead of
+  // being a fixed budget that a wider decade silently consumes.
+  React.useLayoutEffect(() => {
+    if (!ref.current) return;
+    let m = 0;
+    ref.current.querySelectorAll('text[data-yl-label]').forEach(e => {
+      const len = e.getComputedTextLength ? e.getComputedTextLength() : 0;
+      if (len > m) m = len;
+    });
+    if (m > 0 && Math.abs(m - yLabelPx) > 0.5) setYLabelPx(m);
+  });
   React.useEffect(() => {
     if (!ref.current) return;
     const ro = new ResizeObserver(es => setW(es[0].contentRect.width));
@@ -1259,7 +1292,13 @@ function ResponseSizesPanel({ data, bucketS }) {
   const logYMin = Math.log10(yMin);
   const logYMax = Math.log10(yMax);
 
-  const padL = 56, padR = 30, padT = 16, padB = 30;
+  // padL tracks the y labels (anchored at padL - 9) so they stay clear of
+  // the rotated "visible chars (log)" caption, whose box ends near x=17.
+  const padR = 30, padT = 16, padB = 30;
+  const padL = Math.min(
+    Math.max(56, w * 0.15),
+    Math.max(56, Math.ceil(yLabelPx) + 32)
+  );
   const h = 280;
   const plotW = Math.max(20, w - padL - padR);
   const plotH = h - padT - padB;
@@ -1418,7 +1457,7 @@ function ResponseSizesPanel({ data, bucketS }) {
 
           {/* Y labels */}
           {yTicks.map((v, i) => (
-            <text key={'yl'+i} x={padL - 9} y={yScale(v) + 3}
+            <text data-yl-label="" key={'yl'+i} x={padL - 9} y={yScale(v) + 3}
               fontSize="9" fill={TH_X.textDim} textAnchor="end" fontFamily="monospace">
               {window.humanFmt(v)}
             </text>
