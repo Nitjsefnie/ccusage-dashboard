@@ -630,7 +630,11 @@ function ContextSubPanel({ title, sessions, color, cap, w, h }) {
           <g>
             <line x1={padL} x2={w - padR} y1={yScale(cap)} y2={yScale(cap)}
               stroke="#ff5577" strokeWidth="1" strokeDasharray="2,3" strokeOpacity="0.7" />
-            <text x={w - padR - 4} y={yScale(cap) - 3} fontSize="8.5"
+            {/* Below the cap line, not above it: above, the label shares a
+                band with the panel subtitle, and since one is left-anchored
+                and the other right-anchored they collide once the panel
+                narrows (they overlapped at an 800px viewport). */}
+            <text x={w - padR - 4} y={yScale(cap) + 11} fontSize="8.5"
               fill="#ff5577" textAnchor="end" fontFamily="monospace">
               {humanFmt_X(cap)} cap
             </text>
@@ -1063,7 +1067,7 @@ function ComparisonRow({ models, byModel, w, h }) {
             Sits BELOW the plot area now (was above the title). */}
         {(() => {
           const clusterW = 270;
-          const legendBaseY = padT + plotH + 30;  // below x-tick labels
+          const legendBaseY = padT + plotH + 42;  // below the axis caption
           return series.map((s, i) => {
             const c = (window.modelColors && window.modelColors[s.model]) || '#888';
             const x = padL + (i * clusterW) % Math.max(1, plotW);
@@ -1133,10 +1137,13 @@ function ComparisonRow({ models, byModel, w, h }) {
         <text x={14} y={padT + plotH/2} fontSize="9" fill={TH_X.textDim}
           textAnchor="middle" fontFamily="monospace"
           transform={`rotate(-90 14 ${padT + plotH/2})`}>context size</text>
-        {/* h - 10, not h - 4: at 4 the caption's glyph box ended 1px from the
-            panel's bottom edge, while 30px sat unused between it and the x
-            tick labels. */}
-        <text x={(padL + w - padR)/2} y={h - 10} fontSize="9" fill={TH_X.textDim}
+        {/* The caption gets its own band between the x ticks and the legend.
+            Pinned to the bottom (h - 10) it shared a 1px-apart band with the
+            legend, and since it is centred while the legend is left-anchored
+            at fixed 270px clusters, narrower viewports slid the caption into
+            a legend entry — at 1224px "median (1,314 files)" overlapped it by
+            7.5px. Stacking the bands makes horizontal position irrelevant. */}
+        <text x={(padL + w - padR)/2} y={padT + plotH + 33} fontSize="9" fill={TH_X.textDim}
           textAnchor="middle" fontFamily="monospace">turn number within session</text>
       </svg>
       {tip && <window.DashTooltip tip={tip} />}

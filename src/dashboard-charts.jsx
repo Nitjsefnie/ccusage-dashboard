@@ -936,17 +936,26 @@ function BurnRatePanel({ events, sessions, limitHits, range: propRange, windowBo
             { key: k, color: s.color, label: `${s.label} (EMA)` }));
           items.push({ key: '__ratelimit', color: '#ff3366', label: 'Rate limit hit' });
           const adv = legendAdv || 6.4;
-          const SWATCH = 20, GAP = 6, SPACING = 24;
-          let cx = 0;
+          // ROW 16, not 13: a legend label's glyph box is ~13px tall, so a
+          // 13px pitch made wrapped rows touch.
+          const SWATCH = 20, GAP = 6, SPACING = 24, ROW = 16;
+          // Wrap instead of running off the panel: at a 800px viewport the
+          // five entries need ~680px against ~630px of usable width, and an
+          // unwrapped row put text 23px outside the svg.
+          const avail = Math.max(120, w - (padL + 20) - padR);
+          let cx = 0, row = 0;
           const placed = items.map(it => {
-            const at = cx;
-            cx += SWATCH + GAP + it.label.length * adv + SPACING;
-            return { ...it, at };
+            const wEntry = SWATCH + GAP + it.label.length * adv + SPACING;
+            if (cx > 0 && cx + wEntry > avail) { row += 1; cx = 0; }
+            const at = cx, r = row;
+            cx += wEntry;
+            return { ...it, at, row: r };
           });
+          const nRows = row + 1;
           return (
-            <g transform={`translate(${padL + 20}, ${h - 22})`}>
+            <g transform={`translate(${padL + 20}, ${h - 22 - (nRows - 1) * ROW})`}>
               {placed.map(it => (
-                <g key={it.key} transform={`translate(${it.at}, 0)`}>
+                <g key={it.key} transform={`translate(${it.at}, ${it.row * ROW})`}>
                   <line x1={0} x2={SWATCH} y1={6} y2={6} stroke={it.color} strokeWidth="2" />
                   <text data-legend-item="" x={SWATCH + GAP} y={10} fontSize="10"
                     fill={TH.text} fontFamily="monospace">{it.label}</text>
