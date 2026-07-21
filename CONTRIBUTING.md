@@ -53,6 +53,12 @@ Do not "helpfully" add a bundler, an npm dependency, or a build step. The
 frontend transpiles in the browser on purpose; that is a design decision,
 not an oversight.
 
+**Scope.** claudit exposes usage *statistics* — it does not analyse session
+quality, review "what went wrong", or run an AI auditor/chatbot over your
+transcripts (see [Scope](README.md#scope) in the README). A PR that adds that
+kind of qualitative-analysis feature will be declined regardless of how well
+it is built; it is a different product. Numbers in, numbers out.
+
 ## Getting it running
 
 Requires **Python 3.13+** and a local **PostgreSQL** you can create

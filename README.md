@@ -7,6 +7,30 @@ A FastAPI backend ingests transcripts from Cloudflare R2 (or a local `file://`
 mirror), parses them into Postgres, and serves dashboards and raw transcripts
 to a React + in-browser-Babel frontend (no build step).
 
+## Scope
+
+claudit **exposes statistics** about Claude Code usage: how much you spent,
+how many tokens went where, cache-tier breakdowns, reply latency, tool-error
+rate, and when you were active. It answers *how much*, *how many*, and *when*.
+
+It is deliberately **not** a session-analysis, coaching, or auditing tool. It
+does not review your transcripts for "what went wrong", score session quality,
+or synthesize an AI narrative about your work — Claude Code's own `/insights`
+already does that. claudit puts the numbers in front of you and stays out of
+the way; interpreting them is your job, not the dashboard's. PRs that add
+qualitative analysis, an "auditor" agent, or a chatbot are out of scope.
+
+## Why ingest from object storage, not `~/.claude/projects/`?
+
+Claude Code prunes old session transcripts from the local tree over time. If
+claudit read those files directly, a reparse after a prune would silently
+**drop** history — your long-term stats would shrink. Ingesting from durable
+storage (Cloudflare R2, or any `file://` mirror you keep) preserves the full
+timeline, so the numbers only ever grow. This is the reason the ingest path
+goes through a bucket rather than reading the live session directory.
+
+## Panels
+
 The dashboard panel set — Session Burn Rate, Cost by Model, Token Breakdown,
 Prompt-Cache TTL Split, Per-Session Context Growth, Response Sizes, Tool Usage,
 Reply Latency, Tool Error Rate — is based on
