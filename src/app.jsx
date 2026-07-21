@@ -193,107 +193,6 @@ function App() {
     ? backendDashToShape(backendDash)
     : ((!useSynth && liveData) ? liveData : synth);
 
-  function loadFile(file) {
-    const reader = new FileReader();
-    reader.onload = e => {
-      const text = String(e.target.result || '');
-      const { events, meta } = window.parseTranscript(text);
-      const stats = window.computeSessionStats(events, meta);
-      setTx({ events, meta, stats });
-      setFilename(file.name);
-      setUseSynth(false);
-      setRoute('session');
-    };
-    reader.readAsText(file);
-  }
-
-  // Load N .jsonl files at once: union all assistant_usage and rate_limit
-  // metas into a single tx-shaped object so the dashboard sees real
-  // multi-session data. The Inspector still works on the FIRST file's
-  // events, but Overview / Sessions get the merged view.
-  // Accepts a mix of .jsonl/.json/.txt and .zip — zips are unpacked first.
-  async function loadFiles(filesArg) {
-    let arr = Array.from(filesArg || []);
-    if (!arr.length) return;
-    // Expand zips into virtual File-like objects
-    const expanded = [];
-    for (const f of arr) {
-      const isZip = f.name.toLowerCase().endsWith('.zip') ||
-                    f.type === 'application/zip' || f.type === 'application/x-zip-compressed';
-      if (isZip && window.JSZip) {
-        try {
-          const zip = await window.JSZip.loadAsync(f);
-          const entries = Object.values(zip.files).filter(e =>
-            !e.dir && /\.(jsonl|json|txt)$/i.test(e.name));
-          for (const e of entries) {
-            const blob = await e.async('blob');
-            expanded.push(new File([blob], e.name.split('/').pop(), { type: 'text/plain' }));
-          }
-        } catch (err) {
-          console.error('Failed to unzip', f.name, err);
-        }
-      } else {
-        expanded.push(f);
-      }
-    }
-    arr = expanded;
-    if (!arr.length) return;
-    // Sequential parse with shared cross-file uuid dedup, mirroring
-    // parse_session.py's directory mode. The same API call recorded into
-    // two files (main + agent-*.jsonl) is processed once.
-    const seenUuids = new Set();
-    const all = { events: [], meta: [] };
-    // Per-session event arrays so we can compute true turn boundaries
-    // (user-text → next user-text) for each session independently.
-    const evBySession = new Map();
-    let firstParsed = null;
-    let dupedRecs = 0;
-    const readText = (file) => new Promise(resolve => {
-      const r = new FileReader();
-      r.onload = e => resolve(String(e.target.result || ''));
-      r.readAsText(file);
-    });
-    for (let idx = 0; idx < arr.length; idx++) {
-      const file = arr[idx];
-      const text = await readText(file);
-      const before = seenUuids.size;
-      const { events, meta } = window.parseTranscript(text, { seenUuids });
-      const after = seenUuids.size;
-      // Rough estimate: lines that ran through parse minus uniques added.
-      // Not exact, but useful for the status pill.
-      dupedRecs += Math.max(0, (text.split('\n').length - 1) - (after - before)) - meta.length;
-      if (idx === 0) firstParsed = { events, meta, name: file.name };
-      const fallbackSid = file.name.replace(/\.jsonl$/, '');
-      // Resolve a sessionId for this file: prefer sessionId on usage records,
-      // fall back to filename. One file ≈ one logical session in CC.
-      let sid = fallbackSid;
-      for (const m of meta) {
-        if (m.type === 'assistant_usage' && m.sessionId) { sid = m.sessionId; break; }
-      }
-      for (const m of meta) {
-        if (m.type === 'assistant_usage' && !m.sessionId) m.sessionId = sid;
-        all.meta.push(m);
-      }
-      // Stash this file's events under its session for turn analysis.
-      // We tag each event with its sessionId so cross-file merges (multiple
-      // files sharing a sessionId) are concatenated correctly.
-      const evWithSid = events.map(e => ({ ...e, sessionId: sid }));
-      if (!evBySession.has(sid)) evBySession.set(sid, []);
-      evBySession.get(sid).push(...evWithSid);
-      all.events.push(...evWithSid);
-    }
-    const stats = window.computeSessionStats(firstParsed.events, all.meta);
-    setTx({
-      events: firstParsed.events,
-      meta: all.meta,
-      stats,
-      eventsBySession: evBySession,
-    });
-    setFilename(`${arr.length} files merged · ${seenUuids.size.toLocaleString()} uniq recs`);
-    setUseSynth(false);
-    setRoute('dashboard');
-  }
-
   async function loadFromBackend(sessionId) {
     try {
       const r = await fetch(`/api/sessions/${sessionId}/transcript`, { credentials: 'same-origin' });
@@ -335,7 +234,7 @@ function App() {
           <window.ContextGrowthAgg project={activeProject} range={activeRange} />
         </div>
       )}
-      {route === 'session' && <SessionView tx={tx} loadFile={loadFile} loadFiles={loadFiles} />}
+      {route === 'session' && <SessionView tx={tx} />}
     </div>
   );
 }
@@ -564,7 +463,7 @@ function TopBar({ route, setRoute, isGuest, backendOn, range, project }) {
         <div className="logo">
           <span className="logo-mark">{'>'}</span>
           <span className="logo-text">CLAUDIT</span>
-          <span className="logo-sub">session inspector{isGuest ? ' · guest' : ''}</span>
+          <span className="logo-sub">token usage audit{isGuest ? ' · guest' : ''}</span>
         </div>
       </div>
       <nav className="topnav">
@@ -990,48 +889,21 @@ function SessionsList({ synth, onOpen }) {
 // Session view
 // ─────────────────────────────────────────────────────────────────
 
-function SessionView({ tx, loadFile, loadFiles }) {
+function SessionView({ tx }) {
   const [selected, setSelected] = useState(0);
   const [filter, setFilter] = useState({ user: true, asst: true, think: true, tool: true, result: true });
   const [search, setSearch] = useState('');
   const [dense, setDense] = useState(false);
   const [view, setView] = useState('timeline'); // timeline | ctx
-  const dropRef = useRef(null);
 
-  useEffect(() => {
-    const el = dropRef.current; if (!el) return;
-    const over = e => { e.preventDefault(); el.classList.add('drag'); };
-    const leave = () => el.classList.remove('drag');
-    const drop = e => {
-      e.preventDefault(); el.classList.remove('drag');
-      const files = e.dataTransfer.files;
-      if (!files || !files.length) return;
-      const isZip = files[0].name.toLowerCase().endsWith('.zip');
-      // Single transcript → inspector; several files or a zip → the
-      // multi-file merge path (cross-file uuid dedup → dashboard).
-      if (files.length === 1 && !isZip) loadFile(files[0]);
-      else loadFiles(files);
-    };
-    el.addEventListener('dragover', over);
-    el.addEventListener('dragleave', leave);
-    el.addEventListener('drop', drop);
-    return () => {
-      el.removeEventListener('dragover', over);
-      el.removeEventListener('dragleave', leave);
-      el.removeEventListener('drop', drop);
-    };
-  }, [loadFile]);
 
   if (!tx) {
     return (
-      <div className="session-empty" ref={dropRef}>
+      <div className="session-empty">
         <div className="drop-card">
-          <div className="drop-glyph">⬇</div>
-          <div className="drop-title">Drop a .jsonl transcript here</div>
-          <div className="drop-sub">Drop several files (or a .zip of transcripts) to merge them into the dashboard. Files are parsed in your browser — nothing leaves the page.</div>
-          <div className="drop-hints">
-            <span>~/.claude/projects/&lt;hash&gt;/&lt;session-uuid&gt;.jsonl</span>
-          </div>
+          <div className="drop-title">No session selected</div>
+          <div className="drop-sub">Pick a session from the Sessions list to inspect its
+            timeline, tool calls, and context growth.</div>
         </div>
       </div>
     );

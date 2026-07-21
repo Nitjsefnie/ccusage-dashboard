@@ -57,7 +57,7 @@ def user_exists(user_id: int) -> bool:
 _LOGIN_HTML = """<!DOCTYPE html>
 <html lang="en"><head>
 <meta charset="UTF-8" />
-<title>Sign in · CCUSAGE</title>
+<title>Sign in · CLAUDIT</title>
 <style>
   body {{ background:#0b0d10; color:#dde; font-family: 'Inter',sans-serif;
          display:flex; align-items:center; justify-content:center;
@@ -79,7 +79,7 @@ _LOGIN_HTML = """<!DOCTYPE html>
 </style>
 </head><body>
 <form method="post" action="/login">
-  <h1>CCUSAGE · sign in</h1>
+  <h1>CLAUDIT · sign in</h1>
   <label>Username</label>
   <input name="user_id" required inputmode="numeric" pattern="[0-9]+"
          autocomplete="username">

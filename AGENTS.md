@@ -60,8 +60,9 @@ public/           — Static assets served at /
 
 src/              — React JSX modules served at /src/* (in-browser Babel)
   app.jsx         — Top-level shell, routing, dashboard fetcher, SSE listener,
-                    drag-drop file inspector, synthetic data preview.
-  parser.js       — In-browser transcript parser used by the Inspector.
+                    synthetic data preview.
+  parser.js       — In-browser transcript parser for backend-fetched
+                    transcripts, plus the shared model rate table.
                     Pricing table here MUST match backend/pricing.py.
   dashboard-charts.jsx      — Core SVG panels (time series, HBar, burn rate).
   dashboard-charts-extra.jsx — Additional panels (context growth, cache TTL).
@@ -185,7 +186,7 @@ psql claudit -f backend/schema.sql
 - **Admin**: `POST /admin/ingest` requires `X-Admin-Token` header, checked via constant-time `hmac.compare_digest`. Admin paths also enforce origin/referer checks.
 - **R2 file-mode path traversal**: `_safe_join` in `backend/r2.py` uses `os.path.realpath` to refuse keys that escape the bucket root (defence for sidecar `?path=../../../etc/passwd` attacks).
 - **SQL injection**: All DB access uses parameterised psycopg3 queries.
-- **No server-side parsing of user uploads**: The drag-drop inspector parses entirely in the browser. The backend only reads JSONLs from R2 (or its local mirror), never from HTTP uploads.
+- **No local upload path at all**: there is no drag-drop target, no `FileReader`, and no upload endpoint. The backend only reads JSONLs from R2 (or its local mirror). Session transcripts are fetched from `/api/sessions/{id}/transcript` and parsed in the browser.
 
 ## Deployment process
 
@@ -212,4 +213,4 @@ Schema migrations are idempotent — re-apply `backend/schema.sql` after any sch
 - **Don't invoke `~/.claude/scripts/parse_session.py`** at runtime, and don't edit it from this repo. If the canonical Python and our port drift, fix it here, not there.
 - **Tests use fixtures, not real R2.** The R2 client supports `R2_ENDPOINT=file:///path/to/mirror/` for offline dev.
 - **Parser version invalidation:** Bump `PARSER_VERSION` in `.env` whenever parser semantics or `pricing.py` rates change — every file reparses on next ingest.
-- **In-browser fallback retained:** The drag-drop FileReader path in `src/app.jsx` stays as an offline fallback. No upload endpoint exists.
+- **Backend is the only load path:** the drag-drop fallback was removed (SV-NO-LOCAL-UPLOAD). `src/parser.js` stays — it parses backend-fetched transcripts and owns the shared rate table.

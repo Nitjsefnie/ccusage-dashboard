@@ -38,14 +38,24 @@ Single-rate `cache_create` cost is BANNED. If you bump `MODEL_RATES`,
 also bump `PARSER_VERSION` in `.env` so the next ingest reparses every
 session.
 
-## In-browser fallback retained (SV-IN-BROWSER-FALLBACK)
+## Backend is the ONLY load path (SV-NO-LOCAL-UPLOAD)
 
-The PRIMARY load mode is now backend (`BACKEND_URL` set, app fetches from
-`/api/dashboard`). The drag-drop FileReader path stays as an offline
-fallback so an operator with a single jsonl on disk can inspect it
-without standing up the backend. No upload endpoint, no server-side
-parsing of operator-supplied jsonls (the only jsonls the backend reads
-come from R2, owned by the same operator).
+Supersedes SV-IN-BROWSER-FALLBACK, which required a drag-drop offline
+fallback. That fallback was removed on 2026-07-21: there is now no way to
+feed a transcript in from the browser — no drag-drop target, no
+`FileReader`, no zip expansion, and no JSZip dependency. The only jsonls
+the app reads come from R2, owned by the same operator.
+
+There is still no upload endpoint and no server-side parsing of
+operator-supplied jsonls. Do not reintroduce either, and do not add a
+file picker as a "convenience" — an ingress path is exactly what was cut.
+
+`src/parser.js` is NOT dead code and must stay. It still serves two live
+consumers: `loadFromBackend()` parses the bytes from
+`/api/sessions/{id}/transcript` client-side via `parseTranscript` +
+`computeSessionStats`, and the Token Breakdown panel prices rows through
+`window.rateForModel`. Its rate table remains bound to `backend/pricing.py`
+by SV-PARSER-SPEC and the node parity test.
 
 ## Bundle distribution NOT applicable (SV-NO-BUNDLE)
 
