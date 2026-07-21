@@ -264,20 +264,26 @@ function TimeSeriesPanel({ title, events, valueKey, color, isCurrency, range, bi
     const rect = ref.current.getBoundingClientRect();
     const mx = e.clientX - rect.left;
     const my = e.clientY - rect.top;
-    if (mx < padL || mx > w - padR || my < padT || my > padT + plotH) {
+    // The last bin starts at (or past) the plot's right edge whenever the
+    // range isn't an exact multiple of binMs, so its bar body sits in the
+    // right padding. Without widening the band by one bar, that bar has a
+    // 0px-wide hover zone and simply cannot be inspected.
+    if (mx < padL || mx > w - padR + barW || my < padT || my > padT + plotH) {
       setTip(null);
       return;
     }
-    const frac = (mx - padL) / plotW;
-    const ts = range.start + frac * (range.end - range.start);
-    let idx = Math.floor((ts - range.start) / binMs);
+    // Snap to the nearest bar centre instead of flooring the time fraction.
+    // Flooring hands the final (usually partial) bin a sliver of a zone
+    // while every other bin gets a full pitch.
+    const pitch = plotW * binMs / Math.max(1, range.end - range.start);
+    let idx = Math.round((mx - padL - barW / 2) / pitch);
     if (idx < 0) idx = 0;
     if (idx >= bins.length) idx = bins.length - 1;
     const b = bins[idx];
     const cum = cumPts[idx + 1];  // +1 to skip the leading (range.start, 0) anchor
     setTip({
-      x: mx, y: my,
-      title: `${fmtDate(b.start, {day:true})} – ${fmtDate(b.end, {day:true})}`,
+      x: mx, y: my, idx,
+      title: `${fmtDate(b.start, {full:true})} – ${fmtDate(b.end, {full:true})} UTC`,
       accent: color,
       lines: [
         ['period',     humanFmt(b.sum, isCurrency)],
@@ -295,7 +301,7 @@ function TimeSeriesPanel({ title, events, valueKey, color, isCurrency, range, bi
     }}
     onMouseMove={onMouseMove}
     onMouseLeave={() => setTip(null)}>
-      <svg width={w} height={h} style={{ display: 'block' }}>
+      <svg data-panel={title} width={w} height={h} style={{ display: 'block' }}>
         {yTicksL.map((v, idx) => (
           <line key={'g'+idx} x1={padL} x2={w - padR}
             y1={yBar(v)} y2={yBar(v)}
@@ -304,7 +310,7 @@ function TimeSeriesPanel({ title, events, valueKey, color, isCurrency, range, bi
         {bins.map((b, idx) => {
           const x = xScale(b.start);
           const y = yBar(b.sum);
-          const isHover = tip && Math.floor((tip.x - padL) / plotW * (range.end - range.start) / binMs) === idx;
+          const isHover = tip && tip.idx === idx;
           return (
             <rect key={idx} x={x} y={y} width={barW} height={Math.max(0, padT + plotH - y)}
               fill={color} fillOpacity={isHover ? 0.85 : 0.3} />
@@ -432,7 +438,7 @@ function HBar({ title, rows, totalForPct, fmt, fixedColors, embedded }) {
       setMouse({ x: e.clientX - rect.left, y: e.clientY - rect.top });
     }}
     onMouseLeave={() => setHover(null)}>
-      <svg width={w} height={h} style={{ display: 'block' }}>
+      <svg data-panel={title} width={w} height={h} style={{ display: 'block' }}>
         <text x={w/2} y={20} fontSize="13" fontWeight="bold" fill={TH.text}
           textAnchor="middle" fontFamily="monospace">{title}</text>
         {rows.map((r, idx) => {
@@ -717,7 +723,7 @@ function BurnRatePanel({ events, sessions, limitHits, range: propRange, windowBo
     }}
     onMouseMove={onMove}
     onMouseLeave={() => setTip(null)}>
-      <svg width={w} height={h} style={{ display: 'block' }}>
+      <svg data-panel="Session Burn Rate" width={w} height={h} style={{ display: 'block' }}>
         <defs>
           <clipPath id="burn-plot-clip">
             <rect x={padL} y={padT} width={plotW} height={plotH} />

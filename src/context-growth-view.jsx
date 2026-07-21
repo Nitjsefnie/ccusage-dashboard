@@ -238,7 +238,7 @@ function ContextChart({ rows, cap, hoverIdx, setHoverIdx }) {
   return (
     <div ref={ref} style={{ position: 'relative', minHeight: h, marginTop: 4 }}
       onMouseMove={onMove} onMouseLeave={() => setHoverIdx(null)}>
-      <svg width={w} height={h} style={{ display: 'block' }}>
+      <svg data-panel="Context Chart" width={w} height={h} style={{ display: 'block' }}>
         {/* Y grid */}
         {yTicks.map((v, i) => (
           <line key={'g'+i} x1={padL} x2={w - padR}

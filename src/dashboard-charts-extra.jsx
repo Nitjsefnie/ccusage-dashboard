@@ -184,7 +184,7 @@ function CacheTTLPanel({ events, range, binMs }) {
     }}
     onMouseMove={onMove}
     onMouseLeave={() => setTip(null)}>
-      <svg width={w} height={h} style={{ display: 'block' }}>
+      <svg data-panel="Prompt-Cache TTL Split" width={w} height={h} style={{ display: 'block' }}>
         {/* Title */}
         <text x={w/2} y={20} fontSize="14" fontWeight="bold" fill={TH_X.text}
           textAnchor="middle" fontFamily="monospace">
@@ -531,7 +531,7 @@ function ContextSubPanel({ title, sessions, color, cap, w, h }) {
       background: TH_X.bgAxes,
     }}
       onMouseMove={onMove} onMouseLeave={() => setTip(null)}>
-      <svg width={w} height={h} style={{ display: 'block' }}>
+      <svg data-panel={"Context Growth — " + title} width={w} height={h} style={{ display: 'block' }}>
         <text x={padL} y={18} fontSize="11" fontWeight="bold" fill={color}
           fontFamily="monospace">{title}</text>
         <text x={padL} y={32} fontSize="9" fill={TH_X.textDim}
@@ -986,7 +986,7 @@ function ComparisonRow({ models, byModel, w, h }) {
   return (
     <div ref={ref} style={{ position: 'relative', borderBottom: `1px solid ${TH_X.border}` }}
       onMouseMove={onMove} onMouseLeave={() => setTip(null)}>
-      <svg width={w} height={h} style={{ display: 'block' }}>
+      <svg data-panel="Context Growth — comparison" width={w} height={h} style={{ display: 'block' }}>
         <text x={padL} y={20} fontSize="11" fontWeight="bold" fill={TH_X.text}
           fontFamily="monospace">
           {titleText}
@@ -1325,7 +1325,7 @@ function ResponseSizesPanel({ data, bucketS }) {
       </div>
 
       <div style={{ position: 'relative' }} onMouseMove={onMove} onMouseLeave={() => setTip(null)}>
-        <svg width={w} height={h} style={{ display: 'block' }}>
+        <svg data-panel="Response Sizes" width={w} height={h} style={{ display: 'block' }}>
           {/* Y grid */}
           {yTicks.map((v, i) => (
             <line key={'g'+i} x1={padL} x2={w - padR}
@@ -1716,7 +1716,7 @@ function ToolErrorSubPanel({ modelName, modelData, w, h, bucketMs }) {
       </div>
 
       <div style={{ position: 'relative' }} onMouseMove={onMove} onMouseLeave={() => setTip(null)}>
-        <svg width={w} height={h} style={{ display: 'block' }}>
+        <svg data-panel={"Tool Error Rate — " + modelName} width={w} height={h} style={{ display: 'block' }}>
           {/* y axis */}
           <line x1={padL} y1={padT} x2={padL} y2={padT + plotH} stroke={TH_X.border} />
           <line x1={padL} y1={padT + plotH} x2={padL + plotW} y2={padT + plotH} stroke={TH_X.border} />
@@ -2189,7 +2189,7 @@ function ToolUsagePanel({ models, project, range, nonce }) {
       </div>
 
       <div style={{ position: 'relative' }} onMouseMove={onMove} onMouseLeave={() => setTip(null)}>
-        <svg width={w} height={h} style={{ display: 'block' }}>
+        <svg data-panel="Tool Usage Ratio" width={w} height={h} style={{ display: 'block' }}>
           {/* Y grid */}
           {yTicks.map((v, i) => (
             <line key={'g'+i} x1={padL} x2={w - padR}
@@ -2511,7 +2511,7 @@ function ReplyLatencyPanel({ project, range, nonce, models }) {
       </div>
 
       <div style={{ position: 'relative' }} onMouseMove={onMove} onMouseLeave={() => setTip(null)}>
-        <svg width={w} height={h} style={{ display: 'block' }}>
+        <svg data-panel="Reply Latency" width={w} height={h} style={{ display: 'block' }}>
           {yTicks.map((v, i) => (
             <line key={'g'+i} x1={padL} x2={w - padR}
               y1={yScale(v)} y2={yScale(v)}
@@ -2791,7 +2791,7 @@ function ActivityHeatmapPanel({ models, project, range, nonce }) {
         </div>
       </div>
 
-      <svg width="100%" height={h} style={{ display: 'block' }}
+      <svg data-panel="Activity Heatmap" width="100%" height={h} style={{ display: 'block' }}
            onMouseLeave={() => setTip(null)}>
         {/* Separator lines in the SUM_GAP bands — margins read as distinct. */}
         <line x1={padL + 23 * (cellW + gap) + cellW + SUM_GAP / 2}
@@ -2884,7 +2884,7 @@ function ActivityHeatmapPanel({ models, project, range, nonce }) {
         fontFamily: 'monospace', fontSize: 10, color: TH_X.textDim,
       }}>
         <span>0</span>
-        <svg width={legendW} height="10">
+        <svg data-panel="Activity Heatmap — legend" width={legendW} height="10">
           <defs>
             <linearGradient id="heatLegendGrad" x1="0" y1="0" x2="1" y2="0">
               <stop offset="0%"  stopColor={mspec.color} stopOpacity="0.05" />
