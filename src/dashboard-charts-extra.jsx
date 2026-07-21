@@ -1050,8 +1050,12 @@ function ComparisonRow({ models, byModel, w, h }) {
             stroke="#fff" strokeOpacity="0.3" strokeDasharray="2,3" />
         )}
 
-        {/* Y labels */}
-        {yTicks.map((v, i) => (
+        {/* Y labels. A tick within one label-height of the cap line is
+            dropped: cap is max(baseCap, observedMax * 1.05), so it lands
+            just off a round tick — 1.02M against a 1M tick sat 3.5px away
+            and the two labels overlapped. The cap label wins, being the
+            one that carries meaning. */}
+        {yTicks.filter(v => Math.abs(yScale(v) - yScale(cap)) >= 12).map((v, i) => (
           <text key={'yl'+i} x={padL - 6} y={yScale(v) + 3}
             fontSize="9" fill={TH_X.textDim} textAnchor="end" fontFamily="monospace">
             {humanFmt_X(v)}
@@ -1067,7 +1071,10 @@ function ComparisonRow({ models, byModel, w, h }) {
         <text x={14} y={padT + plotH/2} fontSize="9" fill={TH_X.textDim}
           textAnchor="middle" fontFamily="monospace"
           transform={`rotate(-90 14 ${padT + plotH/2})`}>context size</text>
-        <text x={(padL + w - padR)/2} y={h - 4} fontSize="9" fill={TH_X.textDim}
+        {/* h - 10, not h - 4: at 4 the caption's glyph box ended 1px from the
+            panel's bottom edge, while 30px sat unused between it and the x
+            tick labels. */}
+        <text x={(padL + w - padR)/2} y={h - 10} fontSize="9" fill={TH_X.textDim}
           textAnchor="middle" fontFamily="monospace">turn number within session</text>
       </svg>
       {tip && <window.DashTooltip tip={tip} />}
