@@ -167,6 +167,7 @@ restart).
 ## License
 
 MIT (see [`LICENSE`](LICENSE), © 2026 Nitjsefnie).
+Third-party notices are in [`NOTICE`](NOTICE).
 
 Original visual design and dot-scaling formulas adapted from
 [`nhz-io/ccusage-plot`](https://github.com/nhz-io/ccusage-plot),

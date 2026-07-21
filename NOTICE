@@ -1,6 +1,23 @@
+claudit — third-party notices
+=============================
+
+claudit is MIT licensed (see LICENSE). It incorporates portions of the
+work listed below; their original copyright and permission notices are
+reproduced here as those licences require.
+
+Kept in a separate file so GitHub can classify LICENSE as MIT — a second
+licence block appended to LICENSE makes the classifier report the project
+as unlicensed, which is worse for everyone than a NOTICE file.
+
+-------------------------------------------------------------------------------
+
+This project incorporates portions of work from `nhz-io/ccusage-plot`
+(https://github.com/nhz-io/ccusage-plot), licensed under the MIT License.
+The original copyright notice and license follow:
+
 MIT License
 
-Copyright (c) 2026 Nitjsefnie
+Copyright (c) 2026 Kumarajiva
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
