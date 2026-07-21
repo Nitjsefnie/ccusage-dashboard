@@ -338,9 +338,15 @@ function TimeSeriesPanel({ title, events, valueKey, color, isCurrency, range, bi
             {humanFmt(v, isCurrency)}
           </text>
         ))}
+        {/* Right axis labels are right-aligned, like the left axis.
+            Start-anchoring at w - padR + 6 left exactly 23px before the
+            rotated "cumulative" title at x 849, and "100M" renders at
+            exactly 23.0px — so any wider value collided with it. Pinning
+            the right edge keeps the clearance constant whatever the
+            label's width. */}
         {yTicksR.map((v, idx) => (
-          <text key={'yr'+idx} x={w - padR + 6} y={yCum(v) + 4}
-            fontSize="9" fill={TH.textDim} textAnchor="start" fontFamily="monospace">
+          <text key={'yr'+idx} x={w - 26} y={yCum(v) + 4}
+            fontSize="9" fill={TH.textDim} textAnchor="end" fontFamily="monospace">
             {humanFmt(v, isCurrency)}
           </text>
         ))}
