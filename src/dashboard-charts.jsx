@@ -202,7 +202,11 @@ function TimeSeriesPanel({ title, events, valueKey, color, isCurrency, range, bi
   }, []);
 
   const { w, h } = size;
-  const padL = 50, padR = 50, padT = 28, padB = 28;
+  // padR is the right gutter: it holds the cumulative-axis labels (start-
+  // anchored at padR - 6 from the edge) and the rotated "cumulative" title
+  // whose box sits at w-21..w-9. At the old 50 the labels had 23px before
+  // the title and "100M" is exactly 23.0px wide, so wider values collided.
+  const padL = 50, padR = 70, padT = 28, padB = 28;
   const plotW = Math.max(10, w - padL - padR);
   const plotH = Math.max(10, h - padT - padB);
 
@@ -338,15 +342,14 @@ function TimeSeriesPanel({ title, events, valueKey, color, isCurrency, range, bi
             {humanFmt(v, isCurrency)}
           </text>
         ))}
-        {/* Right axis labels are right-aligned, like the left axis.
-            Start-anchoring at w - padR + 6 left exactly 23px before the
-            rotated "cumulative" title at x 849, and "100M" renders at
-            exactly 23.0px — so any wider value collided with it. Pinning
-            the right edge keeps the clearance constant whatever the
-            label's width. */}
+        {/* Start-anchored so labels grow rightward, AWAY from the plot: the
+            final bar is drawn past the plot edge into the padding, so a
+            right-anchored label grows left straight through it. The gutter
+            (padR wide) has to fit the widest label plus the rotated
+            "cumulative" title at x 849; padR is sized for that. */}
         {yTicksR.map((v, idx) => (
-          <text key={'yr'+idx} x={w - 26} y={yCum(v) + 4}
-            fontSize="9" fill={TH.textDim} textAnchor="end" fontFamily="monospace">
+          <text key={'yr'+idx} x={w - padR + 6} y={yCum(v) + 4}
+            fontSize="9" fill={TH.textDim} textAnchor="start" fontFamily="monospace">
             {humanFmt(v, isCurrency)}
           </text>
         ))}
