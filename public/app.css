@@ -310,7 +310,14 @@ code {
   text-transform: uppercase;
   letter-spacing: 0.14em;
   padding: 9px 18px;
-  position: sticky; top: 52px; z-index: 5; /* sit under the topbar */
+  /* top:0, not 52px. .sessions-table sets overflow-x:auto, which forces
+     overflow-y to a non-visible value and makes the table itself the scroll
+     container — so this offset resolved against the TABLE, not the viewport,
+     pushing the header 52px down from the table's top edge and over the first
+     rows. The "sit under the topbar" intent never worked either: at
+     scrollY 400 the header measured -76px, i.e. it scrolls away like any
+     static row. Pinning at 0 keeps it flush with the top of the table. */
+  position: sticky; top: 0; z-index: 5;
 }
 .srow:not(.shead):hover { background: rgba(255,255,255,0.018); }
 .srow .num { text-align: right; font-variant-numeric: tabular-nums; }
