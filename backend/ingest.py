@@ -175,7 +175,9 @@ def run_ingest(trigger: str) -> dict:
         "error": err,
     }
     if err is None:
+        # Order matters: the rollup reads is_canonical.
         recompute_canonical()
+        rebuild_rollup()
 
     # Data changed: mark the response cache stale, then notify connected
     # SSE clients so the dashboard re-fetches without a page reload.
@@ -236,6 +238,54 @@ def recompute_canonical() -> int:
     if changed:
         log.info("recompute_canonical: %d rows reflagged", changed)
     return changed
+
+
+def rebuild_rollup() -> int:
+    """Rebuild `usage_rollup` from the canonical records.
+
+    Full rebuild rather than an incremental merge: cross-file uuid dedup
+    means a newly ingested FILE can demote a record that another file
+    already contributed, so touched-files-only would leave stale sums
+    behind. The whole table is ~1 row per (session, hour, model), which is
+    a fraction of `records`, so rebuilding it costs one pass.
+
+    Must run AFTER recompute_canonical() — it reads is_canonical.
+    Returns the row count written.
+    """
+    with db.viz_conn() as c:
+        c.execute("SET LOCAL work_mem = '64MB'")
+        c.execute("TRUNCATE usage_rollup")
+        cur = c.execute(
+            """
+            INSERT INTO usage_rollup (
+              session_id, project_id, hour, model, is_main,
+              first_ts, last_ts, requests,
+              fresh_tokens, output_tokens, cache_creation_tokens,
+              cache_read_tokens, eph5_tokens, eph1h_tokens, cost_usd
+            )
+            SELECT f.session_id,
+                   f.project_id,
+                   date_trunc('hour', r.ts)                    AS hour,
+                   COALESCE(NULLIF(r.model, ''), 'unknown')    AS model,
+                   f.is_main,
+                   MIN(r.ts), MAX(r.ts), COUNT(*),
+                   COALESCE(SUM(r.fresh_tokens), 0),
+                   COALESCE(SUM(r.output_tokens), 0),
+                   COALESCE(SUM(r.cache_creation_tokens), 0),
+                   COALESCE(SUM(r.cache_read_tokens), 0),
+                   COALESCE(SUM(r.eph5_tokens), 0),
+                   COALESCE(SUM(r.eph1h_tokens), 0),
+                   COALESCE(SUM(r.cost_usd), 0)
+              FROM records r
+              JOIN files f ON f.file_key = r.file_key
+             WHERE r.is_canonical AND r.ts IS NOT NULL
+             GROUP BY 1, 2, 3, 4, 5
+            """
+        )
+        written = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+        c.commit()
+    log.info("rebuild_rollup: %d rows", written)
+    return written
 
 
 def _worker_count() -> int:

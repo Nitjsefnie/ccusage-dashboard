@@ -135,6 +135,42 @@ Changing the winner rule means changing BOTH `recompute_canonical()`
 and `src/parser.js`/`parse_session.py` semantics in lockstep
 (SV-PARSER-SPEC).
 
+## Aggregates are precomputed at ingest (SV-ROLLUP)
+
+`usage_rollup` holds pre-summed usage at grain
+`(session_id, hour, model, is_main)`, rebuilt by
+`ingest.rebuild_rollup()` after every successful ingest (AFTER
+`recompute_canonical()` — it reads `is_canonical`). ~6.1k rows stand in
+for ~286k records.
+
+The grain is load-bearing, do not "simplify" it:
+
+- **Keyed by HOUR, not by session.** A range filter sums only the
+  in-range hours; a session-grained table would count a session
+  straddling the boundary whole.
+- **Carries MODEL.** A session's dominant model is
+  `argmax(SUM(requests))` over the in-range rows — exactly what
+  `MODE() WITHIN GROUP` computed from raw records, not an
+  approximation.
+- **Carries `first_ts`/`last_ts`.** Burn-rate span is
+  `MAX(last_ts) - MIN(first_ts)`, which composes; a stored duration
+  would not.
+
+Only pure sums/counts/min/max may be served from it. **`PERCENTILE_CONT`
+does not compose** — p50/p90 of a union of hours is not derivable from
+per-hour p50/p90 — so `response_sizes` stays a live pass over `records`.
+Do not "optimise" it onto the rollup.
+
+The rollup is only valid for display buckets ≥ 1 hour. `/api/dashboard`
+gates on `bucket_s >= 3600` and otherwise reads a live subquery shaped
+with the same column names, so both paths share one set of queries. The
+24h view buckets at 5 minutes and takes the live path.
+
+It is derived state: anything that mutates `records` outside ingest must
+rebuild or clear it, or reads serve a stale pre-aggregate. Totals are
+verified equal to the equivalent `records` aggregate (requests, tokens,
+cost, distinct sessions) — keep that true.
+
 `records` cascades from `files`; `files` cascades from `projects`.
 Reparse is idempotent: deleting a file's `records` rows and
 re-inserting on the next ingest leaves the table byte-identical.

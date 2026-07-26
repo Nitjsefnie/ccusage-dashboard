@@ -71,6 +71,42 @@ ALTER TABLE records ADD COLUMN IF NOT EXISTS
 ALTER TABLE records ADD COLUMN IF NOT EXISTS
   is_canonical BOOLEAN NOT NULL DEFAULT TRUE;
 
+-- Pre-aggregated usage, rebuilt at ingest (ingest.rebuild_rollup).
+--
+-- `records` only changes when an ingest runs, but every dashboard request
+-- was re-deriving the entire history from raw rows: five separate full
+-- aggregate passes over ~285k canonical records, per request, per range,
+-- per project. This holds the same numbers already summed.
+--
+-- Grain is (session_id, hour, model) deliberately:
+--   * keyed by HOUR, not by session, so a range filter sums only the
+--     in-range hours -- a session straddling the boundary would otherwise
+--     be counted whole. Sums, counts and min/max ts all compose exactly.
+--   * carrying MODEL means a session's dominant model is argmax(requests)
+--     over the in-range rows -- exact, not an approximation of MODE().
+-- What does NOT compose is PERCENTILE_CONT, so response-size p50/p90 is
+-- still computed live from records (see /api/dashboard).
+CREATE TABLE IF NOT EXISTS usage_rollup (
+  session_id          TEXT        NOT NULL,
+  project_id          TEXT        NOT NULL,
+  hour                TIMESTAMPTZ NOT NULL,
+  model               TEXT        NOT NULL,
+  is_main             BOOLEAN     NOT NULL DEFAULT TRUE,
+  first_ts            TIMESTAMPTZ NOT NULL,
+  last_ts             TIMESTAMPTZ NOT NULL,
+  requests            BIGINT      NOT NULL DEFAULT 0,
+  fresh_tokens        BIGINT      NOT NULL DEFAULT 0,
+  output_tokens       BIGINT      NOT NULL DEFAULT 0,
+  cache_creation_tokens BIGINT    NOT NULL DEFAULT 0,
+  cache_read_tokens   BIGINT      NOT NULL DEFAULT 0,
+  eph5_tokens         BIGINT      NOT NULL DEFAULT 0,
+  eph1h_tokens        BIGINT      NOT NULL DEFAULT 0,
+  cost_usd            NUMERIC(18,8) NOT NULL DEFAULT 0,
+  PRIMARY KEY (session_id, hour, model, is_main)
+);
+CREATE INDEX IF NOT EXISTS usage_rollup_hour_idx ON usage_rollup (hour);
+CREATE INDEX IF NOT EXISTS usage_rollup_project_idx ON usage_rollup (project_id, hour);
+
 CREATE INDEX IF NOT EXISTS records_uuid_idx ON records (uuid) WHERE uuid IS NOT NULL;
 CREATE INDEX IF NOT EXISTS records_ts_idx ON records (ts);
 -- Every read endpoint filters `is_canonical AND ts >= ...`.
