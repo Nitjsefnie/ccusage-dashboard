@@ -1,0 +1,89 @@
+name: tests
+
+on:
+  push:
+  # PRs are NOT built on open/synchronize — only once a review lands, and
+  # only if that review approves. Keeps CI off drive-by and work-in-
+  # progress PRs, and means untrusted code runs only after a human has
+  # looked at it (this event carries a write-scoped token, unlike
+  # `pull_request` from a fork).
+  pull_request_review:
+    types: [submitted]
+
+concurrency:
+  # A push that supersedes an in-flight run for the same ref cancels it —
+  # nothing is learned from CI for a commit that is already history.
+  group: tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'push' ||
+      github.event.review.state == 'approved'
+
+    services:
+      postgres:
+        # The suite does not use a single fixed database: fixtures run
+        # `createdb`/`dropdb` per module, so the role needs CREATEDB — the
+        # stock `postgres` superuser has it.
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # Fixtures build DSNs as `postgresql:///<db>` with no host, so libpq
+      # resolves the connection from these. The same vars drive the
+      # createdb/dropdb/psql calls the fixtures shell out to.
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: postgres
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # pull_request_review checks out the BASE ref by default, which
+          # would test the wrong code — take the PR head explicitly.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install postgresql-client
+        # Fixtures shell out to createdb/dropdb/psql; the runner image has
+        # a server but the client binaries must match the service major.
+        run: |
+          sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/pgdg.gpg
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client-16
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+          pip install pytest pytest-asyncio httpx
+
+      - name: Wait for postgres
+        run: |
+          for i in $(seq 1 30); do
+            pg_isready -q && exit 0
+            sleep 1
+          done
+          echo "postgres never became ready"; exit 1
+
+      - name: Run tests
+        run: python -m pytest tests/ -q --tb=short -ra

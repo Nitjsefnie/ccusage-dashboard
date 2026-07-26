@@ -206,10 +206,32 @@ journalctl -u claudit -f
 
 Schema migrations are idempotent — re-apply `backend/schema.sql` after any schema change. Bump `PARSER_VERSION` in `.env` whenever parser semantics or `pricing.py` rates change; every file reparses on the next ingest.
 
+## CI — batch your pushes
+
+`.github/workflows/tests.yml` runs the full suite on **every push**, and
+on a PR **only once an approving review lands** (`pull_request_review` /
+`submitted`, gated on `state == 'approved'`) — not on open or on every
+subsequent commit. Postgres 16 service container; fixtures
+`createdb`/`dropdb` per module, so `PGHOST`/`PGUSER`/`PGPASSWORD` drive
+both libpq and the shelled-out `psql`. That event checks out the base ref
+by default, so the workflow pins `github.event.pull_request.head.sha`.
+
+**Push a batch of commits once, not one at a time.** Pushing N related
+commits individually starts N CI runs; the intermediate ones tell you
+nothing, burn runner minutes, and the only result that matters is the
+tip. Commit as granularly as you like locally — then push once when the
+group is done. (`concurrency: cancel-in-progress` limits the damage by
+cancelling superseded runs on the same ref, but the right fix is not
+generating them.)
+
+Run `python3 -m pytest tests/ -q` locally before pushing; CI is the
+backstop, not the first check.
+
 ## Development conventions
 
 - **Cost is always TTL-split**. `cache_creation` decomposes into `ephemeral_5m` (× 1.25 base) + `ephemeral_1h` (× 2 base). Tokens with no `ephemeral_*` split (legacy SDK) are charged at the 5m rate. Single-rate `cache_create` cost is banned.
-- **Cross-file uuid dedup happens at READ time** via `DISTINCT ON (uuid)` in `/api/dashboard`, `/api/cache`, etc. Per-file `requestId` max-merge happens at INGEST time. There is no persisted Phase 2 rollup table.
+- **Cross-file uuid dedup is resolved at INGEST** into `records.is_canonical` (SV-CANONICAL-FLAG); read paths filter that boolean and must not reintroduce `DISTINCT ON (uuid)`. Per-file `requestId` max-merge also happens at ingest.
+- **Aggregates are precomputed at ingest** into `usage_rollup` (grain: session × hour × model × is_main) and `tool_rollup` (hour × project × model × tool) — see SV-ROLLUP. Only pure sums/counts/min/max may be served from them; `PERCENTILE_CONT` does not compose, so response-size and reply-latency percentiles stay live. Both rollups are valid only for display buckets ≥ 1h; the 24h view takes a live path.
 - **Don't invoke `~/.claude/scripts/parse_session.py`** at runtime, and don't edit it from this repo. If the canonical Python and our port drift, fix it here, not there.
 - **Tests use fixtures, not real R2.** The R2 client supports `R2_ENDPOINT=file:///path/to/mirror/` for offline dev.
 - **Parser version invalidation:** Bump `PARSER_VERSION` in `.env` whenever parser semantics or `pricing.py` rates change — every file reparses on next ingest.
