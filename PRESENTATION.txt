@@ -1,47 +1,71 @@
-**claudit** — Claude Code Usage Dashboard
-*Self-hosted visual analytics for Claude Code sessions*
+═══════════════════════════════════════════════════════════════
+MESSAGE 1 — main post
+═══════════════════════════════════════════════════════════════
 
-📊 **9 Interactive Panels**
+# :computer: claudit
+### where your Claude Code tokens actually go
 
-`Session Burn Rate` · `Cost by Model` · `Token Breakdown` · `Prompt-Cache TTL Split` · `Per-Session Context Growth` · `Response Sizes` · `Tool Usage` · `Reply Latency` · `Tool Error Rate`
+I kept eyeballing my Claude Code spend, so I built something that stops guessing. It ingests session JSONL transcripts into Postgres and serves 10 panels: burn rate, cost by model, token breakdown, prompt-cache TTL split, per-session context growth, response sizes, tool usage, reply latency, tool error rate, and a weekday×hour activity heatmap.
+
+## :globe_with_meridians: Try it right now — nothing to install
+**https://claude.nitjsefni.eu/** → click *Continue as guest*
+
+Read-only, no signup, loaded with my real data. Poke at every panel before you decide whether it's worth pointing at your own transcripts.
+
+Against my own history: **9,200 transcripts** · **1,391 sessions** · **296.8k requests** · **67 projects** · **60.9B tokens** · **$52.3k** · Jan–Jul 2026 — that's what you'll be clicking through.
+
+## :bug: Why another usage tool
+Most of them quietly get the accounting wrong. Two that bit me:
+
+:warning: Claude Code writes one JSONL line per content block of a streamed reply — all sharing `message.id` + `requestId` — and only the last line carries the true `output_tokens`. Keep the first and you silently lose **~32% of all output tokens**.
+
+:warning: Cache *writes* are priced by TTL: 5m at 1.25× input, 1h at 2×. Flatten that to one rate and every 1h write is undercharged by **37.5%**. **73.1%** of my cache writes were 1h.
+
+:gear: claudit does per-requestId max-merge, TTL-split pricing, dated rate changes (Sonnet 5's intro price runs out Aug 31), and cross-file uuid dedup so sub-agent transcripts don't double-count their parent — 3.5% of my records are cross-file duplicates.
+
+:mag: It also refuses to invent a price. An unrecognised model falls back to its family's rates and the response flags the figure as estimated, rather than presenting a guess as fact.
+
+## :test_tube: Correctness
+**135 tests.** One walks every API response and asserts each field is actually read by the frontend — it found four that weren't, including 1 MB of context traces duplicating another field, and a `file_count` reporting 67,969 files for a project that has 2,173.
+
+## :tools: Stack
+FastAPI + Postgres + React with **no build step** — in-browser Babel, no npm, no bundler. Ingest pulls from Cloudflare R2 or a local directory; there is no upload path, by design.
 
 ```
-┌──────────────────────┬─────────────┬─────────────────┐
-│                      │  ccusage    │    claudit      │
-│                      │   -plot     │   (this repo)   │
-├──────────────────────┼─────────────┼─────────────────┤
-│ Delivery             │ matplotlib  │ SVG / React     │
-│ Interaction          │ static PNG  │ live, clickable │
-│ Updates              │ re-run CLI  │ SSE push        │
-│ Users                │ single      │ multi + guest   │
-│ Runtime              │ offline     │ self-hosted     │
-└──────────────────────┴─────────────┴─────────────────┘
+┌──────────────┬────────────┬─────────────────┐
+│              │ ccusage    │    claudit      │
+│              │  -plot     │   (this repo)   │
+├──────────────┼────────────┼─────────────────┤
+│ Delivery     │ matplotlib │ SVG / React     │
+│ Interaction  │ static PNG │ live, clickable │
+│ Updates      │ re-run CLI │ SSE push        │
+│ Users        │ single     │ multi + guest   │
+│ Runtime      │ offline    │ self-hosted     │
+└──────────────┴────────────┴─────────────────┘
 ```
 
-⚡ **What makes it different**
+:robot: Built with Claude Code, which is a pleasing kind of recursive.
 
-• **Live updates** — ingest_done SSE events trigger dashboard refetch, zero page reload
-• **Zero build step** — React + in-browser Babel, no webpack/vite/npm install
-• **Canonical cost model** — TTL-split cache pricing (5m × 1.25, 1h × 2) matching Claude Code's internal billing
-• **Multi-user auth** — PBKDF2 against external users.config, or read-only guest mode
-• **Automated R2 pipeline** — hourly etag-based ingest from Cloudflare R2, incremental forever
-• **In-browser inspector** — drag-drop a JSONL for offline parsing fallback
+:link: MIT · https://github.com/Nitjsefnie/claudit
 
-🧪 **68 tests · FastAPI + React + Postgres · clean architecture**
+:raised_hands: Issues and PRs welcome — especially if your numbers disagree with mine.
 
-Backend: per-file `requestId` max-merge at ingest time, cross-file uuid dedup at query time via `DISTINCT ON (uuid)`. Costs pre-computed at ingest; bump `PARSER_VERSION` to force full reparse.
+*Visual design based on nhz-io/ccusage-plot*
 
-🏃 **One-liner start**
-```bash
-createdb claudit && psql claudit -f backend/schema.sql
-pip install -r backend/requirements.txt
-python3 -m uvicorn backend.app:app --host 127.0.0.1 --port 8000
+
+═══════════════════════════════════════════════════════════════
+MESSAGE 2 — follow-up
+═══════════════════════════════════════════════════════════════
+
+## :zap: Follow-up: making it fast
+
+The first version re-derived all of history from raw rows on every request. Fixing that was most of the work:
+
 ```
-
-🌐 **Live demo:** https://claude.nitjsefni.eu/ (guest login, read-only)
-
-🔗 **GitHub:** https://github.com/Nitjsefnie/ccusage-dashboard
-
----
-
-*Based on visual design from nhz-io/ccusage-plot · MIT © 2026 Nitjsefnie*
+                        before      after
+/api/dashboard (cold)    8.0s       1.4s
+/api/cache              19.1s       0.52s
+/api/reply-latency       0.44s      0.12s   (median)
+response payload         4.6 MB     982 KB  (243 KB gzipped)
+test suite             170s        64s
+```

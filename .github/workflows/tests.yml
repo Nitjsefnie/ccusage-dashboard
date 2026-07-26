@@ -2,6 +2,19 @@ name: tests
 
 on:
   push:
+    # Deny-list rather than an allow-list: a new top-level code directory
+    # would silently stop being tested under an allow-list, whereas an
+    # unlisted path here just runs CI needlessly. Prose changes don't
+    # need a Postgres container spun up.
+    paths-ignore:
+      - '**/*.md'
+      - 'PRESENTATION.txt'
+      - 'docs/**'
+      - 'examples/**'
+      - '.claude/**'
+      - 'LICENSE'
+      - 'NOTICE'
+      - '.gitignore'
   # PRs are NOT built on open/synchronize — only once a review lands, and
   # only if that review approves. Keeps CI off drive-by and work-in-
   # progress PRs, and means untrusted code runs only after a human has

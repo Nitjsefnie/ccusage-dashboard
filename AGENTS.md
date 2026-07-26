@@ -208,7 +208,10 @@ Schema migrations are idempotent — re-apply `backend/schema.sql` after any sch
 
 ## CI — batch your pushes
 
-`.github/workflows/tests.yml` runs the full suite on **every push**, and
+`.github/workflows/tests.yml` runs the full suite on **every push that
+touches code** (a `paths-ignore` deny-list skips `*.md`, `PRESENTATION.txt`,
+`docs/`, `examples/`, `.claude/`, licences — a deny-list on purpose, so a
+new code directory can't silently stop being tested), and
 on a PR **only once an approving review lands** (`pull_request_review` /
 `submitted`, gated on `state == 'approved'`) — not on open or on every
 subsequent commit. Postgres 16 service container; fixtures
