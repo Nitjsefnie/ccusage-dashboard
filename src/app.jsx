@@ -239,8 +239,11 @@ function App() {
       {backendOn && (
         <RangePicker active={activeRange} onChange={setActiveRange} />
       )}
-      {route === 'dashboard' && dashData && <Dashboard synth={dashData} models={models} backendOn={backendOn} activeProject={activeProject} activeRange={activeRange} dashNonce={dashNonce} />}
-      {route === 'dashboard' && !dashData && backendOn && <DashboardLoading range={activeRange} />}
+      {/* Mounted as soon as the backend is known, not when its data lands:
+          Dashboard hosts four self-fetching panels whose requests must go
+          out in parallel with /api/dashboard. It renders a loading summary
+          until `synth` arrives. */}
+      {route === 'dashboard' && (dashData || backendOn) && <Dashboard synth={dashData} models={models} backendOn={backendOn} activeProject={activeProject} activeRange={activeRange} dashNonce={dashNonce} />}
       {route === 'sessions' && dashData && (
         <SessionsList
           synth={dashData}
@@ -262,21 +265,6 @@ function App() {
 // the old behaviour of rendering the full panel set from synthetic data,
 // which put fabricated numbers on screen and paid for a complete chart
 // render that was discarded as soon as the real payload arrived.
-function DashboardLoading({ range }) {
-  return (
-    <div className="dashboard">
-      <div className="dash-summary">
-        <Stat label="status" value="loading…" />
-        <Stat label="range" value={range} />
-      </div>
-      <div className="page-foot muted" style={{ padding: '24px 14px' }}>
-        Querying usage records for <code>{range}</code>. Wider ranges take
-        longer on a cold cache.
-      </div>
-    </div>
-  );
-}
-
 function RangePicker({ active, onChange }) {
   const presets = [
     { label: '24h',  value: '1d'   },
@@ -663,7 +651,21 @@ function TokenBreakdownPanel({ events }) {
 }
 
 function Dashboard({ synth, models, backendOn, activeProject, activeRange, dashNonce }) {
-  const { events, limitHits, range, costByModel: backendByModel, sessionsOverride, totalSessions, mainWUsage, mainEmpty, subagentFiles, subagentOnlySessions, totalPrompts, totalTurns, responseSizes, ctxTraces, bucketS } = synth;
+  // `synth` is null until /api/dashboard lands. Render anyway: the four
+  // backend panels below (Tool Usage, Reply Latency, Tool Error Rate,
+  // Activity Heatmap) each fetch their OWN endpoint on mount, and gating
+  // the whole component on dashboard data made those four requests wait
+  // for it — a measured 6.9s before they even started, turning a parallel
+  // fan-out into a serial chain. They depend only on project/range/models.
+  const hasData = !!synth;
+  const {
+    events = [], limitHits = [], range: dataRange, costByModel: backendByModel,
+    sessionsOverride, totalSessions, mainWUsage, mainEmpty, subagentFiles,
+    subagentOnlySessions, totalPrompts, totalTurns, responseSizes,
+    ctxTraces, bucketS,
+  } = synth || {};
+  // Placeholder window so the bin-size maths below stays finite pre-data.
+  const range = dataRange || { start: Date.now() - 86400000, end: Date.now() };
   const hasBackendByModel = backendByModel && Object.keys(backendByModel).length > 0;
   const computed = useMemo(() => computeSessions(events), [events]);
   const sessions = (sessionsOverride && sessionsOverride.length)
@@ -708,6 +710,13 @@ function Dashboard({ synth, models, backendOn, activeProject, activeRange, dashN
 
   return (
     <div className="dashboard">
+      {!hasData && (
+        <div className="dash-summary">
+          <Stat label="status" value="loading…" />
+          <Stat label="range" value={activeRange} />
+        </div>
+      )}
+      {hasData && (
       <div className="dash-summary">
         <Stat label="window" value={`${window.fmtDate(range.start, {day:true})} – ${window.fmtDate(range.end, {day:true})}`} />
         <Stat label="main sessions with usage" value={(mainWUsage != null ? mainWUsage : (totalSessions != null ? totalSessions : (events.reduce((s, e) => s + (e.session_count || 0), 0) || sessions.length))).toLocaleString()} />
@@ -723,7 +732,9 @@ function Dashboard({ synth, models, backendOn, activeProject, activeRange, dashN
         <Stat label="total cost" value={totalCostStr} highlight />
         <Stat label="rate-limit hits" value={String(limitHits.length)} warn={limitHits.length > 0} />
       </div>
+      )}
 
+      {hasData && (<>
       <div className="dash-grid">
         <window.TimeSeriesPanel title="Input Tokens"  events={events} valueKey="input_tokens"
           color={window.dashboardCol.inputTokens} range={range} binMs={binMs} />
@@ -757,7 +768,11 @@ function Dashboard({ synth, models, backendOn, activeProject, activeRange, dashN
           <window.ResponseSizesPanel data={responseSizes} bucketS={bucketS} />
         </div>
       )}
+      </>)}
 
+      {/* Self-fetching panels: mounted regardless of dashboard data so
+          their requests go out in parallel with /api/dashboard rather
+          than waiting for it. */}
       {backendOn && (
         <div className="dash-tools">
           <window.ToolUsagePanel
@@ -797,6 +812,7 @@ function Dashboard({ synth, models, backendOn, activeProject, activeRange, dashN
         </div>
       )}
 
+      {hasData && (<>
       <div className="dash-context">
         <window.ContextGrowthPanel events={events} realSessions={sessionsOverride} ctxTraces={ctxTraces} />
       </div>
@@ -809,6 +825,7 @@ function Dashboard({ synth, models, backendOn, activeProject, activeRange, dashN
           range={range}
           windowBoundaries={windowBoundaries} />
       </div>
+      </>)}
 
     </div>
   );
