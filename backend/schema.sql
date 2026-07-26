@@ -132,6 +132,48 @@ CREATE TABLE IF NOT EXISTS tool_rollup (
 CREATE INDEX IF NOT EXISTS tool_rollup_hour_idx ON tool_rollup (hour);
 CREATE INDEX IF NOT EXISTS tool_rollup_project_idx ON tool_rollup (project_id, hour);
 
+-- Pre-aggregated reply-latency bands + outlier dots for /api/reply-latency.
+--
+-- Percentiles do NOT compose across buckets, so unlike usage_rollup this
+-- cannot be stored at one fine grain and summed up. What makes it
+-- precomputable anyway is that the display buckets are epoch-aligned and
+-- deterministic — floor(epoch / bucket_s) * bucket_s does not move with
+-- `now` — and the UI only ever uses five widths (300/3600/21600/43200/
+-- 86400). So the percentiles are computed once PER bucket_s and a range
+-- filter merely selects which buckets to return. Exact, not approximate.
+-- 300s (the 24h view) is excluded: it would need a row per 5 minutes of
+-- all history to serve one day, so that range keeps the live path.
+--
+-- project_id = '' is the ALL-PROJECTS row. It has to be stored
+-- separately because a filter changes the population inside each
+-- (bucket, model) group, and p50 over all projects is not derivable from
+-- the per-project p50s. The model filter needs no such treatment — the
+-- rows are already grouped by model, so filtering selects whole groups.
+--
+-- `outliers` holds the top/bottom 1% dots the panel draws, as
+-- [{ts, latency_s, file_key, line_num, kind}], only for buckets with
+-- n >= 100 (1% of fewer would just be the min/max).
+CREATE TABLE IF NOT EXISTS latency_rollup (
+  bucket_s    INTEGER     NOT NULL,
+  bucket      TIMESTAMPTZ NOT NULL,
+  project_id  TEXT        NOT NULL,
+  model       TEXT        NOT NULL,
+  n           BIGINT      NOT NULL,
+  p10         DOUBLE PRECISION,
+  p50         DOUBLE PRECISION,
+  p90         DOUBLE PRECISION,
+  outliers    JSONB       NOT NULL DEFAULT '[]'::jsonb,
+  PRIMARY KEY (bucket_s, bucket, project_id, model)
+);
+CREATE INDEX IF NOT EXISTS latency_rollup_lookup_idx
+  ON latency_rollup (bucket_s, project_id, bucket);
+
+-- Only ~19% of records carry a reply_latency_s; a partial covering index
+-- keeps the live path (and the rollup build) off the other 81%.
+CREATE INDEX IF NOT EXISTS records_latency_idx ON records (ts)
+  INCLUDE (model, reply_latency_s, file_key, line_num)
+  WHERE reply_latency_s IS NOT NULL;
+
 CREATE INDEX IF NOT EXISTS records_uuid_idx ON records (uuid) WHERE uuid IS NOT NULL;
 CREATE INDEX IF NOT EXISTS records_ts_idx ON records (ts);
 -- Every read endpoint filters `is_canonical AND ts >= ...`.

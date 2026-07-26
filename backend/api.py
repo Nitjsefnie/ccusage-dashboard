@@ -619,12 +619,60 @@ def reply_latency(
     ORDER BY bucket, model, latency_s DESC
     """
 
-    args2 = list(args) + list(args)  # bands + outliers each take the full arg set
+    # Percentiles cannot be summed across buckets, so unlike the other
+    # rollups this one is precomputed PER display bucket width — the
+    # widths are epoch-aligned and there are only a handful
+    # (ingest.LATENCY_BUCKETS). A range filter then just selects buckets.
+    # project_id='' is the stored all-projects row: a project filter
+    # changes the population inside each (bucket, model) group, so it
+    # cannot be derived from the per-project rows.
+    from backend.ingest import LATENCY_BUCKETS
+
+    if bucket_s in LATENCY_BUCKETS:
+        roll_args: list[Any] = [bucket_s, project or "", since]
+        roll_model = ""
+        if model:
+            roll_model = "AND model LIKE %s"
+            roll_args.append(f"%{model}%")
+        with db.viz_conn() as c:
+            rows = c.execute(
+                f"""
+                SELECT bucket, model, n, p10, p50, p90, outliers
+                FROM latency_rollup
+                WHERE bucket_s = %s
+                  AND project_id = %s
+                  AND bucket >= to_timestamp(
+                        floor(EXTRACT(EPOCH FROM %s::timestamptz) / {bucket_s})
+                        * {bucket_s} + {bucket_s} / 2.0)
+                  {roll_model}
+                ORDER BY bucket, model
+                """,
+                roll_args,
+            ).fetchall()
+        bands = [
+            {
+                "ts": _iso(b), "model": m, "n": int(n or 0),
+                "p10": float(p10 or 0), "p50": float(p50 or 0), "p90": float(p90 or 0),
+            }
+            for (b, m, n, p10, p50, p90, _o) in rows
+        ]
+        outliers = [
+            {
+                "ts": o.get("ts"), "model": m,
+                "latency_s": float(o.get("latency_s") or 0),
+                "file_key": o.get("file_key"), "line": int(o.get("line_num") or 0),
+            }
+            for (_b, m, _n, _a, _c2, _d, olist) in rows
+            for o in (olist or [])
+        ]
+        return {
+            "range": range, "project": project, "model": model,
+            "bucket_s": bucket_s, "bands": bands, "outliers": outliers,
+        }
 
     with db.viz_conn() as c:
         bands_rows = c.execute(bands_sql, args).fetchall()
         outlier_rows = c.execute(outliers_sql, args).fetchall()
-    _ = args2  # kept for symmetry; both queries use `args` independently
 
     return {
         "range": range,

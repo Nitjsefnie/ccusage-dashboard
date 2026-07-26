@@ -179,6 +179,7 @@ def run_ingest(trigger: str) -> dict:
         recompute_canonical()
         rebuild_rollup()
         rebuild_tool_rollup()
+        rebuild_latency_rollup()
 
     # Data changed: mark the response cache stale, then notify connected
     # SSE clients so the dashboard re-fetches without a page reload.
@@ -283,6 +284,89 @@ def rebuild_tool_rollup() -> int:
         written = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
         c.commit()
     log.info("rebuild_tool_rollup: %d rows", written)
+    return written
+
+
+# Display bucket widths /api/reply-latency can ask for, from
+# api._bucket_seconds. 300 (the 24h view) is deliberately absent: a row
+# per 5 minutes of all history to serve one day is not worth it, and that
+# range stays on the live path.
+LATENCY_BUCKETS = (3600, 21600, 43200, 86400)
+
+
+def rebuild_latency_rollup() -> int:
+    """Rebuild `latency_rollup` for each display bucket width.
+
+    Two passes per width — one grouped by project, one for the
+    all-projects row (project_id = '') — because percentiles are not
+    composable across a filter. Outlier dots are computed in the same
+    pass and stored as JSONB.
+    """
+    written = 0
+    with db.viz_conn() as c:
+        c.execute("SET LOCAL work_mem = '128MB'")
+        c.execute("TRUNCATE latency_rollup")
+        for bs in LATENCY_BUCKETS:
+            for scope_expr, scope_join in (
+                ("f.project_id", "JOIN files f ON f.file_key = r.file_key"),
+                ("''", ""),
+            ):
+                cur = c.execute(
+                    f"""
+                    WITH src AS (
+                      SELECT to_timestamp(
+                               floor(EXTRACT(EPOCH FROM r.ts) / {bs}) * {bs} + {bs} / 2
+                             ) AS bucket,
+                             {scope_expr} AS project_id,
+                             COALESCE(NULLIF(r.model, ''), 'unknown') AS model,
+                             r.ts, r.file_key, r.line_num,
+                             r.reply_latency_s AS latency_s
+                        FROM records r
+                        {scope_join}
+                       WHERE r.reply_latency_s IS NOT NULL
+                    ),
+                    bands AS (
+                      SELECT bucket, project_id, model, COUNT(*) AS n,
+                             PERCENTILE_CONT(0.10) WITHIN GROUP (ORDER BY latency_s) AS p10,
+                             PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY latency_s) AS p50,
+                             PERCENTILE_CONT(0.90) WITHIN GROUP (ORDER BY latency_s) AS p90
+                        FROM src GROUP BY 1, 2, 3
+                    ),
+                    ranked AS (
+                      SELECT s.*,
+                             b.n AS bucket_n,
+                             ROW_NUMBER() OVER (PARTITION BY s.bucket, s.project_id, s.model
+                                                ORDER BY s.latency_s DESC) AS rn_high,
+                             ROW_NUMBER() OVER (PARTITION BY s.bucket, s.project_id, s.model
+                                                ORDER BY s.latency_s ASC)  AS rn_low
+                        FROM src s
+                        JOIN bands b USING (bucket, project_id, model)
+                       WHERE b.n >= 100
+                    ),
+                    picked AS (
+                      SELECT bucket, project_id, model,
+                             jsonb_agg(jsonb_build_object(
+                               'ts', ts, 'latency_s', latency_s,
+                               'file_key', file_key, 'line_num', line_num,
+                               'kind', CASE WHEN rn_high <= GREATEST(1, CEIL(bucket_n * 0.01))
+                                            THEN 'high' ELSE 'low' END
+                             ) ORDER BY latency_s DESC) AS outliers
+                        FROM ranked
+                       WHERE rn_high <= GREATEST(1, CEIL(bucket_n * 0.01))
+                          OR rn_low  <= GREATEST(1, CEIL(bucket_n * 0.01))
+                       GROUP BY 1, 2, 3
+                    )
+                    INSERT INTO latency_rollup
+                      (bucket_s, bucket, project_id, model, n, p10, p50, p90, outliers)
+                    SELECT {bs}, b.bucket, b.project_id, b.model, b.n,
+                           b.p10, b.p50, b.p90, COALESCE(p.outliers, '[]'::jsonb)
+                      FROM bands b
+                      LEFT JOIN picked p USING (bucket, project_id, model)
+                    """
+                )
+                written += cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+        c.commit()
+    log.info("rebuild_latency_rollup: %d rows", written)
     return written
 
 
