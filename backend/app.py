@@ -9,6 +9,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.responses import ORJSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.gzip import GZipMiddleware
 from starlette.requests import Request
 from starlette.responses import FileResponse, HTMLResponse, Response
 
@@ -65,6 +66,29 @@ app = FastAPI(
     # orjson serialises the same payload in 11ms.
     default_response_class=ORJSONResponse,
 )
+class _SelectiveGZip(GZipMiddleware):
+    """GZip everything except the SSE stream.
+
+    GZipMiddleware cannot know a streaming response's size, so it
+    compresses `/api/events` unconditionally — which buys nothing (events
+    are a few bytes each), risks holding them in the compressor's buffer
+    instead of delivering them live, and contradicts the `no-transform`
+    the endpoint already sets.
+    """
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") == "http" and scope.get("path") == "/api/events":
+            await self.app(scope, receive, send)
+            return
+        await super().__call__(scope, receive, send)
+
+
+# The origin was serving /api/dashboard uncompressed — ~3.2 MB per cold
+# request, which the CDN then had to pull in full before it could
+# compress and serve it on. The body is JSON and compresses ~5x.
+# minimum_size skips the many small responses (/api/me, /api/models)
+# where framing would cost more than it saves.
+app.add_middleware(_SelectiveGZip, minimum_size=1024)
 app.middleware("http")(session.auth_middleware)
 app.include_router(login.router)
 app.include_router(api.router)

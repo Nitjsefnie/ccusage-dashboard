@@ -1632,15 +1632,19 @@ def dashboard(
         "subagent_only_sessions": subagent_only_sessions,
         "total_prompts": total_prompts,
         "total_turns": total_turns,
+        # `turns` is a FLAT array of ctx values, positionally indexed.
+        # It used to be [{"t": i, "ctx": n}, ...] where `t` was just the
+        # array index the consumer re-derived anyway — ~20 bytes per turn
+        # instead of ~6, repeated across 54k turns. session_id/is_main are
+        # dropped too: they are only used server-side above (to fold in
+        # ctx_turns) and no consumer reads them off the wire.
         "ctx_traces": [
             {
                 "file_key": fk,
-                "session_id": sid,
-                "is_main": bool(is_main),
                 "model": model or "",
                 "turns": [
-                    {"t": i, "ctx": int(t.get("input", 0) or 0)}
-                    for i, t in enumerate(turns or [])
+                    int(t.get("input", 0) or 0)
+                    for t in (turns or [])
                     if isinstance(t, dict)
                 ],
             }
