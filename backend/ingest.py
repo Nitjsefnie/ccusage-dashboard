@@ -178,6 +178,7 @@ def run_ingest(trigger: str) -> dict:
         # Order matters: the rollup reads is_canonical.
         recompute_canonical()
         rebuild_rollup()
+        rebuild_tool_rollup()
 
     # Data changed: mark the response cache stale, then notify connected
     # SSE clients so the dashboard re-fetches without a page reload.
@@ -241,6 +242,48 @@ def recompute_canonical() -> int:
     if changed:
         log.info("recompute_canonical: %d rows reflagged", changed)
     return changed
+
+
+def rebuild_tool_rollup() -> int:
+    """Rebuild `tool_rollup` from tool_uses + records + files.
+
+    LEFT JOIN to records on purpose: /api/tool-usage counts every tool
+    call, including ones with no matching usage record, while
+    /api/tool-error-rate inner-joins records. Storing model='' for the
+    unmatched ones lets a single table serve both — error-rate simply
+    excludes model=''.
+    """
+    with db.viz_conn() as c:
+        c.execute("SET LOCAL work_mem = '64MB'")
+        c.execute("TRUNCATE tool_rollup")
+        cur = c.execute(
+            """
+            INSERT INTO tool_rollup (
+              hour, project_id, model, tool_name, n_total, n_rated, n_error
+            )
+            SELECT date_trunc('hour', tu.ts)              AS hour,
+                   f.project_id,
+                   COALESCE(r.model, '')                  AS model,
+                   tu.tool_name,
+                   COUNT(*)                               AS n_total,
+                   COUNT(*) FILTER (
+                     WHERE tu.is_error IS NOT NULL AND r.file_key IS NOT NULL
+                   )                                      AS n_rated,
+                   COUNT(*) FILTER (
+                     WHERE tu.is_error AND r.file_key IS NOT NULL
+                   )                                      AS n_error
+              FROM tool_uses tu
+              JOIN files f    ON f.file_key = tu.file_key
+              LEFT JOIN records r ON r.file_key = tu.file_key
+                                 AND r.line_num = tu.line_num
+             WHERE tu.ts IS NOT NULL
+             GROUP BY 1, 2, 3, 4
+            """
+        )
+        written = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+        c.commit()
+    log.info("rebuild_tool_rollup: %d rows", written)
+    return written
 
 
 def warm_common() -> None:

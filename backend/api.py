@@ -313,32 +313,51 @@ def tool_usage(
     # Args must match the order parameters appear in the SQL string:
     # model_join's LIKE first (it sits in the JOIN, before WHERE),
     # then since (in WHERE), then project (after).
+    # tool_rollup pre-aggregates (hour, project, model, tool); see
+    # ingest.rebuild_tool_rollup. Same bucket-width gate as /api/dashboard:
+    # the 24h view buckets finer than an hour and takes the live path.
     args: list[Any] = []
-    model_join = ""
-    if model:
-        model_join = (
-            "JOIN records r ON r.file_key = tu.file_key "
-            "AND r.line_num = tu.line_num AND r.model LIKE %s"
-        )
-        args.append(f"%{model}%")
-    args.append(since)
-    proj_filter = ""
-    if project:
-        proj_filter = "AND f.project_id = %s"
-        args.append(project)
+    if bucket_s >= 3600:
+        tu_from = "tool_rollup tu"
+        ts_col, cnt = "tu.hour", "SUM(tu.n_total)"
+        model_join = ""
+        since_pred = "tu.hour >= date_trunc('hour', %s::timestamptz)"
+        model_filter = "AND tu.model LIKE %s" if model else ""
+        proj_filter = "AND tu.project_id = %s" if project else ""
+        args.append(since)
+        if project:
+            args.append(project)
+        if model:
+            args.append(f"%{model}%")
+        tail = f"{proj_filter} {model_filter}"
+    else:
+        tu_from = "tool_uses tu\n            JOIN files f ON f.file_key = tu.file_key"
+        ts_col, cnt = "tu.ts", "COUNT(*)"
+        model_join = ""
+        if model:
+            model_join = (
+                "JOIN records r ON r.file_key = tu.file_key "
+                "AND r.line_num = tu.line_num AND r.model LIKE %s"
+            )
+            args.append(f"%{model}%")
+        since_pred = "tu.ts >= %s"
+        args.append(since)
+        tail = ""
+        if project:
+            tail = "AND f.project_id = %s"
+            args.append(project)
 
     with db.viz_conn() as c:
         rows = c.execute(
             f"""
             SELECT to_timestamp(
-                     floor(EXTRACT(EPOCH FROM tu.ts) / {bucket_s}) * {bucket_s} + {bucket_s} / 2
+                     floor(EXTRACT(EPOCH FROM {ts_col}) / {bucket_s}) * {bucket_s} + {bucket_s} / 2
                    ) AS bucket,
                    tu.tool_name AS tool,
-                   COUNT(*)     AS n
-            FROM tool_uses tu
-            JOIN files f ON f.file_key = tu.file_key
+                   {cnt}        AS n
+            FROM {tu_from}
             {model_join}
-            WHERE tu.ts >= %s {proj_filter}
+            WHERE {since_pred} {tail}
             GROUP BY 1, 2
             ORDER BY 1, 2
             """,
@@ -377,18 +396,44 @@ def tool_error_rate(
     # Args appended in the order placeholders appear in the SQL string:
     # tu.ts >= %s, then f.project_id, then r.model.
     args: list[Any] = [since]
-    proj_filter = ""
-    if project:
-        proj_filter = "AND f.project_id = %s"
-        args.append(project)
-    model_filter = ""
-    if model:
-        model_filter = "AND r.model LIKE %s"
-        args.append(f"%{model}%")
-
-    with db.viz_conn() as c:
-        rows = c.execute(
-            f"""
+    if bucket_s >= 3600:
+        # n_rated/n_error already encode "is_error IS NOT NULL and a
+        # records row matched"; model <> '' reproduces the inner join to
+        # records that this endpoint used to do.
+        proj_filter = ""
+        if project:
+            proj_filter = "AND project_id = %s"
+            args.append(project)
+        model_filter = ""
+        if model:
+            model_filter = "AND model LIKE %s"
+            args.append(f"%{model}%")
+        sql = f"""
+            SELECT to_timestamp(
+                     floor(EXTRACT(EPOCH FROM hour) / {bucket_s}) * {bucket_s} + {bucket_s} / 2
+                   ) AS bucket,
+                   model, tool_name AS tool,
+                   SUM(n_rated) AS n_total,
+                   SUM(n_error) AS n_error
+            FROM tool_rollup
+            WHERE hour >= date_trunc('hour', %s::timestamptz)
+              AND model <> ''
+              {proj_filter}
+              {model_filter}
+            GROUP BY 1, 2, 3
+            HAVING SUM(n_rated) > 0
+            ORDER BY 1, 2, 3
+        """
+    else:
+        proj_filter = ""
+        if project:
+            proj_filter = "AND f.project_id = %s"
+            args.append(project)
+        model_filter = ""
+        if model:
+            model_filter = "AND r.model LIKE %s"
+            args.append(f"%{model}%")
+        sql = f"""
             SELECT to_timestamp(
                      floor(EXTRACT(EPOCH FROM tu.ts) / {bucket_s}) * {bucket_s} + {bucket_s} / 2
                    ) AS bucket,
@@ -405,9 +450,10 @@ def tool_error_rate(
               {model_filter}
             GROUP BY 1, 2, 3
             ORDER BY 1, 2, 3
-            """,
-            args,
-        ).fetchall()
+        """
+
+    with db.viz_conn() as c:
+        rows = c.execute(sql, args).fetchall()
 
     return {
         "range": range,
