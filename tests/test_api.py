@@ -473,6 +473,14 @@ def _insert_tz_probe_rows():
         )
         conn.commit()
 
+    # /api/activity-heatmap reads usage_rollup, which ingest rebuilds from
+    # `records`. These rows were inserted behind ingest's back, so rebuild
+    # it here or the endpoint cannot see them (SV-ROLLUP: the rollup is
+    # derived state; anything mutating `records` outside ingest must
+    # rebuild it).
+    from backend import ingest
+    ingest.rebuild_rollup()
+
 
 def test_activity_heatmap_shape(app_with_data):
     r = app_with_data.get("/api/activity-heatmap?range=3650d")

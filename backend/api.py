@@ -438,41 +438,31 @@ def activity_heatmap(
     delta = _parse_range(range)
     since = datetime.now(timezone.utc) - delta
 
-    proj_filter = "AND f.project_id = %s" if project else ""
-    model_filter = "AND r.model LIKE %s" if model else ""
-    filt_args: list[Any] = [since]
+    # Served from usage_rollup: the grid is weekday x hour of pure
+    # sums/counts, which is exactly what the rollup holds, and its `hour`
+    # column is already dedup-resolved. Truncating to the hour in UTC is
+    # safe for this because HEATMAP_TZ's offsets are whole hours, so the
+    # local hour bucket is preserved. There is no bucket-width gate here
+    # (unlike /api/dashboard) — the grid is always hourly.
+    proj_filter = "AND u.project_id = %s" if project else ""
+    model_filter = "AND u.model LIKE %s" if model else ""
+    args: list[Any] = [HEATMAP_TZ, HEATMAP_TZ, since]
     if project:
-        filt_args.append(project)
+        args.append(project)
     if model:
-        filt_args.append(f"%{model}%")
-
-    dedup_body = f"""
-      (SELECT DISTINCT ON (r.uuid) r.ts, r.output_tokens, r.cost_usd
-       FROM records r
-       JOIN files f ON f.file_key = r.file_key
-       WHERE r.ts >= %s {proj_filter} {model_filter} AND r.uuid IS NOT NULL
-       ORDER BY r.uuid, r.file_key)
-      UNION ALL
-      (SELECT r.ts, r.output_tokens, r.cost_usd
-       FROM records r
-       JOIN files f ON f.file_key = r.file_key
-       WHERE r.ts >= %s {proj_filter} {model_filter} AND r.uuid IS NULL)
-    """
-    # Placeholder order in the final SQL string: the two AT TIME ZONE
-    # params sit in the SELECT list (before FROM), then the dedup body's
-    # two filter arms.
-    args = [HEATMAP_TZ, HEATMAP_TZ] + filt_args + filt_args
+        args.append(f"%{model}%")
 
     with db.viz_conn() as c:
         rows = c.execute(
             f"""
-            SELECT EXTRACT(ISODOW FROM (d.ts AT TIME ZONE %s))::int AS dow,
-                   EXTRACT(HOUR   FROM (d.ts AT TIME ZONE %s))::int AS hour,
-                   COUNT(*)             AS requests,
-                   SUM(d.output_tokens) AS output_tokens,
-                   SUM(d.cost_usd)      AS cost_usd
-            FROM ({dedup_body}) d
-            WHERE d.ts IS NOT NULL
+            SELECT EXTRACT(ISODOW FROM (u.hour AT TIME ZONE %s))::int AS dow,
+                   EXTRACT(HOUR   FROM (u.hour AT TIME ZONE %s))::int AS hour,
+                   SUM(u.requests)      AS requests,
+                   SUM(u.output_tokens) AS output_tokens,
+                   SUM(u.cost_usd)      AS cost_usd
+            FROM usage_rollup u
+            WHERE u.hour >= date_trunc('hour', %s::timestamptz)
+              {proj_filter} {model_filter}
             GROUP BY 1, 2
             ORDER BY 1, 2
             """,
@@ -691,20 +681,38 @@ def list_models() -> dict:
 
 
 @router.get("/projects")
+@cache_response
 def list_projects() -> dict:
-    """Per-project rollup: file_count, total_cost, derived from files+records."""
+    """Per-project rollup: file_count, total_cost, derived from files+records.
+
+    Cost comes from usage_rollup instead of joining every record: this
+    used to fan `projects x files x records` out to ~296k rows and was
+    the slowest uncached call on a page load after /api/dashboard.
+
+    The aggregates are computed in separate subqueries rather than by
+    stacking two LEFT JOINs — joining files AND records first multiplied
+    the file rows by their record count, so COUNT(f.file_key) reported
+    67,969 files for a project that has 2,173.
+    """
     with db.viz_conn() as c:
         rows = c.execute(
             """
             SELECT p.project_id,
                    p.display_name,
-                   COUNT(DISTINCT f.session_id) AS session_count,
-                   COUNT(f.file_key)            AS file_count,
-                   COALESCE(SUM(r.cost_usd), 0) AS total_cost
+                   COALESCE(fc.session_count, 0) AS session_count,
+                   COALESCE(fc.file_count, 0)    AS file_count,
+                   COALESCE(uc.total_cost, 0)    AS total_cost
             FROM projects p
-            LEFT JOIN files f   ON f.project_id = p.project_id
-            LEFT JOIN records r ON r.file_key   = f.file_key
-            GROUP BY p.project_id, p.display_name
+            LEFT JOIN (
+              SELECT project_id,
+                     COUNT(DISTINCT session_id) AS session_count,
+                     COUNT(*)                   AS file_count
+              FROM files GROUP BY project_id
+            ) fc ON fc.project_id = p.project_id
+            LEFT JOIN (
+              SELECT project_id, SUM(cost_usd) AS total_cost
+              FROM usage_rollup GROUP BY project_id
+            ) uc ON uc.project_id = p.project_id
             ORDER BY total_cost DESC
             """
         ).fetchall()
@@ -1274,22 +1282,25 @@ def dashboard(
         file_counts_args = list(args)
         file_counts_row = ph.execute("file_counts", c, 
             f"""
+            -- The two EXISTS predicates were correlated subqueries
+            -- evaluated once per file row (four of them, ~9.2k files).
+            -- Resolve each to a set once and LEFT JOIN instead.
+            WITH files_with_records AS (
+              SELECT file_key FROM records GROUP BY file_key
+            ),
+            sessions_with_main AS (
+              SELECT session_id FROM files WHERE is_main GROUP BY session_id
+            )
             SELECT
-              COUNT(*) FILTER (WHERE is_main AND EXISTS (
-                SELECT 1 FROM records r WHERE r.file_key = f.file_key
-              )) AS main_w_usage,
-              COUNT(*) FILTER (WHERE is_main AND NOT EXISTS (
-                SELECT 1 FROM records r WHERE r.file_key = f.file_key
-              )) AS main_empty,
-              COUNT(*) FILTER (WHERE NOT is_main) AS subagent_files,
+              COUNT(*) FILTER (
+                WHERE f.is_main AND fr.file_key IS NOT NULL
+              ) AS main_w_usage,
+              COUNT(*) FILTER (
+                WHERE f.is_main AND fr.file_key IS NULL
+              ) AS main_empty,
+              COUNT(*) FILTER (WHERE NOT f.is_main) AS subagent_files,
               COUNT(DISTINCT f.session_id) FILTER (
-                WHERE NOT EXISTS (
-                  SELECT 1 FROM files mf
-                  WHERE mf.session_id = f.session_id AND mf.is_main
-                )
-                AND EXISTS (
-                  SELECT 1 FROM records r WHERE r.file_key = f.file_key
-                )
+                WHERE sm.session_id IS NULL AND fr.file_key IS NOT NULL
               ) AS subagent_only_sessions,
               -- Prompts: substantive user text msgs (instrumentation +
               -- interrupts excluded). Turns: ctx_turns boundaries that
@@ -1299,6 +1310,8 @@ def dashboard(
               COALESCE(SUM(f.prompt_count), 0) AS total_prompts,
               COALESCE(SUM(f.turn_count),   0) AS total_turns
             FROM files f
+            LEFT JOIN files_with_records fr ON fr.file_key = f.file_key
+            LEFT JOIN sessions_with_main   sm ON sm.session_id = f.session_id
             WHERE f.r2_last_modified >= %s {proj_filter}
             """,
             file_counts_args,
@@ -1362,20 +1375,6 @@ def dashboard(
             roll_args,
         ).fetchall()
 
-        ctx_turns_args = list(args)
-        # ctx_turns for the parent-session (main) files only — used to
-        # join into per-folder `sessions_out` rows for the burn-rate
-        # tooltip's ctx_at_end and the burn dot scaling.
-        ctx_turns_rows = ph.execute("ctx_turns", c, 
-            f"""
-            SELECT f.session_id, f.ctx_turns
-            FROM files f
-            WHERE f.is_main
-              AND f.r2_last_modified >= %s {proj_filter}
-              AND jsonb_array_length(f.ctx_turns) > 0
-            """,
-            ctx_turns_args,
-        ).fetchall()
 
         # Per-FILE ctx traces — one row per main file AND per sub-agent
         # file with usage. The "Per-Session Context Growth" panel
@@ -1448,15 +1447,20 @@ def dashboard(
         ctx_args = list(args)
         ctx_rows = ph.execute("ctx_lines", c, 
             f"""
+            -- The ordering cost was a correlated SUM over `records`
+            -- evaluated once per candidate file. Aggregate per file_key
+            -- once and join, so the sort reads a prepared column.
+            WITH cost_per_file AS (
+              SELECT file_key, SUM(cost_usd) AS cost
+              FROM records GROUP BY file_key
+            )
             SELECT f.session_id, f.ctx_turns
             FROM files f
+            LEFT JOIN cost_per_file cf ON cf.file_key = f.file_key
             WHERE f.is_main
               AND f.r2_last_modified >= %s {proj_filter}
               AND jsonb_array_length(f.ctx_turns) > 0
-            ORDER BY (
-              SELECT COALESCE(SUM(cost_usd), 0) FROM records r
-              WHERE r.file_key = f.file_key
-            ) DESC
+            ORDER BY COALESCE(cf.cost, 0) DESC
             LIMIT 20
             """,
             ctx_args,
@@ -1557,7 +1561,13 @@ def dashboard(
         reverse=True,
     )
 
-    ctx_turns_by_session = {sid: turns for (sid, turns) in ctx_turns_rows}
+    # ctx_turns used to be its own query, but it is a strict subset of
+    # ctx_traces (main files only) — the same jsonb scan run twice.
+    ctx_turns_by_session = {
+        sid: turns
+        for (fk, sid, is_main, mdl, turns) in ctx_traces_rows
+        if is_main
+    }
     sessions_out = []
     for row in sessions_rows:
         (sid, st, et, reqs, inp, out, cc, cr, cost, dom, models_used) = row
