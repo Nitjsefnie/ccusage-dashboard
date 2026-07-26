@@ -821,7 +821,10 @@ function ContextGrowthPanel({ events, realSessions, ctxTraces }) {
           ...t.turns.map((ctx, i) => ({ t: i + 1, ctx })),
         ];
         if (!out[key]) out[key] = [];
-        out[key].push({ id: t.file_key || t.session_id, seq });
+        // No id: only `seq` is ever read off these, and carrying the
+        // file_key meant ~100 chars of string per trace across 8.9k
+        // traces for a field nothing rendered.
+        out[key].push({ seq });
       }
       return out;
     }

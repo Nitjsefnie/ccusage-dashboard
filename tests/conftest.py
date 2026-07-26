@@ -5,6 +5,9 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+# ...and this directory, so one test module can import another's fixture
+# instead of duplicating an expensive fresh-DB + mini-R2 setup.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # Force file-mode R2 for unit tests; pytest never hits real R2.
 os.environ.setdefault("R2_ENDPOINT", "file:///tmp/sv-test-r2/")

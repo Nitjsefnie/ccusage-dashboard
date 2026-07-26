@@ -700,13 +700,11 @@ def list_projects() -> dict:
             SELECT p.project_id,
                    p.display_name,
                    COALESCE(fc.session_count, 0) AS session_count,
-                   COALESCE(fc.file_count, 0)    AS file_count,
                    COALESCE(uc.total_cost, 0)    AS total_cost
             FROM projects p
             LEFT JOIN (
               SELECT project_id,
-                     COUNT(DISTINCT session_id) AS session_count,
-                     COUNT(*)                   AS file_count
+                     COUNT(DISTINCT session_id) AS session_count
               FROM files GROUP BY project_id
             ) fc ON fc.project_id = p.project_id
             LEFT JOIN (
@@ -722,10 +720,9 @@ def list_projects() -> dict:
                 "project_id": pid,
                 "display_name": name,
                 "session_count": int(sessions),
-                "file_count": int(files),
                 "total_cost": float(cost),
             }
-            for pid, name, sessions, files, cost in rows
+            for pid, name, sessions, cost in rows
         ],
     }
 
@@ -1415,57 +1412,6 @@ def dashboard(
         ).fetchall()
 
         burn_args = list(args)
-        # Was two passes over `records` — a per-file GROUP BY plus a
-        # correlated per-file MODE subquery. The rollup carries is_main,
-        # per-model request counts and first/last ts, so both collapse into
-        # one grouping over pre-summed rows.
-        burn_rows = ph.execute("burn", c,
-            f"""
-            WITH per_session_model AS (
-              SELECT u.session_id, u.model,
-                     SUM(u.requests) AS requests,
-                     SUM(u.fresh_tokens + u.eph5_tokens + u.eph1h_tokens) AS write_tokens,
-                     MIN(u.first_ts) AS first_ts,
-                     MAX(u.last_ts)  AS last_ts
-              {roll_src} AND u.is_main
-              GROUP BY 1, 2
-            )
-            SELECT session_id,
-                   (SUM(write_tokens) / GREATEST(
-                      EXTRACT(EPOCH FROM (MAX(last_ts) - MIN(first_ts))), 1.0
-                    ))::float AS tps,
-                   COALESCE((ARRAY_AGG(model ORDER BY
-                     (model <> 'unknown') DESC, requests DESC))[1], '') AS model
-            FROM per_session_model
-            GROUP BY session_id
-            ORDER BY tps DESC NULLS LAST
-            LIMIT 200
-            """,
-            roll_args,
-        ).fetchall()
-
-        ctx_args = list(args)
-        ctx_rows = ph.execute("ctx_lines", c, 
-            f"""
-            -- The ordering cost was a correlated SUM over `records`
-            -- evaluated once per candidate file. Aggregate per file_key
-            -- once and join, so the sort reads a prepared column.
-            WITH cost_per_file AS (
-              SELECT file_key, SUM(cost_usd) AS cost
-              FROM records GROUP BY file_key
-            )
-            SELECT f.session_id, f.ctx_turns
-            FROM files f
-            LEFT JOIN cost_per_file cf ON cf.file_key = f.file_key
-            WHERE f.is_main
-              AND f.r2_last_modified >= %s {proj_filter}
-              AND jsonb_array_length(f.ctx_turns) > 0
-            ORDER BY COALESCE(cf.cost, 0) DESC
-            LIMIT 20
-            """,
-            ctx_args,
-        ).fetchall()
-
         rl_args = list(args) + [since]
         rl_rows = ph.execute("rate_limit_hits", c, 
             f"""
@@ -1522,39 +1468,6 @@ def dashboard(
         for (bucket, m, n, p50, p90) in response_sizes_rows
     ]
 
-    burns = []
-    for sid, tps, model in burn_rows:
-        burns.append({
-            "session_id": sid,
-            "tps": float(tps or 0),
-            "model": model or "",
-            "hit_5h_limit": False,
-        })
-
-    def _parse_iso_to_epoch(s):
-        try:
-            if not s:
-                return None
-            dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
-            return int(dt.timestamp())
-        except (ValueError, TypeError):
-            return None
-
-    ctx_lines = []
-    for sid, turns in ctx_rows:
-        trace = []
-        for t in (turns or []):
-            try:
-                ts_epoch = _parse_iso_to_epoch(t.get("ts"))
-                ctx_val = int(t.get("input", 0))
-            except (AttributeError, TypeError, ValueError):
-                continue
-            if ts_epoch is None:
-                continue
-            trace.append({"t": ts_epoch, "ctx": ctx_val})
-        if trace:
-            ctx_lines.append({"session_id": sid, "trace": trace})
-
     cost_by_model = sorted(
         ({"model": m, "cost_usd": v} for m, v in cost_by_model_acc.items() if v > 0),
         key=lambda r: r["cost_usd"],
@@ -1595,7 +1508,6 @@ def dashboard(
             "model": dom or "",
             "models_used": list(models_used or []),
             "ctx_at_end": ctx_at_end,
-            "turns": turns_proj,
         })
 
     rate_limit_hits = []
@@ -1623,7 +1535,6 @@ def dashboard(
         "hourly": hourly,
         "cost_by_model": cost_by_model,
         "rate_limit_hits": rate_limit_hits,
-        "burns": burns,
         "sessions": sessions_out,
         "total_sessions": total_sessions,
         "main_w_usage": main_w_usage,
@@ -1640,7 +1551,6 @@ def dashboard(
         # ctx_turns) and no consumer reads them off the wire.
         "ctx_traces": [
             {
-                "file_key": fk,
                 "model": model or "",
                 "turns": [
                     int(t.get("input", 0) or 0)
@@ -1651,7 +1561,6 @@ def dashboard(
             for (fk, sid, is_main, model, turns) in ctx_traces_rows
         ],
         "response_sizes": response_sizes,
-        "ctx_lines": ctx_lines,
     }
 
 

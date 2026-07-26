@@ -463,7 +463,9 @@ function backendDashToShape(b) {
       requests: s.requests,
       model: short(s.model),
       models_used: (s.models_used || []).map(short),
-      turns: s.turns || [],
+      // No `turns`: the per-session ctx trace is already in ctx_traces,
+      // which this panel prefers. ctx_at_end (derived from it server-side)
+      // is what the burn-rate dot scaling actually needs.
     };
   });
   return {

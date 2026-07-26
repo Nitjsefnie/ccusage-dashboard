@@ -162,9 +162,12 @@ def test_projects(app_with_data):
     body = r.json()
     pids = sorted(p["project_id"] for p in body["projects"])
     assert pids == ["projA", "projB"]
-    # Each project carries file_count + total_cost
+    # session_count + total_cost drive the picker chip and its ordering.
+    # file_count was dropped: nothing rendered it (and it was reporting
+    # the joined record count, not the file count).
     for p in body["projects"]:
-        assert "file_count" in p and "total_cost" in p
+        assert "session_count" in p and "total_cost" in p
+        assert "file_count" not in p
 
 
 def test_cache_per_model_shape(app_with_data):
