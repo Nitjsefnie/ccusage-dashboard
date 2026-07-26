@@ -18,11 +18,14 @@ Per-session work spans TWO transactions:
 from __future__ import annotations
 
 import json
+import logging
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
 from backend import cache, db, events, parse, r2
+
+log = logging.getLogger("claudit.ingest")
 
 
 def run_ingest(trigger: str) -> dict:
@@ -171,6 +174,9 @@ def run_ingest(trigger: str) -> dict:
         "deleted": deleted,
         "error": err,
     }
+    if err is None:
+        recompute_canonical()
+
     # Data changed: mark the response cache stale, then notify connected
     # SSE clients so the dashboard re-fetches without a page reload.
     #
@@ -186,6 +192,50 @@ def run_ingest(trigger: str) -> dict:
         events.broadcast_threadsafe("ingest_done", summary)
     return summary
 
+
+
+def recompute_canonical() -> int:
+    """Resolve cross-file uuid dedup into `records.is_canonical`.
+
+    Marks exactly the row that ``DISTINCT ON (r.uuid) ... ORDER BY r.uuid,
+    r.file_key`` used to pick at read time, so the read endpoints can
+    filter on a boolean instead of sorting the whole table on every
+    request. ``line_num`` breaks ties within a file_key, which the old
+    read-time ORDER BY left arbitrary.
+
+    Rows with a NULL uuid are legacy records kept verbatim (they were the
+    UNION ALL leg), so they are always canonical.
+
+    Runs after EVERY successful ingest, not only when files changed: a
+    freshly-migrated DB has the column defaulted to TRUE across the board,
+    and skipping the pass on a no-op ingest would leave duplicates
+    double-counted until something happened to change. The UPDATE only
+    touches rows whose flag actually flips, so a steady-state pass writes
+    nothing. Returns the number of rows changed.
+    """
+    with db.viz_conn() as c:
+        c.execute("SET LOCAL work_mem = '64MB'")
+        cur = c.execute(
+            """
+            UPDATE records r
+               SET is_canonical = w.canon
+              FROM (
+                    SELECT file_key, line_num,
+                           (uuid IS NULL OR ROW_NUMBER() OVER (
+                              PARTITION BY uuid ORDER BY file_key, line_num
+                            ) = 1) AS canon
+                      FROM records
+                   ) w
+             WHERE r.file_key = w.file_key
+               AND r.line_num = w.line_num
+               AND r.is_canonical IS DISTINCT FROM w.canon
+            """
+        )
+        changed = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+        c.commit()
+    if changed:
+        log.info("recompute_canonical: %d rows reflagged", changed)
+    return changed
 
 
 def _worker_count() -> int:

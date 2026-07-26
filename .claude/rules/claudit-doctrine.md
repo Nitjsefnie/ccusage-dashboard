@@ -10,10 +10,11 @@ analyst). Both the in-browser `src/parser.js` AND the backend
 
 - Per-file requestId `_merge_usage_max` during ingest (Phase 1,
   persisted into `records`)
-- Cross-file UUID dedup at READ time — `DISTINCT ON (uuid)` in the
-  read endpoints (`backend/api.py`). There is no persisted Phase 2
-  rollup; the per-session SUM aggregation that used to live in
-  `compute_cache` was dropped in R1.
+- Cross-file UUID dedup, resolved at INGEST into `records.is_canonical`
+  (see SV-CANONICAL-FLAG). The winner is still exactly what
+  `DISTINCT ON (uuid) ORDER BY uuid, file_key` picked at read time.
+  There is still no persisted Phase 2 rollup; the per-session SUM
+  aggregation that used to live in `compute_cache` was dropped in R1.
 - `<task-notification>` ref detection for sub-agent jsonls
 - Sidecar `data/subagents/agent-*.jsonl` resolution
 - `MODEL_RATES` table (single source of truth: `backend/pricing.py`,
@@ -99,13 +100,40 @@ output (see `backend/schema.sql`):
   PK `(file_key, line_num)` — one row per usage-bearing line AFTER
   per-file Phase 1 max-merge for matching `request_id`.
 
-Cross-file uuid dedup happens at READ time via `DISTINCT ON (uuid)`
-in the read endpoints (`backend/api.py`). There is NO persisted
-`record_uuids` or `session_requests` table — both were dropped in R1
-along with the per-session rollup, the materialized hourly view, and
-the `sessions` table. Reintroducing a persisted rollup or any
-cross-session table requires a new migration, not a quiet code
-change.
+Cross-file uuid dedup is resolved at INGEST into `records.is_canonical`
+(SV-CANONICAL-FLAG below). There is still NO persisted `record_uuids`
+or `session_requests` table — both were dropped in R1 along with the
+per-session rollup, the materialized hourly view, and the `sessions`
+table. Reintroducing a persisted rollup or any cross-session table
+requires a new migration, not a quiet code change.
+
+## Dedup is a flag, not a read-time sort (SV-CANONICAL-FLAG)
+
+`records.is_canonical` marks the row that
+`DISTINCT ON (r.uuid) ORDER BY r.uuid, r.file_key` used to select at
+read time. `line_num` breaks ties within a `file_key`, which the old
+read-time ORDER BY left arbitrary. Rows with a NULL `uuid` are legacy
+records kept verbatim (they were the `UNION ALL` leg) and are always
+canonical.
+
+Read endpoints MUST filter `WHERE is_canonical` and MUST NOT
+reintroduce `DISTINCT ON (uuid)`. It was moved because `records` is
+immutable between hourly ingests, yet every read re-sorted the whole
+table to drop ~3.5% duplicates — `/api/cache` prefixed that dedup as a
+CTE onto four queries and paid it four times per request (19.1s at
+range=all; 0.52s after).
+
+`ingest.recompute_canonical()` runs after EVERY successful ingest, not
+only when files changed: adding or removing a FILE can change which row
+wins for a uuid, and a freshly-migrated DB has the column defaulted to
+TRUE across the board. The UPDATE only touches rows whose flag actually
+flips, so a steady-state pass writes nothing. The column defaults to
+TRUE so a migrated-but-not-yet-recomputed DB over-counts (behaves like
+no dedup) rather than silently dropping rows.
+
+Changing the winner rule means changing BOTH `recompute_canonical()`
+and `src/parser.js`/`parse_session.py` semantics in lockstep
+(SV-PARSER-SPEC).
 
 `records` cascades from `files`; `files` cascades from `projects`.
 Reparse is idempotent: deleting a file's `records` rows and

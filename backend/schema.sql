@@ -56,8 +56,26 @@ ALTER TABLE records ADD COLUMN IF NOT EXISTS
 ALTER TABLE records ADD COLUMN IF NOT EXISTS
   reply_latency_s NUMERIC(10,3);
 
+-- Cross-file uuid dedup, resolved at INGEST instead of on every read.
+-- `records` is immutable between ingests, but every read endpoint was
+-- re-running DISTINCT ON (uuid) over the whole table -- a 296k-row sort
+-- to drop ~3.5% duplicates, per request, per range, per project. This
+-- flag marks the row that DISTINCT ON (uuid) ORDER BY uuid, file_key,
+-- line_num would have kept; readers filter on it instead of sorting.
+-- Recomputed by ingest.recompute_canonical() after every ingest, since
+-- adding or removing a FILE can change which row wins for a uuid.
+--
+-- Defaults to TRUE so a freshly-migrated DB over-counts nothing before
+-- the first recompute -- it behaves exactly like the pre-dedup state
+-- (every row kept) rather than silently dropping rows.
+ALTER TABLE records ADD COLUMN IF NOT EXISTS
+  is_canonical BOOLEAN NOT NULL DEFAULT TRUE;
+
 CREATE INDEX IF NOT EXISTS records_uuid_idx ON records (uuid) WHERE uuid IS NOT NULL;
 CREATE INDEX IF NOT EXISTS records_ts_idx ON records (ts);
+-- Every read endpoint filters `is_canonical AND ts >= ...`.
+CREATE INDEX IF NOT EXISTS records_canonical_ts_idx
+  ON records (ts) WHERE is_canonical;
 CREATE INDEX IF NOT EXISTS records_model_idx ON records (model);
 CREATE INDEX IF NOT EXISTS records_request_idx ON records (request_id) WHERE request_id <> '';
 

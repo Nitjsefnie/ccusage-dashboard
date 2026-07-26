@@ -212,6 +212,51 @@ def test_xz_compressed_jsonl_ingests_transparently(fresh_db, mini_r2_env):
         assert n_rec > 0, "records populate from decompressed bytes"
 
 
+def test_is_canonical_matches_read_time_distinct_on(fresh_db, mini_r2_env):
+    """The ingest-time flag must select exactly the rows the old read-time
+    `DISTINCT ON (uuid) ORDER BY uuid, file_key` would have kept.
+
+    This is the invariant that lets the read endpoints filter a boolean
+    instead of re-sorting the whole table (SV-CANONICAL-FLAG). The mini
+    mirror carries a cross-session shared uuid, so there is a real
+    duplicate to resolve.
+    """
+    ingest.run_ingest(trigger="manual")
+
+    with db.viz_conn() as c:
+        flagged = c.execute(
+            "SELECT file_key, line_num FROM records "
+            "WHERE is_canonical ORDER BY file_key, line_num"
+        ).fetchall()
+        # What the read endpoints used to compute on every request.
+        expected = c.execute(
+            """
+            SELECT file_key, line_num FROM (
+              (SELECT DISTINCT ON (uuid) file_key, line_num
+                 FROM records WHERE uuid IS NOT NULL
+                ORDER BY uuid, file_key, line_num)
+              UNION ALL
+              (SELECT file_key, line_num FROM records WHERE uuid IS NULL)
+            ) t ORDER BY file_key, line_num
+            """
+        ).fetchall()
+        dupes = c.execute(
+            "SELECT COUNT(*) FROM records WHERE NOT is_canonical"
+        ).fetchone()
+
+    assert flagged == expected
+    assert dupes is not None and dupes[0] > 0, (
+        "fixture must contain a cross-file duplicate, or this proves nothing"
+    )
+
+
+def test_recompute_canonical_is_idempotent(fresh_db, mini_r2_env):
+    """A steady-state pass must not rewrite rows — it runs after every
+    ingest, including no-op ones."""
+    ingest.run_ingest(trigger="manual")
+    assert ingest.recompute_canonical() == 0
+
+
 def test_ingest_marks_response_cache_stale(fresh_db, mini_r2_env):
     """Ingest marks cached responses stale but leaves them SERVABLE.
 

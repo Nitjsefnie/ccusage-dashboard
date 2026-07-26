@@ -785,45 +785,32 @@ def cache_view(
     since = datetime.now(timezone.utc) - delta
     proj_filter = ""
     model_filter = ""
-    leg_args: list[Any] = [since]
+    canon_args: list[Any] = [since]
     if project:
-        proj_filter = "AND f.project_id = %s"
-        leg_args.append(project)
+        # Semi-join rather than a JOIN: the top-N queries below select a
+        # bare `file_key`, which both tables have — joining `files` in
+        # would make that reference ambiguous.
+        proj_filter = (
+            "AND file_key IN (SELECT file_key FROM files WHERE project_id = %s)"
+        )
+        canon_args.append(project)
     if model:
-        model_filter = "AND r.model LIKE %s"
-        leg_args.append(f"%{model}%")
-    args = list(leg_args)
-    args2 = leg_args + leg_args  # filters applied twice (one per UNION leg)
+        model_filter = "AND model LIKE %s"
+        canon_args.append(f"%{model}%")
 
     ph = Phases("cache_view")
 
-    # This dedup used to be a CTE prefixed onto each of the four queries
-    # below, so Postgres re-ran the whole DISTINCT ON — the single most
-    # expensive step — FOUR times per request (measured: 19s at
-    # range=all). Materialise it once, like /api/dashboard does, and let
-    # the four queries read the finished table. The join to `files` only
-    # resolves project_id, so it is omitted when nothing filters on it.
-    dedup_join = "JOIN files f ON f.file_key = r.file_key" if project else ""
-    dedup_body = f"""
-      (SELECT DISTINCT ON (r.uuid) r.*
-       FROM records r
-       {dedup_join}
-       WHERE r.ts >= %s {proj_filter} {model_filter} AND r.uuid IS NOT NULL
-       ORDER BY r.uuid, r.file_key)
-      UNION ALL
-      (SELECT r.*
-       FROM records r
-       {dedup_join}
-       WHERE r.ts >= %s {proj_filter} {model_filter} AND r.uuid IS NULL)
+    # Dedup used to be a CTE prefixed onto each of the four queries below,
+    # so Postgres re-ran the whole DISTINCT ON — the single most expensive
+    # step — FOUR times per request (measured: 19s at range=all). It is
+    # now resolved at ingest into records.is_canonical
+    # (ingest.recompute_canonical), so each query just filters a boolean.
+    canon_src = f"""
+        FROM records
+        WHERE ts >= %s AND is_canonical {proj_filter} {model_filter}
     """
 
     with db.viz_conn() as c:
-        c.execute("SET LOCAL work_mem = '64MB'")
-        ph.execute(
-            "dedup", c,
-            f"CREATE TEMP TABLE deduped ON COMMIT DROP AS {dedup_body}",
-            args2,
-        )
         epoch_expr, epoch_params = rate_epoch_sql("ts")
         per_model_rows = ph.execute(
             "per_model", c, f"""
@@ -837,49 +824,52 @@ def cache_view(
                    SUM(eph5_tokens)            AS eph5,
                    SUM(eph1h_tokens)           AS eph1h,
                    SUM(cost_usd)               AS cost_total
-            FROM deduped
+            {canon_src}
             GROUP BY model, rate_epoch
             ORDER BY cost_total DESC
             """,
-            epoch_params,
+            epoch_params + canon_args,
         ).fetchall()
 
         top_output = ph.execute(
-            "top_output", c, """
+            "top_output", c, f"""
             SELECT ts, line_num, request_id, model,
                    output_tokens, cache_read_tokens,
                    eph1h_tokens, eph5_tokens, fresh_tokens,
                    cost_usd, file_key
-            FROM deduped
+            {canon_src}
             ORDER BY output_tokens DESC
             LIMIT 10
             """,
+            canon_args,
         ).fetchall()
 
         top_create = ph.execute(
-            "top_create", c, """
+            "top_create", c, f"""
             SELECT ts, line_num, request_id, model,
                    cache_creation_tokens, eph1h_tokens, eph5_tokens,
                    cache_read_tokens, output_tokens, fresh_tokens,
                    cost_usd, file_key
-            FROM deduped
-            WHERE cache_creation_tokens > 0
+            {canon_src}
+              AND cache_creation_tokens > 0
             ORDER BY cache_creation_tokens DESC
             LIMIT 10
             """,
+            canon_args,
         ).fetchall()
 
         top_read = ph.execute(
-            "top_read", c, """
+            "top_read", c, f"""
             SELECT ts, line_num, request_id, model,
                    cache_read_tokens, eph1h_tokens, eph5_tokens,
                    output_tokens, fresh_tokens,
                    cost_usd, file_key
-            FROM deduped
-            WHERE cache_read_tokens > 0
+            {canon_src}
+              AND cache_read_tokens > 0
             ORDER BY cache_read_tokens DESC
             LIMIT 10
             """,
+            canon_args,
         ).fetchall()
 
     per_model = fold_per_model(per_model_rows)
@@ -1164,56 +1154,30 @@ def dashboard(
         proj_filter = "AND f.project_id = %s"
         args.append(project)
     if model:
-        model_filter = "AND r.model LIKE %s"
+        model_filter = "AND d.model LIKE %s"
 
-    # The join to `files` exists solely to resolve project_id. Without a
-    # project filter it matches every row and costs a 296k-row hash join
-    # per leg, so only join when the filter actually needs it.
-    dedup_join = "JOIN files f ON f.file_key = r.file_key" if project else ""
-
-    # Only the columns the six consumer queries below actually read.
-    # uuid/line_num/request_id were carried through the sort but never
-    # selected from `deduped`, and the extra width pushed the
-    # DISTINCT ON sort past work_mem into an external merge on disk.
-    dedup_cols = """r.file_key, r.ts, r.model,
-         r.fresh_tokens, r.cache_creation_tokens, r.cache_read_tokens,
-         r.output_tokens, r.eph5_tokens, r.eph1h_tokens, r.cost_usd,
-         r.text_chars"""
-
-    # Each leg binds its own arguments: leg 1 takes the model filter,
-    # leg 2 (legacy NULL-uuid rows, kept verbatim) does not.
-    leg1_args: list[Any] = [since]
-    if project:
-        leg1_args.append(project)
-    if model:
-        leg1_args.append(f"%{model}%")
-    leg2_args: list[Any] = [since]
-    if project:
-        leg2_args.append(project)
-    args2 = leg1_args + leg2_args
-    ph = Phases("dashboard")
-
-    dedup_body = f"""
-      (SELECT DISTINCT ON (r.uuid) {dedup_cols}
-       FROM records r
-       {dedup_join}
-       WHERE r.ts >= %s {proj_filter} {model_filter} AND r.uuid IS NOT NULL
-       ORDER BY r.uuid, r.file_key)
-      UNION ALL
-      (SELECT {dedup_cols}
-       FROM records r
-       {dedup_join}
-       WHERE r.ts >= %s {proj_filter} AND r.uuid IS NULL)
+    # Cross-file uuid dedup is resolved at ingest into records.is_canonical
+    # (see ingest.recompute_canonical), so reads filter a boolean instead of
+    # re-sorting 296k rows per request. That also removes the ON COMMIT DROP
+    # temp table this used to materialise: with dedup reduced to a WHERE
+    # clause there is nothing expensive left to share between the queries,
+    # and each one now scans records directly via records_canonical_ts_idx.
+    canon_src = f"""
+        FROM records d
+        JOIN files f ON f.file_key = d.file_key
+        WHERE d.ts >= %s AND d.is_canonical {proj_filter} {model_filter}
     """
+    canon_args: list[Any] = [since]
+    if project:
+        canon_args.append(project)
+    if model:
+        canon_args.append(f"%{model}%")
+
+    ph = Phases("dashboard")
 
     _t_sql = time.perf_counter()
     with db.viz_conn() as c:
         c.execute("SET LOCAL work_mem = '64MB'")
-        with ph.step("dedup"):
-            c.execute(
-                f"CREATE TEMP TABLE deduped ON COMMIT DROP AS {dedup_body}",
-                args2,
-            )
         hourly_rows = ph.execute("hourly", c, 
             f"""
             SELECT to_timestamp(
@@ -1228,31 +1192,33 @@ def dashboard(
                    SUM(d.cost_usd)         AS cost_usd,
                    COUNT(*)                AS requests,
                    COUNT(DISTINCT f.session_id) AS session_count
-            FROM deduped d
-            JOIN files f ON f.file_key = d.file_key
-            WHERE d.ts IS NOT NULL
+            {canon_src}
             GROUP BY 1, 2
             ORDER BY 1, 2
             """
+        ,
+            canon_args,
         ).fetchall()
 
         cost_by_model_rows = ph.execute("cost_by_model", c, 
-            """
+            f"""
             SELECT COALESCE(NULLIF(d.model, ''), 'unknown') AS model,
                    SUM(d.cost_usd) AS cost_usd
-            FROM deduped d
+            {canon_src}
             GROUP BY 1
             ORDER BY 2 DESC
             """
+        ,
+            canon_args,
         ).fetchall()
 
         total_sessions_row = ph.execute("total_sessions", c, 
-            """
+            f"""
             SELECT COUNT(DISTINCT f.session_id) AS n
-            FROM deduped d
-            JOIN files f ON f.file_key = d.file_key
-            WHERE d.ts IS NOT NULL
+            {canon_src}
             """
+        ,
+            canon_args,
         ).fetchone()
         total_sessions = int(total_sessions_row[0] or 0) if total_sessions_row else 0
 
@@ -1296,7 +1262,7 @@ def dashboard(
         total_turns            = int(file_counts_row[5] or 0) if file_counts_row else 0
 
         sessions_rows = ph.execute("sessions", c, 
-            """
+            f"""
             SELECT f.session_id,
                    EXTRACT(EPOCH FROM MIN(d.ts))::float AS start_ts,
                    EXTRACT(EPOCH FROM MAX(d.ts))::float AS end_ts,
@@ -1329,13 +1295,13 @@ def dashboard(
                      ),
                      NULL
                    ) AS models_used
-            FROM deduped d
-            JOIN files f ON f.file_key = d.file_key
-            WHERE d.ts IS NOT NULL
+            {canon_src}
             GROUP BY f.session_id
             ORDER BY SUM(d.cost_usd) DESC NULLS LAST
             LIMIT 500
             """
+        ,
+            canon_args,
         ).fetchall()
 
         # Response-size time series per model — daily-bucketed
@@ -1355,11 +1321,13 @@ def dashboard(
                    COUNT(*) AS n,
                    PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY d.text_chars) AS p50,
                    PERCENTILE_CONT(0.90) WITHIN GROUP (ORDER BY d.text_chars) AS p90
-            FROM deduped d
-            WHERE d.text_chars > 0 AND d.ts IS NOT NULL
+            {canon_src}
+              AND d.text_chars > 0
             GROUP BY 1, 2
             ORDER BY 1, 2
             """
+        ,
+            canon_args,
         ).fetchall()
 
         ctx_turns_args = list(args)
