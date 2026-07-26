@@ -112,21 +112,19 @@ def test_plot_db_project_filter_subsets_events(app_with_data):
     assert len(filtered) < len(all_events), "filter must drop the other project"
 
 
-@pytest.fixture
-def app_with_data(monkeypatch):
-    """Spin up a fresh DB + mini R2, ingest, return an authed TestClient.
+def _build_api_client(mp, test_db: str):
+    """Fresh DB + mini R2 + ingest, yielding a TestClient on the api router.
 
-    Bypasses auth via a clean FastAPI app with only the api router.
+    Auth is bypassed by mounting only the router into a clean app.
     """
-    test_db = "claudit_test_api"
     os.system(f"dropdb --if-exists {test_db} 2>/dev/null")
     os.system(f"createdb {test_db} 2>/dev/null")
     os.system(f"psql {test_db} -f {_REPO_ROOT / 'backend/schema.sql'} >/dev/null")
-    monkeypatch.setenv("DATABASE_URL_VIZ", f"postgresql:///{test_db}")
+    mp.setenv("DATABASE_URL_VIZ", f"postgresql:///{test_db}")
     src = _REPO_ROOT / "fixtures/r2_mini"
     tmp = tempfile.mkdtemp(prefix="sv-api-")
     shutil.copytree(src, Path(tmp) / "r2")
-    monkeypatch.setenv("R2_ENDPOINT", f"file://{tmp}/r2/")
+    mp.setenv("R2_ENDPOINT", f"file://{tmp}/r2/")
 
     from backend import db as _db
     if _db._VIZ is not None:
@@ -154,6 +152,31 @@ def app_with_data(monkeypatch):
     _db._VIZ = None
     shutil.rmtree(tmp)
     os.system(f"dropdb --if-exists {test_db} 2>/dev/null")
+
+
+# Module-scoped: this setup (dropdb, createdb, schema, copy the R2 tree,
+# a full ingest incl. recompute_canonical + rebuild_rollup) ran per test
+# and was ~2-5s of pure `setup` on every one of ~40 read-only tests —
+# the whole reason the suite took 170s. Tests that WRITE must not share
+# it; they take `app_with_fresh_data` below.
+@pytest.fixture(scope="module")
+def app_with_data():
+    mp = pytest.MonkeyPatch()          # monkeypatch itself is function-scoped
+    try:
+        yield from _build_api_client(mp, "claudit_test_api")
+    finally:
+        mp.undo()
+
+
+@pytest.fixture
+def app_with_fresh_data():
+    """Function-scoped variant for tests that mutate rows, so they cannot
+    contaminate the shared module-scoped client."""
+    mp = pytest.MonkeyPatch()
+    try:
+        yield from _build_api_client(mp, "claudit_test_api_mut")
+    finally:
+        mp.undo()
 
 
 def test_projects(app_with_data):
@@ -430,11 +453,11 @@ def test_dashboard_excludes_rate_limit_hits_older_than_range(app_with_rl_data):
     assert out_range in hits_all
 
 
-def test_dashboard_response_is_cached_and_fresh_bypasses(app_with_data):
+def test_dashboard_response_is_cached_and_fresh_bypasses(app_with_fresh_data):
     from backend import cache, db
 
     cache.response_cache.clear()
-    first = app_with_data.get("/api/dashboard?range=all").json()
+    first = app_with_fresh_data.get("/api/dashboard?range=all").json()
 
     # Mutate the DB underneath the cache: delete every record. usage_rollup
     # is derived state that ingest rebuilds from `records`, so emptying the
@@ -444,10 +467,10 @@ def test_dashboard_response_is_cached_and_fresh_bypasses(app_with_data):
         c.execute("DELETE FROM records")
         c.execute("DELETE FROM usage_rollup")
 
-    cached = app_with_data.get("/api/dashboard?range=all").json()
+    cached = app_with_fresh_data.get("/api/dashboard?range=all").json()
     assert cached == first                       # stale-but-cached payload
 
-    fresh = app_with_data.get("/api/dashboard?range=all&fresh=1").json()
+    fresh = app_with_fresh_data.get("/api/dashboard?range=all&fresh=1").json()
     assert fresh["cost_by_model"] == []          # fresh=1 sees the empty DB
 
 
@@ -508,9 +531,9 @@ def test_activity_heatmap_requests_match_dashboard(app_with_data):
            sum(h["requests"] for h in dash["hourly"])
 
 
-def test_activity_heatmap_dst_awareness(app_with_data):
+def test_activity_heatmap_dst_awareness(app_with_fresh_data):
     _insert_tz_probe_rows()
-    r = app_with_data.get("/api/activity-heatmap?range=3650d&model=tz-probe-model")
+    r = app_with_fresh_data.get("/api/activity-heatmap?range=3650d&model=tz-probe-model")
     assert r.status_code == 200
     cells = {(c["dow"], c["hour"]): c for c in r.json()["cells"]}
     assert set(cells) == {(4, 11), (3, 12)}, cells

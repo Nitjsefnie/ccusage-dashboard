@@ -151,6 +151,43 @@ def _schedule_refresh(key: str, fn: Callable[..., dict], kwargs: dict[str, Any])
     _refresh_pool.submit(_run)
 
 
+def warm(fn: Callable[..., dict], **overrides: Any) -> None:
+    """Populate the cache entry a request with `overrides` would produce.
+
+    An ingest leaves Postgres' buffer cache cold — recompute_canonical and
+    rebuild_rollup rewrite the tables — and a restart leaves the response
+    cache empty on top of that, so the first visitor pays both: measured
+    6.0s vs 1.4s warm for /api/dashboard. Stale-while-revalidate cannot
+    help there because there is nothing stale to serve yet.
+
+    The key MUST match what the decorated wrapper computes for a real
+    request, and FastAPI passes every declared query param as a keyword.
+    So start from the endpoint's own defaults and apply the overrides on
+    top; guessing the kwargs would warm a key nobody ever reads.
+    """
+    import inspect
+
+    target = getattr(fn, "__wrapped__", fn)
+    kwargs: dict[str, Any] = {}
+    for name, param in inspect.signature(target).parameters.items():
+        default = param.default
+        # Query(...) defaults carry the real value on `.default`.
+        kwargs[name] = getattr(default, "default", default)
+    kwargs.update(overrides)
+    if "fresh" in kwargs:
+        # A truthy `fresh` bypasses the cache on both read and write, so
+        # warming with it would compute the response and store nothing.
+        kwargs["fresh"] = 0
+
+    def _run() -> None:
+        try:
+            fn(**kwargs)
+        except Exception:
+            log.exception("cache warm failed for %s %r", fn.__qualname__, overrides)
+
+    _refresh_pool.submit(_run)
+
+
 def cache_response(fn: Callable[..., dict]) -> Callable[..., dict]:
     """Cache an endpoint's dict result keyed by its keyword args.
 
