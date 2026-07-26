@@ -21,7 +21,12 @@ def viz_pool() -> ConnectionPool:
     if _VIZ is None:
         _VIZ = ConnectionPool(
             os.environ["DATABASE_URL_VIZ"],
-            min_size=1, max_size=8, timeout=10,
+            # The read endpoints are sync (blocking psycopg) and run on
+            # FastAPI's threadpool, so requests now hit the DB genuinely
+            # concurrently — a single dashboard load fans out to ~7. While
+            # they were async-on-the-event-loop they serialised and 8 was
+            # never exercised; it would now be the bottleneck.
+            min_size=2, max_size=20, timeout=10,
             kwargs={"autocommit": False},
         )
     return _VIZ

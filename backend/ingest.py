@@ -171,13 +171,18 @@ def run_ingest(trigger: str) -> dict:
         "deleted": deleted,
         "error": err,
     }
-    # Data changed: invalidate the response cache, then notify connected
-    # SSE clients so the dashboard re-fetches without a page reload. The
-    # flush runs BEFORE the broadcast so a client reacting to ingest_done
-    # cannot read a stale entry. Threadsafe: ingest may run in a scheduler
+    # Data changed: mark the response cache stale, then notify connected
+    # SSE clients so the dashboard re-fetches without a page reload.
+    #
+    # This used to clear() the cache outright, which meant every ingest
+    # dropped every user onto the uncached path — 8s+ for the dashboard,
+    # and worse for /api/cache. invalidate() keeps the entries servable
+    # while marking them stale, so the refetch triggered by ingest_done
+    # returns the previous numbers instantly and the fresh ones land via
+    # the background refresh. Threadsafe: ingest may run in a scheduler
     # thread.
     if err is None and (inserted or reparsed or deleted):
-        cache.response_cache.clear()
+        cache.response_cache.invalidate()
         events.broadcast_threadsafe("ingest_done", summary)
     return summary
 

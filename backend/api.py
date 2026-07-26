@@ -16,10 +16,13 @@ tables but returning OLD response shape:
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import re
 import sys
 import tempfile
+import time
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -27,6 +30,67 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query
 from starlette.requests import Request
 from starlette.responses import Response, StreamingResponse
+
+log = logging.getLogger("claudit.api")
+
+# Per-phase wall-clock for the heavy read endpoints, emitted as one log
+# line per request. Gated on CLAUDIT_TIMING so it costs nothing normally,
+# but stays in the tree — reconstructing these queries by hand in psql
+# drifts from what the endpoint actually runs and hides everything that
+# happens outside SQL (row marshalling, response serialisation).
+TIMING_ON = os.environ.get("CLAUDIT_TIMING", "").lower() not in ("", "0", "false", "no")
+
+if TIMING_ON and not log.handlers:
+    # uvicorn configures its own loggers and leaves the root logger at
+    # WARNING, so a bare log.info() here would go nowhere. Attach our own
+    # handler rather than depending on someone else's logging config.
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(logging.Formatter("%(levelname)s:     %(message)s"))
+    log.addHandler(_handler)
+    log.setLevel(logging.INFO)
+    log.propagate = False
+
+
+class Phases:
+    """Collect labelled phase timings and log them as a single line."""
+
+    __slots__ = ("_name", "_marks", "_t0")
+
+    def __init__(self, name: str) -> None:
+        self._name = name
+        self._marks: list[tuple[str, float]] = []
+        self._t0 = time.perf_counter()
+
+    @contextmanager
+    def step(self, label: str):
+        t = time.perf_counter()
+        try:
+            yield
+        finally:
+            self._marks.append((label, time.perf_counter() - t))
+
+    def mark(self, label: str, seconds: float) -> None:
+        self._marks.append((label, seconds))
+
+    def execute(self, label: str, cur, sql: str, args: Any = None):
+        """Time a single ``cursor.execute`` and record it under `label`.
+
+        Returns the cursor, so call sites keep their trailing
+        ``.fetchall()`` / ``.fetchone()`` unchanged.
+        """
+        t = time.perf_counter()
+        try:
+            return cur.execute(sql, args) if args is not None else cur.execute(sql)
+        finally:
+            self._marks.append((label, time.perf_counter() - t))
+
+    def done(self, **extra: Any) -> None:
+        if not TIMING_ON:
+            return
+        total = (time.perf_counter() - self._t0) * 1000
+        parts = " ".join(f"{k}={v * 1000:.0f}ms" for k, v in self._marks)
+        tail = " ".join(f"{k}={v}" for k, v in extra.items())
+        log.info("TIMING %s total=%.0fms %s %s", self._name, total, parts, tail)
 
 # --- dated-rate helpers ---------------------------------------------------
 # cost_total always comes from SUM(cost_usd) — the per-record cost computed
@@ -219,7 +283,7 @@ async def export_png(
 
 
 @router.get("/me")
-async def me(request: Request) -> dict:
+def me(request: Request) -> dict:
     """Identity probe — frontend uses `is_guest` to decide which UI
     affordances to render."""
     return {
@@ -230,7 +294,7 @@ async def me(request: Request) -> dict:
 
 @router.get("/tool-usage")
 @cache_response
-async def tool_usage(
+def tool_usage(
     range: str = Query("30d"),
     project: str | None = Query(None),
     model: str | None = Query(None),
@@ -294,7 +358,7 @@ async def tool_usage(
 
 @router.get("/tool-error-rate")
 @cache_response
-async def tool_error_rate(
+def tool_error_rate(
     range: str = Query("30d"),
     project: str | None = Query(None),
     model: str | None = Query(None),
@@ -359,7 +423,7 @@ async def tool_error_rate(
 
 @router.get("/activity-heatmap")
 @cache_response
-async def activity_heatmap(
+def activity_heatmap(
     range: str = Query("30d"),
     project: str | None = Query(None),
     model: str | None = Query(None),
@@ -433,7 +497,7 @@ async def activity_heatmap(
 
 @router.get("/reply-latency")
 @cache_response
-async def reply_latency(
+def reply_latency(
     range: str = Query("30d"),
     project: str | None = Query(None),
     model: str | None = Query(None),
@@ -609,7 +673,7 @@ async def event_stream(request: Request):
 
 
 @router.get("/models")
-async def list_models() -> dict:
+def list_models() -> dict:
     """All distinct (real, non-synthetic) model strings ever recorded,
     with counts. Frontend canonicalizes via shortModelName for the
     dropdown."""
@@ -627,7 +691,7 @@ async def list_models() -> dict:
 
 
 @router.get("/projects")
-async def list_projects() -> dict:
+def list_projects() -> dict:
     """Per-project rollup: file_count, total_cost, derived from files+records."""
     with db.viz_conn() as c:
         rows = c.execute(
@@ -695,7 +759,7 @@ def _parse_range(s: str) -> timedelta:
 
 @router.get("/cache")
 @cache_response
-async def cache_view(
+def cache_view(
     range: str = Query("30d"),
     project: str | None = Query(None),
     model: str | None = Query(None),
@@ -731,25 +795,38 @@ async def cache_view(
     args = list(leg_args)
     args2 = leg_args + leg_args  # filters applied twice (one per UNION leg)
 
-    base_cte = f"""
-    WITH deduped AS (
+    ph = Phases("cache_view")
+
+    # This dedup used to be a CTE prefixed onto each of the four queries
+    # below, so Postgres re-ran the whole DISTINCT ON — the single most
+    # expensive step — FOUR times per request (measured: 19s at
+    # range=all). Materialise it once, like /api/dashboard does, and let
+    # the four queries read the finished table. The join to `files` only
+    # resolves project_id, so it is omitted when nothing filters on it.
+    dedup_join = "JOIN files f ON f.file_key = r.file_key" if project else ""
+    dedup_body = f"""
       (SELECT DISTINCT ON (r.uuid) r.*
        FROM records r
-       JOIN files f ON f.file_key = r.file_key
+       {dedup_join}
        WHERE r.ts >= %s {proj_filter} {model_filter} AND r.uuid IS NOT NULL
        ORDER BY r.uuid, r.file_key)
       UNION ALL
       (SELECT r.*
        FROM records r
-       JOIN files f ON f.file_key = r.file_key
+       {dedup_join}
        WHERE r.ts >= %s {proj_filter} {model_filter} AND r.uuid IS NULL)
-    )
     """
 
     with db.viz_conn() as c:
+        c.execute("SET LOCAL work_mem = '64MB'")
+        ph.execute(
+            "dedup", c,
+            f"CREATE TEMP TABLE deduped ON COMMIT DROP AS {dedup_body}",
+            args2,
+        )
         epoch_expr, epoch_params = rate_epoch_sql("ts")
-        per_model_rows = c.execute(
-            base_cte + f"""
+        per_model_rows = ph.execute(
+            "per_model", c, f"""
             SELECT model,
                    ({epoch_expr})              AS rate_epoch,
                    COUNT(*)                    AS turns,
@@ -764,11 +841,11 @@ async def cache_view(
             GROUP BY model, rate_epoch
             ORDER BY cost_total DESC
             """,
-            args2 + epoch_params,
+            epoch_params,
         ).fetchall()
 
-        top_output = c.execute(
-            base_cte + """
+        top_output = ph.execute(
+            "top_output", c, """
             SELECT ts, line_num, request_id, model,
                    output_tokens, cache_read_tokens,
                    eph1h_tokens, eph5_tokens, fresh_tokens,
@@ -777,11 +854,10 @@ async def cache_view(
             ORDER BY output_tokens DESC
             LIMIT 10
             """,
-            args2,
         ).fetchall()
 
-        top_create = c.execute(
-            base_cte + """
+        top_create = ph.execute(
+            "top_create", c, """
             SELECT ts, line_num, request_id, model,
                    cache_creation_tokens, eph1h_tokens, eph5_tokens,
                    cache_read_tokens, output_tokens, fresh_tokens,
@@ -791,11 +867,10 @@ async def cache_view(
             ORDER BY cache_creation_tokens DESC
             LIMIT 10
             """,
-            args2,
         ).fetchall()
 
-        top_read = c.execute(
-            base_cte + """
+        top_read = ph.execute(
+            "top_read", c, """
             SELECT ts, line_num, request_id, model,
                    cache_read_tokens, eph1h_tokens, eph5_tokens,
                    output_tokens, fresh_tokens,
@@ -805,7 +880,6 @@ async def cache_view(
             ORDER BY cache_read_tokens DESC
             LIMIT 10
             """,
-            args2,
         ).fetchall()
 
     per_model = fold_per_model(per_model_rows)
@@ -849,6 +923,8 @@ async def cache_view(
             out.append(d)
         return out
 
+    ph.done(models=len(per_model))
+
     return {
         "range": range,
         "project": project,
@@ -874,7 +950,7 @@ async def cache_view(
 
 @router.get("/context-growth/agg")
 @cache_response
-async def context_growth_agg(
+def context_growth_agg(
     range: str = Query("30d"),
     project: str | None = Query(None),
 ) -> dict:
@@ -951,7 +1027,7 @@ async def context_growth_agg(
 
 
 @router.get("/context-growth/session/{session_id}")
-async def context_growth_session(session_id: str) -> dict:
+def context_growth_session(session_id: str) -> dict:
     """Per-turn array for the MAIN file of this session, mirroring
     parse_session.py:compute_context_growth output exactly."""
     with db.viz_conn() as c:
@@ -979,7 +1055,7 @@ async def context_growth_session(session_id: str) -> dict:
 
 
 @router.get("/sessions/{session_id}/transcript")
-async def get_transcript(session_id: str) -> Response:
+def get_transcript(session_id: str) -> Response:
     """Stream raw jsonl from R2 via 20-min idle LRU. The MAIN file of the
     session is what's returned (the agent peers are visible only via the
     Inspector's per-file dropdown, future work)."""
@@ -1004,7 +1080,7 @@ async def get_transcript(session_id: str) -> Response:
 
 
 @router.get("/sessions/{session_id}/sidecar")
-async def get_sidecar(
+def get_sidecar(
     session_id: str,
     path: str = Query(..., min_length=1),
 ) -> Response:
@@ -1060,7 +1136,7 @@ def _iso(v) -> str | None:
 
 @router.get("/dashboard")
 @cache_response
-async def dashboard(
+def dashboard(
     range: str = Query("30d"),
     project: str | None = Query(None),
     model: str | None = Query(None),
@@ -1080,43 +1156,65 @@ async def dashboard(
     bucket_s = _bucket_seconds(delta)
     proj_filter = ""
     model_filter = ""
-    leg_args: list[Any] = [since]
+    # `args` feeds the later per-FILE queries, which filter on
+    # f.r2_last_modified + project only — never on model. Keep it free of
+    # the model argument or every one of them mis-binds its placeholders.
+    args: list[Any] = [since]
     if project:
         proj_filter = "AND f.project_id = %s"
-        leg_args.append(project)
+        args.append(project)
     if model:
         model_filter = "AND r.model LIKE %s"
-        leg_args.append(f"%{model}%")
-    args = list(leg_args)
-    args2 = leg_args + leg_args  # filters applied twice (one per UNION leg)
 
-    dedup_body = f"""
-      (SELECT DISTINCT ON (r.uuid)
-         r.file_key, r.line_num, r.uuid, r.request_id, r.ts, r.model,
+    # The join to `files` exists solely to resolve project_id. Without a
+    # project filter it matches every row and costs a 296k-row hash join
+    # per leg, so only join when the filter actually needs it.
+    dedup_join = "JOIN files f ON f.file_key = r.file_key" if project else ""
+
+    # Only the columns the six consumer queries below actually read.
+    # uuid/line_num/request_id were carried through the sort but never
+    # selected from `deduped`, and the extra width pushed the
+    # DISTINCT ON sort past work_mem into an external merge on disk.
+    dedup_cols = """r.file_key, r.ts, r.model,
          r.fresh_tokens, r.cache_creation_tokens, r.cache_read_tokens,
          r.output_tokens, r.eph5_tokens, r.eph1h_tokens, r.cost_usd,
-         r.text_chars
+         r.text_chars"""
+
+    # Each leg binds its own arguments: leg 1 takes the model filter,
+    # leg 2 (legacy NULL-uuid rows, kept verbatim) does not.
+    leg1_args: list[Any] = [since]
+    if project:
+        leg1_args.append(project)
+    if model:
+        leg1_args.append(f"%{model}%")
+    leg2_args: list[Any] = [since]
+    if project:
+        leg2_args.append(project)
+    args2 = leg1_args + leg2_args
+    ph = Phases("dashboard")
+
+    dedup_body = f"""
+      (SELECT DISTINCT ON (r.uuid) {dedup_cols}
        FROM records r
-       JOIN files f ON f.file_key = r.file_key
+       {dedup_join}
        WHERE r.ts >= %s {proj_filter} {model_filter} AND r.uuid IS NOT NULL
        ORDER BY r.uuid, r.file_key)
       UNION ALL
-      (SELECT r.file_key, r.line_num, r.uuid, r.request_id, r.ts, r.model,
-              r.fresh_tokens, r.cache_creation_tokens, r.cache_read_tokens,
-              r.output_tokens, r.eph5_tokens, r.eph1h_tokens, r.cost_usd,
-              r.text_chars
+      (SELECT {dedup_cols}
        FROM records r
-       JOIN files f ON f.file_key = r.file_key
+       {dedup_join}
        WHERE r.ts >= %s {proj_filter} AND r.uuid IS NULL)
     """
 
+    _t_sql = time.perf_counter()
     with db.viz_conn() as c:
         c.execute("SET LOCAL work_mem = '64MB'")
-        c.execute(
-            f"CREATE TEMP TABLE deduped ON COMMIT DROP AS {dedup_body}",
-            args2,
-        )
-        hourly_rows = c.execute(
+        with ph.step("dedup"):
+            c.execute(
+                f"CREATE TEMP TABLE deduped ON COMMIT DROP AS {dedup_body}",
+                args2,
+            )
+        hourly_rows = ph.execute("hourly", c, 
             f"""
             SELECT to_timestamp(
                      floor(EXTRACT(EPOCH FROM d.ts) / {bucket_s}) * {bucket_s} + {bucket_s} / 2
@@ -1138,7 +1236,7 @@ async def dashboard(
             """
         ).fetchall()
 
-        cost_by_model_rows = c.execute(
+        cost_by_model_rows = ph.execute("cost_by_model", c, 
             """
             SELECT COALESCE(NULLIF(d.model, ''), 'unknown') AS model,
                    SUM(d.cost_usd) AS cost_usd
@@ -1148,7 +1246,7 @@ async def dashboard(
             """
         ).fetchall()
 
-        total_sessions_row = c.execute(
+        total_sessions_row = ph.execute("total_sessions", c, 
             """
             SELECT COUNT(DISTINCT f.session_id) AS n
             FROM deduped d
@@ -1159,7 +1257,7 @@ async def dashboard(
         total_sessions = int(total_sessions_row[0] or 0) if total_sessions_row else 0
 
         file_counts_args = list(args)
-        file_counts_row = c.execute(
+        file_counts_row = ph.execute("file_counts", c, 
             f"""
             SELECT
               COUNT(*) FILTER (WHERE is_main AND EXISTS (
@@ -1197,7 +1295,7 @@ async def dashboard(
         total_prompts          = int(file_counts_row[4] or 0) if file_counts_row else 0
         total_turns            = int(file_counts_row[5] or 0) if file_counts_row else 0
 
-        sessions_rows = c.execute(
+        sessions_rows = ph.execute("sessions", c, 
             """
             SELECT f.session_id,
                    EXTRACT(EPOCH FROM MIN(d.ts))::float AS start_ts,
@@ -1248,7 +1346,7 @@ async def dashboard(
         # responses" with "more thinking". Character count of text
         # content blocks is the clean, model-fair "visible response
         # size" measure.
-        response_sizes_rows = c.execute(
+        response_sizes_rows = ph.execute("response_sizes", c, 
             f"""
             SELECT to_timestamp(
                      floor(EXTRACT(EPOCH FROM d.ts) / {bucket_s}) * {bucket_s} + {bucket_s} / 2
@@ -1268,7 +1366,7 @@ async def dashboard(
         # ctx_turns for the parent-session (main) files only — used to
         # join into per-folder `sessions_out` rows for the burn-rate
         # tooltip's ctx_at_end and the burn dot scaling.
-        ctx_turns_rows = c.execute(
+        ctx_turns_rows = ph.execute("ctx_turns", c, 
             f"""
             SELECT f.session_id, f.ctx_turns
             FROM files f
@@ -1285,9 +1383,18 @@ async def dashboard(
         # invocation surfaces under whatever model it ran on, even if
         # there's no main session file on disk.
         ctx_traces_args = list(args)
-        ctx_traces_rows = c.execute(
+        ctx_traces_rows = ph.execute("ctx_traces", c, 
             f"""
-            WITH file_models AS (
+            WITH scoped_files AS (
+              SELECT f.file_key, f.session_id, f.is_main, f.ctx_turns
+              FROM files f
+              WHERE f.r2_last_modified >= %s {proj_filter}
+                AND jsonb_array_length(f.ctx_turns) > 0
+            ),
+            -- Scoped to the files actually returned. Unrestricted, this
+            -- ran an ordered-set aggregate over every record in the
+            -- table on every request, ignoring both range and project.
+            file_models AS (
               SELECT r.file_key,
                      COALESCE(
                        MODE() WITHIN GROUP (ORDER BY r.model) FILTER (
@@ -1296,21 +1403,20 @@ async def dashboard(
                        MODE() WITHIN GROUP (ORDER BY NULLIF(r.model, ''))
                      ) AS model
               FROM records r
+              WHERE r.file_key IN (SELECT file_key FROM scoped_files)
               GROUP BY r.file_key
             )
-            SELECT f.file_key, f.session_id, f.is_main,
+            SELECT sf.file_key, sf.session_id, sf.is_main,
                    COALESCE(fm.model, '') AS model,
-                   f.ctx_turns
-            FROM files f
-            LEFT JOIN file_models fm ON fm.file_key = f.file_key
-            WHERE f.r2_last_modified >= %s {proj_filter}
-              AND jsonb_array_length(f.ctx_turns) > 0
+                   sf.ctx_turns
+            FROM scoped_files sf
+            LEFT JOIN file_models fm ON fm.file_key = sf.file_key
             """,
             ctx_traces_args,
         ).fetchall()
 
         burn_args = list(args)
-        burn_rows = c.execute(
+        burn_rows = ph.execute("burn", c, 
             f"""
             WITH per_session AS (
               SELECT f.session_id, f.file_key,
@@ -1321,12 +1427,18 @@ async def dashboard(
               WHERE f.is_main AND r.ts >= %s {proj_filter}
               GROUP BY f.session_id, f.file_key
             ),
+            -- Restricted to sessions per_session actually produced; the
+            -- LEFT JOIN discards the rest, so computing a correlated
+            -- per-file MODE for every main file in the table was wasted
+            -- work that ignored both range and project.
             dom_model AS (
               SELECT f.session_id,
                      (SELECT model FROM records r2
                       WHERE r2.file_key = f.file_key AND r2.model <> ''
                       GROUP BY model ORDER BY count(*) DESC LIMIT 1) AS model
-              FROM files f WHERE f.is_main
+              FROM files f
+              WHERE f.is_main
+                AND f.session_id IN (SELECT session_id FROM per_session)
             )
             SELECT ps.session_id,
                    (ps.write_tokens / GREATEST(ps.span_s, 1.0))::float AS tps,
@@ -1340,7 +1452,7 @@ async def dashboard(
         ).fetchall()
 
         ctx_args = list(args)
-        ctx_rows = c.execute(
+        ctx_rows = ph.execute("ctx_lines", c, 
             f"""
             SELECT f.session_id, f.ctx_turns
             FROM files f
@@ -1357,7 +1469,7 @@ async def dashboard(
         ).fetchall()
 
         rl_args = list(args) + [since]
-        rl_rows = c.execute(
+        rl_rows = ph.execute("rate_limit_hits", c, 
             f"""
             SELECT f.session_id, hit
             FROM files f, jsonb_array_elements(f.rate_limit_hits) AS hit
@@ -1370,6 +1482,9 @@ async def dashboard(
             """,
             rl_args,
         ).fetchall()
+
+    ph.mark("sql_total", time.perf_counter() - _t_sql)
+    _t_build = time.perf_counter()
 
     hourly = []
     seen_hours: set[str | None] = set()
@@ -1472,6 +1587,13 @@ async def dashboard(
             "content": (hit or {}).get("content", ""),
         })
 
+    ph.mark("build", time.perf_counter() - _t_build)
+    ph.done(
+        hourly=len(hourly),
+        sessions=len(sessions_out),
+        ctx_traces=len(ctx_traces_rows),
+    )
+
     return {
         "range": range,
         "project": project,
@@ -1549,7 +1671,7 @@ def _aggregate_session_row(row) -> dict:
 
 
 @router.get("/sessions")
-async def list_sessions(
+def list_sessions(
     project: str | None = Query(None),
     limit: int = Query(50, ge=1, le=500),
     cursor: str | None = Query(None),
@@ -1644,7 +1766,7 @@ async def list_sessions(
 
 
 @router.get("/sessions/{session_id}")
-async def session_detail(session_id: str) -> dict:
+def session_detail(session_id: str) -> dict:
     """Single-session aggregation including ctx_trace and burn rate.
 
     `ctx_trace` is the canonical files.ctx_turns array reshaped to

@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.responses import ORJSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.requests import Request
 from starlette.responses import FileResponse, HTMLResponse, Response
@@ -58,6 +59,11 @@ app = FastAPI(
     docs_url=None,
     redoc_url=None,
     lifespan=lifespan,
+    # /api/dashboard at range=all returns ~4.5 MB (8.8k ctx_traces spanning
+    # 54k turns). Starlette's JSONResponse runs jsonable_encoder over that
+    # whole structure and then stdlib json.dumps — measured at 475ms + 257ms.
+    # orjson serialises the same payload in 11ms.
+    default_response_class=ORJSONResponse,
 )
 app.middleware("http")(session.auth_middleware)
 app.include_router(login.router)

@@ -132,7 +132,16 @@ function App() {
 
   const backendOn = !!(window.BACKEND_URL && window.BACKEND_URL.length > 0);
 
-  useEffect(() => { setSynth(window.generateSyntheticData()); }, []);
+  // Synthetic data is the no-backend demo dataset. When a backend is
+  // configured its numbers are thrown away the moment /api/dashboard
+  // lands — but not before the whole panel set has rendered once from
+  // them, so the first paint was a full throwaway chart pass showing
+  // fabricated figures. Only generate it when it is actually the
+  // data source.
+  useEffect(() => {
+    if (backendOn) return;
+    setSynth(window.generateSyntheticData());
+  }, [backendOn]);
 
   // Identity probe — drives guest-mode UI gating.
   useEffect(() => {
@@ -189,9 +198,18 @@ function App() {
   }, [backendOn]);
 
   const liveData = useMemo(() => tx ? txToDashData(tx) : null, [tx]);
-  const dashData = backendDash
-    ? backendDashToShape(backendDash)
-    : ((!useSynth && liveData) ? liveData : synth);
+  // Memoised: this re-maps every hourly bucket, session and ctx trace in
+  // the payload (~8.9k traces at range=all) into fresh objects. Called
+  // inline in render it re-ran on EVERY state change — /api/me,
+  // /api/projects, /api/models and each SSE tick — and the new object
+  // identities invalidated every useMemo inside Dashboard, re-rendering
+  // all panels each time.
+  const dashData = useMemo(
+    () => (backendDash
+      ? backendDashToShape(backendDash)
+      : ((!useSynth && liveData) ? liveData : synth)),
+    [backendDash, useSynth, liveData, synth],
+  );
 
   async function loadFromBackend(sessionId) {
     try {
@@ -222,6 +240,7 @@ function App() {
         <RangePicker active={activeRange} onChange={setActiveRange} />
       )}
       {route === 'dashboard' && dashData && <Dashboard synth={dashData} models={models} backendOn={backendOn} activeProject={activeProject} activeRange={activeRange} dashNonce={dashNonce} />}
+      {route === 'dashboard' && !dashData && backendOn && <DashboardLoading range={activeRange} />}
       {route === 'sessions' && dashData && (
         <SessionsList
           synth={dashData}
@@ -235,6 +254,25 @@ function App() {
         </div>
       )}
       {route === 'session' && <SessionView tx={tx} />}
+    </div>
+  );
+}
+
+// Shown while the first /api/dashboard response is in flight. Replaces
+// the old behaviour of rendering the full panel set from synthetic data,
+// which put fabricated numbers on screen and paid for a complete chart
+// render that was discarded as soon as the real payload arrived.
+function DashboardLoading({ range }) {
+  return (
+    <div className="dashboard">
+      <div className="dash-summary">
+        <Stat label="status" value="loading…" />
+        <Stat label="range" value={range} />
+      </div>
+      <div className="page-foot muted" style={{ padding: '24px 14px' }}>
+        Querying usage records for <code>{range}</code>. Wider ranges take
+        longer on a cold cache.
+      </div>
     </div>
   );
 }

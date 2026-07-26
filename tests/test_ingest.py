@@ -212,15 +212,27 @@ def test_xz_compressed_jsonl_ingests_transparently(fresh_db, mini_r2_env):
         assert n_rec > 0, "records populate from decompressed bytes"
 
 
-def test_ingest_flushes_response_cache(fresh_db, mini_r2_env):
+def test_ingest_marks_response_cache_stale(fresh_db, mini_r2_env):
+    """Ingest marks cached responses stale but leaves them SERVABLE.
+
+    It used to clear() the cache, which dropped every reader onto the
+    uncached path once an hour — 8s+ for /api/dashboard at range=all.
+    Stale-while-revalidate keeps the previous numbers available while the
+    refresh runs off the request path.
+    """
     from backend import cache
 
     cache.response_cache.put("stale-key", {"v": "old"})
-    assert cache.response_cache.get("stale-key") == {"v": "old"}
+    entry = cache.response_cache.get_entry("stale-key")
+    assert entry == ({"v": "old"}, False), "fresh before ingest"
 
     ingest.run_ingest(trigger="manual")
 
-    assert cache.response_cache.get("stale-key") is None
+    entry = cache.response_cache.get_entry("stale-key")
+    assert entry is not None, "ingest must NOT drop the entry"
+    value, is_stale = entry
+    assert value == {"v": "old"}, "previous response still servable"
+    assert is_stale is True, "and flagged for background refresh"
 
 
 def _snapshot():

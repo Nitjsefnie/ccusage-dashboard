@@ -1,12 +1,18 @@
 """In-process caches:
   - transcript LRU keyed by r2_etag, 256 MB, 20-min idle eviction
+  - response cache with stale-while-revalidate for the heavy read endpoints
 """
 from __future__ import annotations
 
 import functools
+import logging
+import threading
 import time
 from collections import OrderedDict
-from typing import Any, Awaitable, Callable
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Callable
+
+log = logging.getLogger("claudit.cache")
 
 
 class _IdleLRU:
@@ -56,56 +62,136 @@ transcript_cache = _IdleLRU(max_bytes=256 * 1024 * 1024, idle_seconds=1200)
 
 
 class _TTLCache:
-    """Process-local cache with a flat TTL. Values are whatever the
-    decorated endpoint returns (dicts). Not size-bounded — the keyspace
-    is (endpoint × range × project × model), which is small, and the
-    cache is fully flushed on every ingest."""
+    """Process-local cache with a flat TTL and generation-based staleness.
+
+    Values are whatever the decorated endpoint returns (dicts). Not
+    size-bounded — the keyspace is (endpoint × range × project × model),
+    which is small.
+
+    Ingest used to ``clear()`` this, which dropped every user onto the
+    cold path once an hour — and cold means 8s+ for the dashboard. It now
+    calls ``invalidate()``, which bumps a generation counter so existing
+    entries read as STALE but stay servable. A stale hit is returned
+    immediately and refreshed in the background; the TTL remains the hard
+    limit past which an entry is dropped and must be recomputed inline.
+    """
 
     def __init__(self, ttl_seconds: int):
         self.ttl_seconds = ttl_seconds
-        self._items: dict[str, tuple[Any, float]] = {}
+        self._items: dict[str, tuple[Any, float, int]] = {}
+        self._generation = 0
+        self._guard = threading.Lock()
+
+    def get_entry(self, key: str) -> tuple[Any, bool] | None:
+        """Return ``(value, is_stale)``, or None on miss/expiry."""
+        with self._guard:
+            item = self._items.get(key)
+            if item is None:
+                return None
+            value, ts, generation = item
+            if time.time() - ts > self.ttl_seconds:
+                self._items.pop(key, None)
+                return None
+            return value, generation != self._generation
 
     def get(self, key: str) -> Any | None:
-        item = self._items.get(key)
-        if item is None:
-            return None
-        value, ts = item
-        if time.time() - ts > self.ttl_seconds:
-            self._items.pop(key, None)
-            return None
-        return value
+        entry = self.get_entry(key)
+        return None if entry is None else entry[0]
 
     def put(self, key: str, value: Any) -> None:
-        self._items[key] = (value, time.time())
+        with self._guard:
+            self._items[key] = (value, time.time(), self._generation)
+
+    def invalidate(self) -> None:
+        """Mark every entry stale WITHOUT dropping it."""
+        with self._guard:
+            self._generation += 1
 
     def clear(self) -> None:
-        self._items.clear()
+        with self._guard:
+            self._items.clear()
+            self._generation += 1
 
 
 response_cache = _TTLCache(ttl_seconds=3600)
 
 
-def cache_response(fn: Callable[..., Awaitable[dict]]) -> Callable[..., Awaitable[dict]]:
-    """Cache an async endpoint's dict result keyed by its keyword args.
+# Background refreshes for stale entries. Small pool on purpose: a refresh
+# is a full uncached query, and running many at once would starve the
+# connection pool that live requests need.
+_refresh_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="cache-refresh")
+_refreshing: set[str] = set()
+_key_locks: dict[str, threading.Lock] = {}
+_registry_guard = threading.Lock()
+
+
+def _lock_for(key: str) -> threading.Lock:
+    with _registry_guard:
+        return _key_locks.setdefault(key, threading.Lock())
+
+
+def _schedule_refresh(key: str, fn: Callable[..., dict], kwargs: dict[str, Any]) -> None:
+    """Recompute `key` off the request path, at most once concurrently."""
+    with _registry_guard:
+        if key in _refreshing:
+            return
+        _refreshing.add(key)
+
+    def _run() -> None:
+        try:
+            response_cache.put(key, fn(**kwargs))
+        except Exception:
+            # A failed refresh leaves the stale entry in place, which is
+            # the whole point — better stale than a 500 or an 8s wait.
+            log.exception("background refresh failed for %s", key)
+        finally:
+            with _registry_guard:
+                _refreshing.discard(key)
+
+    _refresh_pool.submit(_run)
+
+
+def cache_response(fn: Callable[..., dict]) -> Callable[..., dict]:
+    """Cache an endpoint's dict result keyed by its keyword args.
 
     FastAPI calls endpoints with all params as keywords and resolves the
     signature through ``functools.wraps``' ``__wrapped__`` link, so the
     wrapper can keep a ``**kwargs`` signature while FastAPI still parses
     the original query params. A truthy ``fresh`` kwarg bypasses the
-    cache (read+write) — only ``/api/dashboard`` declares ``fresh``;
-    on the other decorated endpoints the bypass never triggers and
-    invalidation comes solely from the ingest-driven ``clear()``."""
+    cache (read+write) — only ``/api/dashboard`` declares ``fresh``.
+
+    The decorated endpoints are SYNC (blocking psycopg), so this wrapper
+    is sync too and FastAPI runs it in its threadpool. Three behaviours
+    matter here:
+
+    - fresh hit  → return it.
+    - stale hit  → return it IMMEDIATELY and refresh in the background.
+      Serving slightly-old numbers beats blocking a page load for 8s+.
+    - miss       → compute inline, single-flighted per key so a burst of
+      concurrent cold requests (a dashboard fires ~7 at once) runs the
+      query once instead of N times.
+    """
 
     @functools.wraps(fn)
-    async def wrapper(**kwargs: Any) -> dict:
+    def wrapper(**kwargs: Any) -> dict:
         if kwargs.get("fresh"):
-            return await fn(**kwargs)
+            return fn(**kwargs)
         key = fn.__qualname__ + ":" + repr(sorted(kwargs.items()))
-        hit = response_cache.get(key)
-        if hit is not None:
-            return hit
-        result = await fn(**kwargs)
-        response_cache.put(key, result)
-        return result
+
+        entry = response_cache.get_entry(key)
+        if entry is not None:
+            value, is_stale = entry
+            if is_stale:
+                _schedule_refresh(key, fn, kwargs)
+            return value
+
+        with _lock_for(key):
+            # Another thread may have populated it while we queued.
+            entry = response_cache.get_entry(key)
+            if entry is not None:
+                return entry[0]
+            result = fn(**kwargs)
+            response_cache.put(key, result)
+            return result
 
     return wrapper
