@@ -263,6 +263,63 @@ def test_recompute_canonical_is_idempotent(fresh_db, mini_r2_env):
     assert ingest.recompute_canonical() == 0
 
 
+def test_warm_common_covers_every_warmed_range(fresh_db, mini_r2_env, monkeypatch):
+    """Every endpoint warm_common touches must be warmed for EVERY range
+    it claims to cover — a warm keyed on something the UI never requests
+    is dead work and leaves the real key cold.
+
+    Regression: /api/projects gained a `range` parameter, but warm_common
+    still called cache.warm(api.list_projects) bare. cache.warm falls back
+    to the endpoint's signature default ("30d") while the UI opens on
+    "all", so the one request every page load makes was never warmed.
+    """
+    import time as _time
+    from backend import api, cache
+
+    monkeypatch.setenv("CLAUDIT_WARM_CACHE", "1")
+    ingest.run_ingest(trigger="manual")
+
+    warmed = (
+        api.dashboard, api.activity_heatmap, api.tool_usage,
+        api.tool_error_rate, api.reply_latency, api.list_projects,
+    )
+    # The warms run on a background pool; give them a bounded moment.
+    deadline = _time.time() + 60
+    missing = None
+    while _time.time() < deadline:
+        missing = [
+            f"{fn.__qualname__}(range={rng})"
+            for rng in ingest.WARM_RANGES
+            for fn in warmed
+            if cache.response_cache.get(_warm_key(fn, rng)) is None
+        ]
+        if not missing:
+            break
+        _time.sleep(0.25)
+
+    assert not missing, "warm_common left these uncached: " + ", ".join(missing)
+
+
+def _warm_key(fn, rng: str) -> str:
+    """Reproduce cache_response's key for a request at `rng`.
+
+    Built from the endpoint's own signature so it stays correct as params
+    are added — which is exactly what broke /api/projects.
+    """
+    import inspect
+    from fastapi import Query  # noqa: F401  (Query defaults unwrap below)
+
+    target = getattr(fn, "__wrapped__", fn)
+    kwargs = {}
+    for name, param in inspect.signature(target).parameters.items():
+        default = param.default
+        kwargs[name] = getattr(default, "default", default)
+    kwargs["range"] = rng
+    if "fresh" in kwargs:
+        kwargs["fresh"] = 0
+    return target.__qualname__ + ":" + repr(sorted(kwargs.items()))
+
+
 def test_ingest_marks_response_cache_stale(fresh_db, mini_r2_env):
     """Ingest marks cached responses stale but leaves them SERVABLE.
 

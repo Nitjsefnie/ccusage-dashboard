@@ -407,6 +407,10 @@ def rebuild_tool_rollup() -> int:
 # range stays on the live path.
 LATENCY_BUCKETS = (3600, 21600, 43200, 86400)
 
+# Ranges warm_common pre-populates. Mirrors RangePicker's presets in
+# src/app.jsx; anything the UI can request but this omits stays cold.
+WARM_RANGES = ("all", "365d", "90d", "30d", "7d", "1d")
+
 
 def rebuild_latency_rollup() -> int:
     """Rebuild `latency_rollup` for each display bucket width.
@@ -508,15 +512,26 @@ def warm_common() -> None:
 
     from backend import api
 
-    ranges = ("all", "30d", "7d")
-    for rng in ranges:
+    # Every range the picker offers, so no button lands on a cold query.
+    # Must mirror RangePicker's preset values in src/app.jsx — a range the
+    # UI can request but this does not list is a permanently cold key.
+    # (This was ("all","30d","7d") back when these queries cost seconds
+    # each; with the rollups they are ~0.1-1s, so covering all six is
+    # cheap. "1d" is arguably the most valuable: its 5-minute buckets are
+    # below the rollups' 1h gate, so it is the one range still served by
+    # live queries.)
+    for rng in WARM_RANGES:
         cache.warm(api.dashboard, range=rng)
         cache.warm(api.activity_heatmap, range=rng)
         cache.warm(api.tool_usage, range=rng)
         cache.warm(api.tool_error_rate, range=rng)
         cache.warm(api.reply_latency, range=rng)
-    cache.warm(api.list_projects)
-    log.info("warm_common: queued %d range(s)", len(ranges))
+        # /api/projects became range-scoped, so it needs warming per range
+        # like everything else. Warming it bare took the endpoint's own
+        # signature default ("30d") while the UI opens on "all", leaving
+        # the one request every page load makes permanently uncached.
+        cache.warm(api.list_projects, range=rng)
+    log.info("warm_common: queued %d range(s)", len(WARM_RANGES))
 
 
 def rebuild_rollup() -> int:
