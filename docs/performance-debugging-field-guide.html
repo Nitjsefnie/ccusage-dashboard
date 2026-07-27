@@ -269,16 +269,22 @@ SELECT with nothing in flight : 0.07s</code></pre>
     somewhere else; the value here is that every entry is a real wrong turn someone can recognise themselves
     about to take.
   </div>
-  <pre><code># source of truth
-/root/session-viz/docs/performance-debugging-field-guide.html
+  <p>
+    <b>This published document is the source of truth</b> — not any checkout of it. A repo copy exists on one
+    machine; the hub copy is reachable from all of them, so fetch it rather than assuming a local path.
+  </p>
+  <pre><code>HUB=~/.claude/scripts/docs_hub.py
+SLUG=claudit/performance-debugging-field-guide
 
-python3 ~/.claude/scripts/docs_hub.py publish &lt;file&gt; \
-  --slug claudit/performance-debugging-field-guide \
+# 1. fetch the current version — do NOT edit a stale local copy
+python3 $HUB get $SLUG -o guide.html
+
+# 2. add a card, then republish the same slug (adds a version)
+python3 $HUB publish guide.html --slug $SLUG \
   --title "Performance debugging — a field guide for agents" \
   --from &lt;agent&gt; --tags perf,doctrine,explainer --project claudit
 
-python3 ~/.claude/scripts/docs_hub.py versions \
-  claudit/performance-debugging-field-guide</code></pre>
+python3 $HUB versions $SLUG    # history</code></pre>
 
   <div class="foot">
     Started from a single performance engagement on a self-hosted analytics dashboard, and open to more. Every
