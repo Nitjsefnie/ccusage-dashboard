@@ -60,6 +60,19 @@ window.CacheView = function CacheView({ project, range }) {
   );
 };
 
+// Shown next to a cost the backend priced with an inferred rate
+// (`estimated_rate`). A model that matched the rate table exactly gets
+// nothing at all — the quiet default is what makes the marked row stand out.
+const ESTIMATED_RATE_HINT =
+  'Estimated rate — this model is not in the rate table, so its price was ' +
+  'inferred from the closest known model. The cost shown is an estimate, ' +
+  'not a billed figure.';
+
+function EstimatedRateMark({ estimated }) {
+  if (!estimated) return null;
+  return <span className="muted" title={ESTIMATED_RATE_HINT}>~</span>;
+}
+
 function PerModelTable({ rows, sessionTotal }) {
   const fmt = window.humanFmt;
   const allRows = [
@@ -94,7 +107,7 @@ function PerModelTable({ rows, sessionTotal }) {
             <td>{fmt(r.eph5)}</td>
             <td>{fmt(r.eph1h)}</td>
             <td>{r.hit_rate_pct.toFixed(1)}%</td>
-            <td>${r.cost_total.toFixed(2)}</td>
+            <td><EstimatedRateMark estimated={r.estimated_rate} />${r.cost_total.toFixed(2)}</td>
           </tr>
         ))}
       </tbody>

@@ -42,11 +42,6 @@ ALLOWED_UNUSED: dict[str, str] = {
     "range": "echo of the request parameter",
     "project": "echo of the request parameter",
     "tz": "echo of the server-side timezone used for bucketing",
-    # SV-RATE-ESTIMATES requires non-exact model-rate resolutions to
-    # surface in the API so a guessed figure is never presented as fact.
-    # The API side of that is mandatory; that no component renders it yet
-    # is a UI gap, not a reason to stop sending it.
-    "estimated_rate": "required by SV-RATE-ESTIMATES; UI does not surface it yet",
 }
 
 # Generic names that appear all over the frontend for unrelated reasons,
