@@ -152,16 +152,18 @@ function App() {
       .catch(() => {});
   }, [backendOn]);
 
-  // Fetch project list once at boot if backend mode is on.
+  // Fetch project list whenever backend mode / guest status / the active
+  // range change — the picker's ordering (and which projects even show up)
+  // is range-scoped server-side, so a range change must refetch it.
   // Skipped for guests — the endpoint is server-side blocked anyway,
   // and the picker isn't rendered in guest mode.
   useEffect(() => {
     if (!backendOn || isGuest) return;
-    fetch('/api/projects', { credentials: 'same-origin' })
+    fetch(`/api/projects?range=${encodeURIComponent(activeRange)}`, { credentials: 'same-origin' })
       .then(r => r.json())
       .then(b => setProjects(b.projects || []))
       .catch(err => console.error('projects fetch failed', err));
-  }, [backendOn, isGuest]);
+  }, [backendOn, isGuest, activeRange]);
 
   // Model list — distinct raw model strings + counts. Frontend dedups
   // by short name (e.g. claude-opus-4-7-* → opus-4-7).

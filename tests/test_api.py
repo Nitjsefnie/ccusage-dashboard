@@ -193,6 +193,68 @@ def test_projects(app_with_data):
         assert "file_count" not in p
 
 
+def test_projects_range_scoped_ordering_and_zero_cost_exclusion(app_with_fresh_data):
+    """SV-ISSUE-6: /api/projects orders by RANGE-scoped cost and drops any
+    project whose ALL-TIME cost is 0 — two different aggregates that must
+    not be conflated. A project with real all-time cost but nothing in the
+    selected range stays listed, sorted last, with its reported (range)
+    cost at 0."""
+    import psycopg
+    with psycopg.connect(os.environ["DATABASE_URL_VIZ"]) as conn, conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO projects (project_id, display_name, first_seen_at, last_seen_at) VALUES "
+            "('projNeverCost', 'projNeverCost', now(), now()), "
+            "('projOldCost', 'projOldCost', now(), now()), "
+            "('projRecentCost', 'projRecentCost', now(), now())"
+        )
+        cur.execute(
+            "INSERT INTO usage_rollup (session_id, project_id, hour, model, is_main, "
+            "first_ts, last_ts, requests, cost_usd) VALUES "
+            # Never cost anything, ever — must be excluded outright, even
+            # though it has a usage_rollup row (a row with cost 0 is not
+            # the same as "no usage").
+            "('sess-zero', 'projNeverCost', now() - interval '1 day', 'm', TRUE, now(), now(), 1, 0), "
+            # Real historical cost (bigger than projRecentCost's), but 60
+            # days old — outside a 7d range. Must still be LISTED (all-time
+            # cost is nonzero) but sorted to the bottom with 0 range cost.
+            "('sess-old', 'projOldCost', now() - interval '60 days', 'm', TRUE, now(), now(), 1, 5.00), "
+            # Smaller all-time cost, but entirely inside the 7d range —
+            # must outrank projOldCost despite the smaller all-time total,
+            # proving the ordering is RANGE-scoped, not all-time.
+            "('sess-recent', 'projRecentCost', now() - interval '1 hour', 'm', TRUE, now(), now(), 1, 1.00)"
+        )
+        conn.commit()
+
+    r = app_with_fresh_data.get("/api/projects?range=7d")
+    assert r.status_code == 200
+    body = r.json()
+    by_id = {p["project_id"]: p for p in body["projects"]}
+
+    assert "projNeverCost" not in by_id, \
+        "all-time-zero-cost project must be excluded, not just range-filtered"
+    assert "projOldCost" in by_id, \
+        "a historically-costly project must stay listed even at 0 range cost"
+    assert by_id["projOldCost"]["total_cost"] == 0.0
+    assert by_id["projRecentCost"]["total_cost"] == 1.0
+
+    pids_in_order = [p["project_id"] for p in body["projects"]]
+    assert pids_in_order.index("projRecentCost") < pids_in_order.index("projOldCost"), (
+        "ordering must follow range-scoped cost, not all-time cost — "
+        "projOldCost's larger all-time total must NOT outrank projRecentCost"
+    )
+
+    # Widening the range to include projOldCost's usage re-sorts it above
+    # projRecentCost — proving the list is genuinely range-scoped, not a
+    # fixed order computed once.
+    r_wide = app_with_fresh_data.get("/api/projects?range=90d")
+    assert r_wide.status_code == 200
+    body_wide = r_wide.json()
+    by_id_wide = {p["project_id"]: p for p in body_wide["projects"]}
+    assert by_id_wide["projOldCost"]["total_cost"] == 5.0
+    pids_wide = [p["project_id"] for p in body_wide["projects"]]
+    assert pids_wide.index("projOldCost") < pids_wide.index("projRecentCost")
+
+
 def test_cache_per_model_shape(app_with_data):
     r = app_with_data.get("/api/cache?range=3650d")
     assert r.status_code == 200

@@ -776,8 +776,19 @@ def list_models() -> dict:
 
 @router.get("/projects")
 @cache_response
-def list_projects() -> dict:
-    """Per-project rollup: file_count, total_cost, derived from files+records.
+def list_projects(range: str = Query("30d")) -> dict:
+    """Per-project rollup: session_count, range-scoped cost, derived from
+    files+usage_rollup. Ordered by the RANGE-scoped cost, descending, so
+    the picker re-sorts as the dashboard's time range changes — the same
+    `range` convention /api/dashboard takes (`_parse_range`, default
+    "30d").
+
+    Projects whose ALL-TIME cost is 0 are dropped entirely (never-cost
+    projects are noise). A project with all-time cost but nothing in the
+    selected range is still returned — sorted to the bottom with a cost
+    of 0 — since this is a re-sort of the existing list, not a range
+    filter; the ALL-TIME-zero exclusion and the RANGE-scoped ordering are
+    two different aggregates and must not be conflated.
 
     Cost comes from usage_rollup instead of joining every record: this
     used to fan `projects x files x records` out to ~296k rows and was
@@ -788,25 +799,35 @@ def list_projects() -> dict:
     the file rows by their record count, so COUNT(f.file_key) reported
     67,969 files for a project that has 2,173.
     """
+    delta = _parse_range(range)
+    since = datetime.now(timezone.utc) - delta
     with db.viz_conn() as c:
         rows = c.execute(
             """
             SELECT p.project_id,
                    p.display_name,
                    COALESCE(fc.session_count, 0) AS session_count,
-                   COALESCE(uc.total_cost, 0)    AS total_cost
+                   COALESCE(rc.range_cost, 0)    AS range_cost
             FROM projects p
             LEFT JOIN (
               SELECT project_id,
                      COUNT(DISTINCT session_id) AS session_count
               FROM files GROUP BY project_id
             ) fc ON fc.project_id = p.project_id
-            LEFT JOIN (
+            JOIN (
               SELECT project_id, SUM(cost_usd) AS total_cost
               FROM usage_rollup GROUP BY project_id
+              HAVING SUM(cost_usd) <> 0
             ) uc ON uc.project_id = p.project_id
-            ORDER BY total_cost DESC
-            """
+            LEFT JOIN (
+              SELECT project_id, SUM(cost_usd) AS range_cost
+              FROM usage_rollup
+              WHERE hour >= date_trunc('hour', %s::timestamptz)
+              GROUP BY project_id
+            ) rc ON rc.project_id = p.project_id
+            ORDER BY range_cost DESC
+            """,
+            (since,),
         ).fetchall()
     return {
         "projects": [
