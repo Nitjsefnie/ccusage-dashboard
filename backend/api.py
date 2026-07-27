@@ -40,15 +40,22 @@ log = logging.getLogger("claudit.api")
 # happens outside SQL (row marshalling, response serialisation).
 TIMING_ON = os.environ.get("CLAUDIT_TIMING", "").lower() not in ("", "0", "false", "no")
 
-if TIMING_ON and not log.handlers:
+_CLAUDIT_LOGGER = logging.getLogger("claudit")
+
+if TIMING_ON and not _CLAUDIT_LOGGER.handlers:
     # uvicorn configures its own loggers and leaves the root logger at
     # WARNING, so a bare log.info() here would go nowhere. Attach our own
     # handler rather than depending on someone else's logging config.
+    #
+    # Attached to the "claudit" PARENT, not "claudit.api": ingest logs
+    # under "claudit.ingest" and was silently discarded, so
+    # recompute_canonical / rebuild_* / warm_common reported nothing and
+    # the one place that says what the warmer is doing was invisible.
     _handler = logging.StreamHandler()
     _handler.setFormatter(logging.Formatter("%(levelname)s:     %(message)s"))
-    log.addHandler(_handler)
-    log.setLevel(logging.INFO)
-    log.propagate = False
+    _CLAUDIT_LOGGER.addHandler(_handler)
+    _CLAUDIT_LOGGER.setLevel(logging.INFO)
+    _CLAUDIT_LOGGER.propagate = False
 
 
 class Phases:
