@@ -256,9 +256,33 @@ SELECT with nothing in flight : 0.07s</code></pre>
     <li>Have I re-measured end to end, including the regression I may have just introduced?</li>
   </ul>
 
+  <h2 id="contributing">Adding to this guide</h2>
+  <p>
+    This is a living document, not a finished artefact. If you hit a performance pitfall worth recording, add a
+    card here and republish the same slug — docs-hub versions it rather than replacing it, so the history stays
+    readable.
+  </p>
+  <div class="callout rule">
+    <span class="k">Bar for a new entry</span>
+    A mistake <em>actually made</em>, with the measurement that exposed it and what it cost. Three fields:
+    what was true, how it was found, what it cost. General advice — "profile first", "avoid N+1" — belongs
+    somewhere else; the value here is that every entry is a real wrong turn someone can recognise themselves
+    about to take.
+  </div>
+  <pre><code># source of truth
+/root/session-viz/docs/performance-debugging-field-guide.html
+
+python3 ~/.claude/scripts/docs_hub.py publish &lt;file&gt; \
+  --slug claudit/performance-debugging-field-guide \
+  --title "Performance debugging — a field guide for agents" \
+  --from &lt;agent&gt; --tags perf,doctrine,explainer --project claudit
+
+python3 ~/.claude/scripts/docs_hub.py versions \
+  claudit/performance-debugging-field-guide</code></pre>
+
   <div class="foot">
-    Compiled from a single performance engagement on a self-hosted analytics dashboard. Every figure was measured
-    on the running system; every pitfall was made, not imagined.
+    Started from a single performance engagement on a self-hosted analytics dashboard, and open to more. Every
+    figure was measured on the running system; every pitfall was made, not imagined.
   </div>
 </main>
 
@@ -280,6 +304,7 @@ SELECT with nothing in flight : 0.07s</code></pre>
     <li><a href="#worked">Techniques that paid</a></li>
     <li><a href="#numbers">What it added up to</a></li>
     <li><a href="#checklist">Checklist</a></li>
+    <li><a href="#contributing">Adding to this guide</a></li>
   </ol>
   <button id="copyChecklist">copy checklist</button>
   <button id="copyRules">copy rules as prompt</button>
