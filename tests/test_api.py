@@ -622,6 +622,59 @@ def test_dashboard_response_is_cached_and_fresh_bypasses(app_with_fresh_data):
     assert fresh["cost_by_model"] == []          # fresh=1 sees the empty DB
 
 
+def test_dashboard_cost_by_project_shape(app_with_data):
+    """cost_by_project mirrors cost_by_model: range-filtered, sorted by
+    cost desc, zero-cost rows excluded, at most 10 project rows plus a
+    single "Other (N projects)" fold."""
+    body = app_with_data.get("/api/dashboard?range=3650d").json()
+    cbp = body["cost_by_project"]
+    assert {"projA", "projB"} <= {r["project"] for r in cbp}
+    costs = [r["cost_usd"] for r in cbp]
+    assert all(c > 0 for c in costs)
+    assert costs == sorted(costs, reverse=True)
+    named = [r for r in cbp if not r["project"].startswith("Other (")]
+    assert len(named) <= 10
+    others = [r for r in cbp if r["project"].startswith("Other (")]
+    assert len(others) <= 1
+
+    # A project filter scopes the breakdown to that one project.
+    body_b = app_with_data.get("/api/dashboard?range=3650d&project=projB").json()
+    assert {r["project"] for r in body_b["cost_by_project"]} == {"projB"}
+
+
+def test_dashboard_cost_by_project_omitted_for_guest(app_with_data):
+    """The guest gate is SERVER-side. /api/dashboard is guest-accessible,
+    so per-project names/costs — the very data the 403s on /api/projects
+    and on project= exist to withhold (session.auth_middleware) — must be
+    missing from the response body itself, not merely unrendered by the
+    frontend.
+
+    This suite mounts only api.router (auth bypassed), so a guest is
+    simulated by a middleware setting the SAME request.state.is_guest
+    flag the real middleware sets. The guest call reuses the non-guest
+    call's query params, so it is served from the SHARED response cache —
+    proving the strip happens per-request, outside the cached payload."""
+    from fastapi import FastAPI, Request
+    from backend import api as api_mod
+
+    body = app_with_data.get("/api/dashboard?range=3650d").json()
+    assert "cost_by_project" in body
+
+    a = FastAPI()
+
+    @a.middleware("http")
+    async def set_guest_flag(request: Request, call_next):
+        request.state.is_guest = True
+        return await call_next(request)
+
+    a.include_router(api_mod.router)
+    guest = TestClient(a).get("/api/dashboard?range=3650d")
+    assert guest.status_code == 200
+    assert "cost_by_project" not in guest.json()
+    # The rest of the payload is untouched.
+    assert "cost_by_model" in guest.json()
+
+
 # ---------------------------------------------------------------- heatmap
 
 def _insert_tz_probe_rows():

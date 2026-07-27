@@ -1253,6 +1253,29 @@ def _iso(v) -> str | None:
 
 
 @router.get("/dashboard")
+def dashboard_route(
+    request: Request,
+    range: str = Query("30d"),
+    project: str | None = Query(None),
+    model: str | None = Query(None),
+    fresh: int = Query(0),
+) -> dict:
+    """Route wrapper around the cached dashboard payload.
+
+    The cached body always carries cost_by_project (one cache entry shared
+    by every caller, so `cache.warm(api.dashboard)` keeps working and a
+    guest never triggers a second compute). Guests get the same payload
+    MINUS that key: per-project names/costs are exactly what the guest
+    gates on /api/projects and on project= exist to withhold (see
+    session.auth_middleware), and /api/dashboard is guest-accessible. The
+    dict comprehension copies rather than mutating so the cached object
+    stays intact for later non-guest hits."""
+    payload = dashboard(range=range, project=project, model=model, fresh=fresh)
+    if bool(getattr(request.state, "is_guest", False)):
+        payload = {k: v for k, v in payload.items() if k != "cost_by_project"}
+    return payload
+
+
 @cache_response
 def dashboard(
     range: str = Query("30d"),
@@ -1268,7 +1291,8 @@ def dashboard(
     panel queries. `model=opus-4-7` filters the deduped body so every
     panel derived from it (hourly, cost_by_model, response_sizes,
     sessions, ctx_traces) is constrained to records matching the model
-    substring."""
+    substring. cost_by_project is folded from the same rollup source as
+    cost_by_model; the route wrapper strips it for guests."""
     delta = _parse_range(range)
     since = datetime.now(timezone.utc) - delta
     bucket_s = _bucket_seconds(delta)
@@ -1398,6 +1422,21 @@ def dashboard(
             roll_args,
         ).fetchone()
         total_sessions = int(total_sessions_row[0] or 0) if total_sessions_row else 0
+
+        # Per-project range cost for the "Cost by Project" panel, folded
+        # out of the same rollup source as cost_by_model (range-, project-
+        # and model-filtered alike). Sorted DESC here so the top-10/Other
+        # fold below is a plain slice.
+        cost_by_project_rows = ph.execute("cost_by_project", c,
+            f"""
+            SELECT u.project_id, SUM(u.cost_usd) AS cost_usd
+            {roll_src}
+            GROUP BY 1
+            ORDER BY 2 DESC
+            """
+        ,
+            roll_args,
+        ).fetchall()
 
         file_counts_args = list(args)
         file_counts_row = ph.execute("file_counts", c, 
@@ -1612,6 +1651,23 @@ def dashboard(
         reverse=True,
     )
 
+    # Zero-cost rows are noise (the project picker drops all-time-zero
+    # projects too), so they're excluded. Top 10 by range cost; the tail
+    # collapses into ONE "Other (N projects)" row — a bar per project is
+    # unreadable at ~70 projects.
+    cost_by_project_pos = [
+        {"project": p or "unknown", "cost_usd": float(cost or 0)}
+        for (p, cost) in cost_by_project_rows
+        if float(cost or 0) > 0
+    ]
+    cost_by_project = cost_by_project_pos[:10]
+    if len(cost_by_project_pos) > 10:
+        rest = cost_by_project_pos[10:]
+        cost_by_project.append({
+            "project": f"Other ({len(rest)} projects)",
+            "cost_usd": sum(r["cost_usd"] for r in rest),
+        })
+
     # ctx_turns used to be its own query, but it is a strict subset of
     # ctx_traces (main files only) — the same jsonb scan run twice.
     ctx_turns_by_session = {
@@ -1672,6 +1728,7 @@ def dashboard(
         "bucket_s": bucket_s,
         "hourly": hourly,
         "cost_by_model": cost_by_model,
+        "cost_by_project": cost_by_project,
         "rate_limit_hits": rate_limit_hits,
         "sessions": sessions_out,
         "total_sessions": total_sessions,

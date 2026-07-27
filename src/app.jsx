@@ -472,6 +472,7 @@ function backendDashToShape(b) {
   });
   return {
     events, limitHits, range: { start, end }, costByModel,
+    costByProject: b.cost_by_project || [],
     sessionsOverride: sessions,
     totalSessions: b.total_sessions,
     mainWUsage: b.main_w_usage,
@@ -664,6 +665,7 @@ function Dashboard({ synth, models, backendOn, activeProject, activeRange, dashN
   const hasData = !!synth;
   const {
     events = [], limitHits = [], range: dataRange, costByModel: backendByModel,
+    costByProject: backendByProject = [],
     sessionsOverride, totalSessions, mainWUsage, mainEmpty, subagentFiles,
     subagentOnlySessions, totalPrompts, totalTurns, responseSizes,
     ctxTraces, bucketS,
@@ -709,6 +711,15 @@ function Dashboard({ synth, models, backendOn, activeProject, activeRange, dashN
     .filter(([, v]) => v > 0)
     .sort((a, b) => b[1] - a[1])
     .map(([label, value]) => ({ label, value }));
+
+  // One colour for every bar: this is a magnitude comparison, identity is
+  // carried by the row label, so NO fixedColors and the same palette
+  // colour (the Cost (USD) gold) on each row. The backend already sorted
+  // desc, dropped zero-cost rows, and folded the tail into "Other (N
+  // projects)". Guests get no cost_by_project key at all (server-side),
+  // so the empty list hides the panel for them without an isGuest check.
+  const costByProject = backendByProject
+    .map(r => ({ label: r.project, value: r.cost_usd, color: window.dashboardCol.costUSD }));
 
   const totalCostStr = window.humanFmt(totals.cost, true);
 
@@ -762,6 +773,17 @@ function Dashboard({ synth, models, backendOn, activeProject, activeRange, dashN
           fmt={r => window.humanCurrency(r.value)} />
         <TokenBreakdownPanel events={events} />
       </div>
+
+      {/* Only meaningful with the project filter on "All" — a single
+          selected project would make this a one-bar chart. */}
+      {activeProject === '' && costByProject.length > 0 && (
+        <div className="dash-resp">
+          <window.HBar
+            title="Cost by Project"
+            rows={costByProject}
+            fmt={r => window.humanCurrency(r.value)} />
+        </div>
+      )}
 
       <div className="dash-ttl">
         <window.CacheTTLPanel events={events} range={range} binMs={binMs} />
