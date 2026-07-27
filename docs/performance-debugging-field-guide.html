@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Performance debugging — a field guide for agents</title>
+<style>
+  :root {
+    --ivory:   #1B1A17;
+    --slate:   #F5F3EC;
+    --clay:    #D97757;
+    --oat:     #3A352B;
+    --olive:   #8FA56E;
+    --sky:     #6A8CAF;
+    --gray-150:#2E2C27;
+    --gray-300:#3A3833;
+    --gray-500:#8F8D82;
+    --gray-700:#CFCCC2;
+    --panel:   #252420;
+    --code-bg: #121110;
+    --red:     #E58C7F;
+    --serif: ui-serif, Georgia, "Times New Roman", serif;
+    --sans:  system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --mono:  ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--ivory); color: var(--gray-700);
+    font-family: var(--sans); font-size: 15px; line-height: 1.65;
+    -webkit-font-smoothing: antialiased; padding: 56px 24px 120px;
+  }
+  .page { margin: 0 auto; max-width: 1180px; display: grid; grid-template-columns: minmax(0,1fr) 260px; gap: 48px; }
+  @media (max-width: 1000px) { .page { grid-template-columns: 1fr; } aside { order: 2; position: static; } }
+
+  .eyebrow { font-family: var(--mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--gray-500); margin-bottom: 10px; }
+  h1 { font-family: var(--serif); font-weight: 500; font-size: 34px; color: var(--slate); letter-spacing: -.01em; margin-bottom: 14px; }
+  h2 { font-family: var(--serif); font-weight: 500; font-size: 23px; color: var(--slate); margin: 46px 0 14px; scroll-margin-top: 24px; }
+  h3 { font-family: var(--sans); font-weight: 600; font-size: 15px; color: var(--slate); margin: 0 0 8px; }
+  p { margin-bottom: 12px; max-width: 720px; }
+  .lead { max-width: 720px; margin-bottom: 10px; font-size: 16px; }
+  code { font-family: var(--mono); font-size: 13px; color: var(--slate); background: var(--gray-150); padding: 1px 5px; border-radius: 4px; }
+  pre { background: var(--code-bg); border: 1px solid var(--gray-300); border-radius: 10px; padding: 14px 16px; overflow-x: auto; margin: 12px 0; max-width: 720px; }
+  pre code { background: none; padding: 0; font-size: 12.5px; line-height: 1.6; color: var(--gray-700); }
+  a { color: var(--clay); }
+
+  .callout { border-left: 3px solid var(--clay); background: var(--panel); border-radius: 0 10px 10px 0; padding: 14px 18px; margin: 16px 0; max-width: 720px; }
+  .callout.rule { border-left-color: var(--olive); }
+  .callout .k { font-family: var(--mono); font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--gray-500); display: block; margin-bottom: 6px; }
+
+  /* pitfall cards */
+  .pit { border: 1.5px solid var(--gray-300); border-radius: 14px; background: var(--panel); padding: 20px 22px; margin: 18px 0; max-width: 760px; scroll-margin-top: 24px; }
+  .pit-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 10px; }
+  .pit-n { font-family: var(--mono); font-size: 11px; color: var(--clay); border: 1px solid var(--gray-300); border-radius: 5px; padding: 2px 7px; flex: none; }
+  .pit h3 { margin: 0; }
+  .pit dl { margin: 12px 0 0; display: grid; grid-template-columns: 108px 1fr; gap: 6px 14px; font-size: 13.5px; }
+  .pit dt { font-family: var(--mono); font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--gray-500); padding-top: 3px; }
+  .pit dd { color: var(--gray-700); }
+  .pit dd.tell { color: var(--slate); }
+
+  table { border-collapse: collapse; width: 100%; max-width: 720px; font-size: 13.5px; margin: 14px 0; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--gray-300); }
+  th { font-family: var(--mono); font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--gray-500); font-weight: 500; }
+  td.num { font-family: var(--mono); text-align: right; }
+  td.bad { color: var(--red); font-family: var(--mono); text-align: right; }
+  td.good { color: var(--olive); font-family: var(--mono); text-align: right; }
+
+  aside { position: sticky; top: 32px; align-self: start; border: 1.5px solid var(--gray-300); border-radius: 12px; background: var(--panel); padding: 18px; }
+  aside .label { font-family: var(--mono); font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: var(--gray-500); margin-bottom: 12px; }
+  aside ol { list-style: none; counter-reset: toc; font-size: 12.5px; line-height: 1.5; }
+  aside ol li { counter-increment: toc; margin-bottom: 9px; }
+  aside ol li a { text-decoration: none; color: var(--gray-700); display: block; }
+  aside ol li a:hover { color: var(--slate); }
+  aside ol li a::before { content: counter(toc) "."; font-family: var(--mono); font-size: 10px; color: var(--gray-500); margin-right: 6px; }
+  aside .sec { font-family: var(--mono); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--gray-500); margin: 16px 0 8px; }
+  aside button { appearance: none; width: 100%; border: 1.5px solid var(--gray-300); background: var(--gray-150); color: var(--gray-700); border-radius: 6px; font-family: var(--mono); font-size: 11px; padding: 8px; cursor: pointer; margin-top: 6px; }
+  aside button:hover { background: var(--oat); color: var(--slate); }
+
+  .check { max-width: 720px; margin: 12px 0; }
+  .check li { list-style: none; padding: 7px 0 7px 30px; position: relative; border-bottom: 1px solid var(--gray-300); font-size: 14px; }
+  .check li::before { content: "☐"; position: absolute; left: 6px; color: var(--clay); font-size: 14px; }
+  .foot { margin-top: 56px; padding-top: 18px; border-top: 1px solid var(--gray-300); font-size: 12.5px; color: var(--gray-500); max-width: 720px; }
+</style>
+</head>
+<body>
+<div class="page">
+
+<main>
+  <div class="eyebrow">Doctrine · performance · field guide</div>
+  <h1>Performance debugging: a field guide</h1>
+  <p class="lead">
+    Every pitfall below is one an agent actually hit while taking a dashboard from an 8-second cold load to
+    sub-second, together with the measurement that exposed it. None are hypothetical. The recurring shape is
+    not "failed to find the bottleneck" — it is <em>measured confidently, and measured the wrong thing</em>.
+  </p>
+
+  <div class="callout">
+    <span class="k">The one-line version</span>
+    An unverified measurement is more dangerous than no measurement, because it ends the search. Most of the
+    time lost below was spent optimising against numbers that were real but did not mean what they appeared to.
+  </div>
+
+  <h2 id="loop">The loop</h2>
+  <p>
+    Work in this order. Steps 1 and 5 are the ones agents skip, and they are the ones that catch the errors.
+  </p>
+  <ol class="check">
+    <li><b>Measure what the user waits for</b> — end to end, from their side. Not a component you can reach easily.</li>
+    <li><b>Attribute it</b> — split the total until the parts sum to the whole. A gap means missing instrumentation.</li>
+    <li><b>Form one hypothesis, then design the experiment that could falsify it.</b></li>
+    <li><b>Fix, and predict the delta before you measure it.</b> A surprise means the model was wrong, not the fix.</li>
+    <li><b>Re-measure end to end.</b> Component-level improvement is not the deliverable.</li>
+  </ol>
+
+  <h2 id="pitfalls">Pitfalls</h2>
+
+  <div class="pit" id="p1">
+    <div class="pit-head"><span class="pit-n">01</span><h3>Measuring the layer you can instrument, not the one that hurts</h3></div>
+    <p>Server-side timings for every endpoint looked healthy. The page still felt slow.</p>
+    <dl>
+      <dt>What was true</dt><dd>Four panel requests never <em>started</em> until the main query finished — a parallel fan-out had silently become a serial chain. Each endpoint, measured alone, was fine.</dd>
+      <dt>Found by</dt><dd>A browser HAR waterfall. Nothing server-side can see this: no single request is slow, only their arrangement.</dd>
+      <dt class="tell">Cost</dt><dd class="tell">The agent <em>introduced</em> this regression while optimising, then reported success twice before a HAR arrived.</dd>
+    </dl>
+    <div class="callout rule"><span class="k">Rule</span>Before claiming a page is faster, get a client-side waterfall. Server timings cannot express request ordering, and ordering is often the whole problem.</div>
+  </div>
+
+  <div class="pit" id="p2">
+    <div class="pit-head"><span class="pit-n">02</span><h3>A readiness signal that does not mean ready</h3></div>
+    <p>The protocol was: restart the service, wait for the ingest to report finished, then measure. It looked rigorous.</p>
+    <dl>
+      <dt>What was true</dt><dd><code>finished_at</code> was written to the run table <em>before</em> the derived-state rebuilds ran. Every "clean" measurement was taken while heavy write passes were still executing.</dd>
+      <dt>Found by</dt><dd>Reading the order of statements in the ingest function — after wondering why identical code measured 6.0s and 1.4s minutes apart.</dd>
+      <dt class="tell">Cost</dt><dd class="tell">A whole session of cold numbers inflated ~4×, and a confident but wrong attribution to buffer-cache effects.</dd>
+    </dl>
+    <div class="callout rule"><span class="k">Rule</span>Verify what your readiness signal actually gates. If you wait on a flag, read the code that sets it. Prefer waiting on the observable you care about — a log line from the last step, not a status field written by an earlier one.</div>
+  </div>
+
+  <div class="pit" id="p3">
+    <div class="pit-head"><span class="pit-n">03</span><h3>Naming a cause you never measured</h3></div>
+    <p>Five concurrent requests each took ~3.2s while their own bodies took under 900ms. The agent attributed the gap to interpreter-level contention. It sounded right.</p>
+    <dl>
+      <dt>What was true</dt><dd>The rebuild used <code>TRUNCATE</code>, which holds an <code>ACCESS EXCLUSIVE</code> lock for the whole transaction. Every concurrent reader blocked on it.</dd>
+      <dt>Found by</dt><dd>A 30-second experiment: open a transaction that truncates and sleeps, time a <code>SELECT</code> from another connection.</dd>
+    </dl>
+    <pre><code>SELECT during TRUNCATE txn : 2.88s
+SELECT with nothing in flight : 0.07s</code></pre>
+    <div class="callout rule"><span class="k">Rule</span>A plausible mechanism is a hypothesis, not a finding. Before naming a cause, ask what experiment separates it from the alternatives — then run it. Contention explanations are especially seductive because they are unfalsifiable until you try.</div>
+  </div>
+
+  <div class="pit" id="p4">
+    <div class="pit-head"><span class="pit-n">04</span><h3>Instrumentation with holes reads as completeness</h3></div>
+    <p>Per-phase timings were added and trusted. Two blind spots survived the entire session.</p>
+    <dl>
+      <dt>Hole one</dt><dd>The timer wrapped <code>cursor.execute()</code> but not <code>fetchall()</code>, so materialising rows was invisible — about 554ms of a 2.5s request.</dd>
+      <dt>Hole two</dt><dd>The log handler was attached to the <code>api</code> child logger; ingest logged under a sibling. Four rebuild log lines were silently discarded for hours.</dd>
+      <dt class="tell">The tell</dt><dd class="tell">The named phases summed to less than the reported total. That arithmetic gap is the signal — it was visible in the logs long before anyone read it.</dd>
+    </dl>
+    <div class="callout rule"><span class="k">Rule</span>Make the instrument account for the whole. Emit both the sum of parts and the measured total, and treat any divergence as an unmeasured phase. Then verify the output actually appears — instrumentation that logs nowhere is indistinguishable from a fast system.</div>
+  </div>
+
+  <div class="pit" id="p5">
+    <div class="pit-head"><span class="pit-n">05</span><h3>Optimising a real bottleneck that is not the user's bottleneck</h3></div>
+    <p>Deduplication was moved from read time to ingest time — a genuine, well-verified improvement.</p>
+    <dl>
+      <dt>Result</dt><dd>Transformative for one endpoint that repeated the work four times per request (19.1s → 0.52s). A <em>wash</em> for the main dashboard, which had been amortising it across six queries: the work simply redistributed.</dd>
+      <dt class="tell">Lesson</dt><dd class="tell">"This step is expensive" does not imply "removing it makes the request faster." It depends on what else shares the cost.</dd>
+    </dl>
+    <div class="callout rule"><span class="k">Rule</span>Predict the end-to-end delta before doing the work. If you cannot predict it, you do not understand the cost structure well enough to be optimising yet — and report the wash honestly when it happens.</div>
+  </div>
+
+  <div class="pit" id="p6">
+    <div class="pit-head"><span class="pit-n">06</span><h3>Improving something nothing consumes</h3></div>
+    <p>A field was found to be reporting 67,969 where the true value was 2,173, and the query was carefully corrected.</p>
+    <dl>
+      <dt>What was true</dt><dd>No frontend file read that field. It was deleted shortly afterwards, along with three others and about 2&nbsp;MB of response body.</dd>
+      <dt>Found by</dt><dd>A test that walks every API response and asserts each field name appears somewhere in the client source.</dd>
+    </dl>
+    <div class="callout rule"><span class="k">Rule</span>Confirm a consumer exists before optimising, or fixing, a producer. The cheapest performance win is deleting work nobody asked for — check that first, not last.</div>
+  </div>
+
+  <div class="pit" id="p7">
+    <div class="pit-head"><span class="pit-n">07</span><h3>Hand-derived cache keys drift from real ones</h3></div>
+    <p>A pre-warmer populated the cache at startup. A later change added a parameter to one endpoint.</p>
+    <dl>
+      <dt>What was true</dt><dd>The warmer fell back to the endpoint's signature default (<code>30d</code>) while the UI opens on <code>all</code>. The single request every page load makes was warmed under a key nothing would ever request.</dd>
+      <dt class="tell">Why it hid</dt><dd class="tell">Nothing failed. The cache worked; it was merely full of the wrong entries. Only a timing measurement of a supposedly-warm path exposed it.</dd>
+    </dl>
+    <div class="callout rule"><span class="k">Rule</span>Derive keys from the same code path the real request uses, never by restating the parameters. Then assert coverage in a test that enumerates what the client can actually ask for.</div>
+  </div>
+
+  <div class="pit" id="p8">
+    <div class="pit-head"><span class="pit-n">08</span><h3>Porting a query by reading it</h3></div>
+    <p>An expensive query was precomputed into a table. The port was reviewed carefully and looked correct.</p>
+    <dl>
+      <dt>What was true</dt><dd>The original selected <code>GREATEST(1, CEIL(n * 0.01))</code>; the port wrote <code>GREATEST(n / 100, 1)</code>. Integer division floors, so at n=150 one produced 2 rows and the other 1.</dd>
+      <dt>Found by</dt><dd>Diffing the precomputed table against the live query over the full dataset — not by re-reading the SQL.</dd>
+    </dl>
+    <div class="callout rule"><span class="k">Rule</span>Verify a derived store by <em>differencing it against the source of truth over real data</em>, comparing every column. Review catches typos; only a diff catches semantics.</div>
+  </div>
+
+  <h2 id="worked">Techniques that paid</h2>
+
+  <h3>Env-gated instrumentation that ships</h3>
+  <p>
+    Per-phase timing read from an environment flag once at import, inert when off, committed with the fix rather
+    than removed after the measurement. Reconstructing a query path by hand in a REPL drifts from what the service
+    actually runs and omits everything outside the part you rebuilt — which is exactly how pitfall&nbsp;04 hid.
+  </p>
+  <div class="callout"><span class="k">Caveat</span>Its weakness is the mirror of its strength: a flag left off makes the tooling invisible. One port of this work sat with instrumentation present but unset, and produced silence that looked like a hung service.</div>
+
+  <h3>Precompute at ingest, and know what cannot be</h3>
+  <p>
+    Sums, counts and extrema compose across buckets, so they can be stored fine-grained and rolled up. Percentiles
+    do not. The escape hatch is that display buckets are usually <em>epoch-aligned and few</em>: compute the
+    percentile once per bucket width and let a range filter select buckets. Exact, not approximated — no accuracy
+    traded away.
+  </p>
+
+  <h3>Rebuild in place without locking readers</h3>
+  <p>
+    <code>DELETE</code> plus re-insert inside one transaction takes a row-level lock, and MVCC keeps serving the
+    previous rows until commit. <code>TRUNCATE</code> is faster in isolation and blocks every reader for the
+    duration. At a few thousand rows the difference in raw speed is noise and the difference in user-visible
+    stalling is total.
+  </p>
+
+  <h2 id="numbers">What it added up to</h2>
+  <table>
+    <thead><tr><th>Measure</th><th style="text-align:right">Before</th><th style="text-align:right">After</th></tr></thead>
+    <tbody>
+      <tr><td>Dashboard, first load after restart</td><td class="bad">8.0s</td><td class="good">0.06s</td></tr>
+      <tr><td>Dashboard, genuine cache miss</td><td class="bad">8.0s</td><td class="good">1.4s</td></tr>
+      <tr><td>Cache view</td><td class="bad">19.1s</td><td class="good">0.52s</td></tr>
+      <tr><td>Reply latency (median)</td><td class="bad">0.44s</td><td class="good">0.12s</td></tr>
+      <tr><td>Response payload</td><td class="bad">4.6 MB</td><td class="good">982 KB</td></tr>
+      <tr><td>Light endpoint during a heavy one</td><td class="bad">6.8s</td><td class="good">0.17s</td></tr>
+      <tr><td>Test suite</td><td class="bad">170s</td><td class="good">64s</td></tr>
+    </tbody>
+  </table>
+  <p style="font-size:13px;color:var(--gray-500);max-width:720px">
+    The single largest contributor was none of the query tuning: it was discovering that blocking database calls
+    sat inside <code>async</code> handlers, freezing the event loop so a fan-out of eight requests queued behind
+    one another.
+  </p>
+
+  <h2 id="checklist">Pre-flight checklist</h2>
+  <ul class="check">
+    <li>Do I have an end-to-end measurement from the consumer's side, not just component timings?</li>
+    <li>Does my readiness signal actually mean the system is idle? Have I read the code that sets it?</li>
+    <li>Do my instrumented phases sum to the measured total? Where is the gap?</li>
+    <li>Is my instrumentation's output actually appearing, or am I reading silence as success?</li>
+    <li>Have I stated the cause as a hypothesis and named the experiment that would falsify it?</li>
+    <li>Did I predict the end-to-end delta before measuring it?</li>
+    <li>Does anything actually consume what I am about to optimise?</li>
+    <li>If I derived a store or a key, have I diffed it against the source of truth over real data?</li>
+    <li>Have I re-measured end to end, including the regression I may have just introduced?</li>
+  </ul>
+
+  <div class="foot">
+    Compiled from a single performance engagement on a self-hosted analytics dashboard. Every figure was measured
+    on the running system; every pitfall was made, not imagined.
+  </div>
+</main>
+
+<aside>
+  <div class="label">Pitfalls</div>
+  <ol>
+    <li><a href="#p1">Measuring the wrong layer</a></li>
+    <li><a href="#p2">A readiness signal that lies</a></li>
+    <li><a href="#p3">Naming an unmeasured cause</a></li>
+    <li><a href="#p4">Instrumentation with holes</a></li>
+    <li><a href="#p5">The wrong bottleneck</a></li>
+    <li><a href="#p6">Improving dead code</a></li>
+    <li><a href="#p7">Hand-derived cache keys</a></li>
+    <li><a href="#p8">Porting a query by eye</a></li>
+  </ol>
+  <div class="sec">Sections</div>
+  <ol style="counter-reset:none">
+    <li><a href="#loop" style="padding-left:0">The loop</a></li>
+    <li><a href="#worked">Techniques that paid</a></li>
+    <li><a href="#numbers">What it added up to</a></li>
+    <li><a href="#checklist">Checklist</a></li>
+  </ol>
+  <button id="copyChecklist">copy checklist</button>
+  <button id="copyRules">copy rules as prompt</button>
+</aside>
+
+</div>
+<script>
+function collect(sel, map) { return Array.from(document.querySelectorAll(sel)).map(map).join("\n"); }
+document.getElementById("copyChecklist").onclick = function () {
+  var t = "Performance debugging pre-flight:\n" +
+    collect("#checklist + .check li, .check li", function (li) { return "- [ ] " + li.textContent.trim(); });
+  navigator.clipboard.writeText(t);
+  this.textContent = "copied ✓"; setTimeout(function(){ document.getElementById("copyChecklist").textContent = "copy checklist"; }, 1400);
+};
+document.getElementById("copyRules").onclick = function () {
+  var t = "Performance debugging rules (each learned from a real mistake):\n\n" +
+    collect(".pit", function (p) {
+      var h = p.querySelector("h3").textContent.trim();
+      var r = p.querySelector(".callout.rule").textContent.replace(/^\s*Rule\s*/, "").trim();
+      return "• " + h + "\n  " + r;
+    });
+  navigator.clipboard.writeText(t);
+  this.textContent = "copied ✓"; setTimeout(function(){ document.getElementById("copyRules").textContent = "copy rules as prompt"; }, 1400);
+};
+</script>
+</body>
+</html>
