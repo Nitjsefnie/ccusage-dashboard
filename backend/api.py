@@ -1516,7 +1516,22 @@ def dashboard(
               -- r2_last_modified is the file's mtime, not the hit's time:
               -- a file touched within range can still carry hits older
               -- than `since`, so filter on each hit's own ts too.
-              AND NULLIF(hit->>'ts', '')::timestamptz >= %s
+              --
+              -- The cast is guarded, because casting a malformed ts RAISES
+              -- (`invalid input syntax for type timestamp with time zone`)
+              -- and the traceback would take out the WHOLE dashboard, not
+              -- just this panel. Two halves to the guard:
+              --   * pg_input_is_valid, not a regex — a shape test admits
+              --     '2026-13-45T99:99:99Z' and '2026-02-30T00:00:00Z',
+              --     which look like timestamps and still raise on cast.
+              --     (PG16+; production is 17 and CI runs postgres:16.)
+              --   * CASE, not `AND valid AND cast` — the planner may
+              --     evaluate a bare cast before the test protecting it,
+              --     while CASE's evaluation order is guaranteed.
+              -- A hit that fails the test yields NULL, which fails the >=
+              -- and is dropped, which is what we want for junk.
+              AND (CASE WHEN pg_input_is_valid(hit->>'ts', 'timestamptz')
+                        THEN (hit->>'ts')::timestamptz END) >= %s
             """,
             rl_args,
         ).fetchall()
