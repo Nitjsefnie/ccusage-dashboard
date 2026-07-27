@@ -253,6 +253,45 @@ def test_cache_session_total_matches_per_model_sum(app_with_data):
     assert body["session_total"]["cost_total"] == sum_cost
 
 
+def test_cache_session_total_estimated_rate_true_when_any_model_estimated(
+    app_with_data, monkeypatch
+):
+    """Fixture data carries two real models (claude-opus-4-7 and
+    claude-sonnet-4-5), both exact matches normally. Drop one from the rate
+    table so it resolves as "default" (estimated) while the other stays
+    exact — a genuine mixed session, same shape a live account would show
+    the day a new model ships before the rate table is updated.
+    """
+    from backend import pricing
+
+    patched = {k: v for k, v in pricing.MODEL_RATES.items() if k != "claude-sonnet-4-5"}
+    monkeypatch.setattr(pricing, "MODEL_RATES", patched)
+
+    body = app_with_data.get("/api/cache?range=3650d").json()
+    assert len(body["per_model"]) >= 2, body["per_model"]
+    flags = {m["model"]: m["estimated_rate"] for m in body["per_model"]}
+    assert flags["claude-sonnet-4-5"] is True
+    assert flags["claude-opus-4-7"] is False
+    assert body["session_total"]["estimated_rate"] is True
+
+
+def test_cache_session_total_estimated_rate_false_when_all_exact(app_with_data):
+    body = app_with_data.get("/api/cache?range=3650d").json()
+    assert body["per_model"], "fixture produced no per-model rows"
+    assert all(m["estimated_rate"] is False for m in body["per_model"])
+    assert body["session_total"]["estimated_rate"] is False
+
+
+def test_cache_session_total_estimated_rate_false_for_empty_per_model(app_with_data):
+    """An empty per_model list must not crash any(...) over it, and must not
+    default-True a total with no contributing models."""
+    r = app_with_data.get("/api/cache?range=3650d&model=nonexistent-model-zzz")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["per_model"] == []
+    assert body["session_total"]["estimated_rate"] is False
+
+
 def test_transcript_streams(app_with_data):
     r = app_with_data.get("/api/sessions/sess-A/transcript")
     assert r.status_code == 200
