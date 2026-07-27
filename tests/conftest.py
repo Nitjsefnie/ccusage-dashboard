@@ -1,4 +1,16 @@
+# Ordering is load-bearing: this setdefault MUST run before anything below
+# imports backend.app (directly, or transitively via backend.api/db/etc.),
+# because backend/app.py:20 calls db.load_dotenv(".env") at import time, and
+# .env pins DATABASE_URL_VIZ at the live production `claudit` database. Since
+# db.load_dotenv only ever os.environ.setdefault()s (never overwrites), the
+# first setdefault to run for this key wins the race for the whole test
+# process. Landing our scratch default here, above the sys.path manipulation
+# and before any test module can import a backend module, guarantees pytest
+# never lets DATABASE_URL_VIZ resolve to production, even for a test that
+# forgets to monkeypatch its own scratch DB (see upstream issue #4).
 import os
+os.environ.setdefault("DATABASE_URL_VIZ", "postgresql:///claudit_test")
+
 import sys
 from pathlib import Path
 
