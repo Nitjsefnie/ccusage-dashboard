@@ -30,8 +30,13 @@ from pathlib import Path
 import pytest
 
 # Reuses the API suite's fresh-DB + mini-R2 fixture rather than standing
-# up a second one; importing it is what registers it here.
-from test_api import app_with_data  # noqa: F401
+# up a second one; having the function object in this module's globals is
+# what registers the fixture here. Imported under its private function
+# name — the fixture's registered name stays "app_with_data" — and listed
+# in __all__ so the re-export is explicit, not an unused import.
+from test_api import _app_with_data_fixture
+
+__all__ = ["_app_with_data_fixture"]
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 

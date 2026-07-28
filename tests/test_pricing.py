@@ -2,6 +2,8 @@
 Mirrors parse_session.py:1148-1166 — the canonical table at the time of
 the spec freeze. If the canonical bumps, bump PARSER_VERSION here.
 """
+from datetime import datetime, timezone
+
 from backend import pricing
 
 
@@ -84,8 +86,6 @@ def test_split_cache_charges_each_bucket_separately():
 # 2026-08-31 (UTC, inclusive). Cache tiers scale off input: 5m = 1.25x,
 # 1h = 2x, read = 0.1x.
 
-from datetime import datetime, timezone
-
 UTC = timezone.utc
 
 
@@ -125,7 +125,7 @@ def test_dated_rates_do_not_affect_other_models():
 
 
 def test_compute_cost_honours_ts_for_sonnet_5():
-    kw = dict(fresh=1_000_000, output=0, eph5=0, eph1h=0, unsplit_create=0, read=0)
+    kw = {"fresh": 1_000_000, "output": 0, "eph5": 0, "eph1h": 0, "unsplit_create": 0, "read": 0}
     assert pricing.compute_cost("claude-sonnet-5", ts=datetime(2026, 7, 21, tzinfo=UTC), **kw) == 2.00
     assert pricing.compute_cost("claude-sonnet-5", ts=datetime(2026, 9, 1, tzinfo=UTC), **kw) == 3.00
 

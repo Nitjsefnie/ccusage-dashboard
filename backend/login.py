@@ -44,6 +44,13 @@ def _record_login_failure(ip: str) -> None:
     _LOGIN_FAILURES[ip] = attempts
 
 
+def reset_login_rate_limits() -> None:
+    """Clear the process-global failure dict. Tests need this between
+    cases that POST from the same TestClient host; production never
+    calls it."""
+    _LOGIN_FAILURES.clear()
+
+
 def user_exists(user_id: int) -> bool:
     """Cheap existence probe in the auth DB's users table."""
     with db.auth_conn() as c:

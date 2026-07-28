@@ -24,7 +24,7 @@ def has_web_password(config: dict) -> bool:
     )
 
 
-def _pbkdf2(password: str, salt_hex: str) -> str:
+def pbkdf2(password: str, salt_hex: str) -> str:
     salt = bytes.fromhex(salt_hex)
     digest = hashlib.pbkdf2_hmac(
         "sha256",
@@ -37,7 +37,7 @@ def _pbkdf2(password: str, salt_hex: str) -> str:
 
 def set_web_password(config: dict, password: str) -> None:
     salt_hex = secrets.token_hex(16)
-    digest_hex = _pbkdf2(password, salt_hex)
+    digest_hex = pbkdf2(password, salt_hex)
     config[WEB_PASSWORD_SALT_KEY] = salt_hex
     config[WEB_PASSWORD_HASH_KEY] = digest_hex
 
@@ -47,5 +47,5 @@ def verify_web_password(config: dict, password: str) -> bool:
     stored_salt = config.get(WEB_PASSWORD_SALT_KEY)
     if not stored_hash or not stored_salt:
         return False
-    candidate = _pbkdf2(password, stored_salt)
+    candidate = pbkdf2(password, stored_salt)
     return hmac.compare_digest(candidate, stored_hash)

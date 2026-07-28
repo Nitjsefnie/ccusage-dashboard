@@ -1,20 +1,20 @@
-# Ordering is load-bearing: this setdefault MUST run before anything below
-# imports backend.app (directly, or transitively via backend.api/db/etc.),
-# because backend/app.py:20 calls db.load_dotenv(".env") at import time, and
-# .env pins DATABASE_URL_VIZ at the live production `claudit` database. Since
-# db.load_dotenv only ever os.environ.setdefault()s (never overwrites), the
-# first setdefault to run for this key wins the race for the whole test
-# process. Landing our scratch default here, above the sys.path manipulation
-# and before any test module can import a backend module, guarantees pytest
-# never lets DATABASE_URL_VIZ resolve to production, even for a test that
-# forgets to monkeypatch its own scratch DB (see upstream issue #4).
+# Ordering is load-bearing: the DATABASE_URL_VIZ setdefault below MUST run
+# before anything imports backend.app (directly, or transitively via
+# backend.api/db/etc.), because backend/app.py:20 calls
+# db.load_dotenv(".env") at import time, and .env pins DATABASE_URL_VIZ at
+# the live production `claudit` database. Since db.load_dotenv only ever
+# os.environ.setdefault()s (never overwrites), the first setdefault to run
+# for this key wins the race for the whole test process. backend.cache is
+# safe to import above it: it is stdlib-only and never touches the env.
 import os
-os.environ.setdefault("DATABASE_URL_VIZ", "postgresql:///claudit_test")
-
 import sys
 from pathlib import Path
 
 import pytest
+
+from backend import cache
+
+os.environ.setdefault("DATABASE_URL_VIZ", "postgresql:///claudit_test")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 # ...and this directory, so one test module can import another's fixture
@@ -41,7 +41,6 @@ os.environ["CLAUDIT_WARM_CACHE"] = "0"
 def _reset_response_cache():
     # response_cache is a process-global. Two tests with different fixtures
     # but identical query params would otherwise read each other's payloads.
-    from backend import cache
     cache.response_cache.clear()
     yield
     cache.response_cache.clear()

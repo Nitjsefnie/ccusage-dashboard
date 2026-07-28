@@ -29,6 +29,7 @@ from datetime import datetime, timezone
 from botocore.exceptions import BotoCoreError, ClientError
 
 from backend import cache, db, events, parse, r2
+from backend.constants import LATENCY_BUCKETS
 
 log = logging.getLogger("claudit.ingest")
 
@@ -465,12 +466,6 @@ def rebuild_tool_rollup() -> int:
     log.info("rebuild_tool_rollup: %d rows", written)
     return written
 
-
-# Display bucket widths /api/reply-latency can ask for, from
-# api._bucket_seconds. 300 (the 24h view) is deliberately absent: a row
-# per 5 minutes of all history to serve one day is not worth it, and that
-# range stays on the live path.
-LATENCY_BUCKETS = (3600, 21600, 43200, 86400)
 
 # Ranges warm_common pre-populates. Mirrors RangePicker's presets in
 # src/app.jsx; anything the UI can request but this omits stays cold.

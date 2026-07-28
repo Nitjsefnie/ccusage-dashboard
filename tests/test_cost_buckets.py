@@ -3,7 +3,7 @@ per rate epoch. With dated rates, re-deriving one rate for a range that
 straddles a cutover makes the buckets disagree with the authoritative
 SUM(cost_usd) they claim to decompose.
 """
-from datetime import datetime, timezone
+from datetime import timezone
 
 import pytest
 

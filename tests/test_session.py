@@ -1,9 +1,11 @@
+import hashlib
+import hmac
 import time
 from unittest.mock import patch
 
-import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from starlette.requests import Request
 
 from backend import session
 
@@ -30,8 +32,7 @@ def test_verify_rejects_expired_token():
 def test_verify_rejects_future_token():
     secret = "k" * 32
     payload = "5.99999999999.nonce"
-    import hashlib, hmac as _hmac
-    sig = _hmac.new(
+    sig = hmac.new(
         secret.encode(), payload.encode(), hashlib.sha256
     ).hexdigest()
     tok = f"{payload}.{sig}"
@@ -53,7 +54,6 @@ def test_get_or_create_session_secret_persists():
 
 
 def test_check_origin_allows_safe_methods():
-    from starlette.requests import Request
     scope = {
         "type": "http", "method": "GET", "headers": [],
         "path": "/api/projects",
@@ -63,7 +63,6 @@ def test_check_origin_allows_safe_methods():
 
 
 def test_check_origin_rejects_cross_origin_post():
-    from starlette.requests import Request
     scope = {
         "type": "http", "method": "POST",
         "headers": [
@@ -77,7 +76,6 @@ def test_check_origin_rejects_cross_origin_post():
 
 
 def test_check_origin_accepts_same_origin_post():
-    from starlette.requests import Request
     scope = {
         "type": "http", "method": "POST",
         "headers": [

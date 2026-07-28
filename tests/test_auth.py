@@ -6,12 +6,12 @@ verifies here byte-for-byte.
 from backend import auth
 
 
-def test_pbkdf2_known_vector():
+def testpbkdf2_known_vector():
     salt = "00112233445566778899aabbccddeeff"
     pw = "correct horse battery staple"
-    digest = auth._pbkdf2(pw, salt)
+    digest = auth.pbkdf2(pw, salt)
     assert isinstance(digest, str) and len(digest) == 64
-    assert auth._pbkdf2(pw, salt) == digest
+    assert auth.pbkdf2(pw, salt) == digest
 
 
 def test_set_then_verify_roundtrip():

@@ -200,6 +200,7 @@ def fold_per_model(rows) -> list[dict]:
 
 from backend import cache, db, pricing, r2
 from backend.cache import cache_response
+from backend.constants import LATENCY_BUCKETS
 
 
 router = APIRouter(prefix="/api")
@@ -629,12 +630,10 @@ def reply_latency(
     # Percentiles cannot be summed across buckets, so unlike the other
     # rollups this one is precomputed PER display bucket width — the
     # widths are epoch-aligned and there are only a handful
-    # (ingest.LATENCY_BUCKETS). A range filter then just selects buckets.
+    # (constants.LATENCY_BUCKETS). A range filter then just selects buckets.
     # project_id='' is the stored all-projects row: a project filter
     # changes the population inside each (bucket, model) group, so it
     # cannot be derived from the per-project rows.
-    from backend.ingest import LATENCY_BUCKETS
-
     if bucket_s in LATENCY_BUCKETS:
         roll_args: list[Any] = [bucket_s, project or "", since]
         roll_model = ""

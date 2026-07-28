@@ -62,7 +62,9 @@ def _node_rates():
       console.log(JSON.stringify(out));
     """
     proc = subprocess.run(
-        ["node", "-e", script], capture_output=True, text=True, timeout=60
+        ["node", "-e", script], capture_output=True, text=True, timeout=60,
+        # Return code checked by hand on the next line.
+        check=False,
     )
     assert proc.returncode == 0, proc.stderr
     return json.loads(proc.stdout)
@@ -90,7 +92,9 @@ def test_parser_js_exposes_the_same_rate_epochs():
       console.log(JSON.stringify(window.rateEpochs));
     """
     proc = subprocess.run(
-        ["node", "-e", script], capture_output=True, text=True, timeout=60
+        ["node", "-e", script], capture_output=True, text=True, timeout=60,
+        # Return code checked by hand on the next line.
+        check=False,
     )
     assert proc.returncode == 0, proc.stderr
     js_epochs = [

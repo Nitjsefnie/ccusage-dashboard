@@ -275,6 +275,6 @@ def test_dated_rate_prices_each_record_at_its_own_timestamp():
     # on either side of the cutover must be priced by when it was spent,
     # not by when the file is parsed.
     out = parse.parse_file("k/sess-d/sess-d.jsonl", _read("dated_rate_sonnet5.jsonl"))
-    intro, listed = out["records"]
+    intro, listed = out["records"][0], out["records"][1]
     assert intro["cost_usd"] == pytest.approx(2.00)
     assert listed["cost_usd"] == pytest.approx(3.00)

@@ -13,8 +13,11 @@ These tests hold conftest's claim in place, and reproduce the actual
 trigger (a module-scope `import backend.app`) rather than relying on it
 never happening.
 """
+import importlib
 import os
 from pathlib import Path
+
+from backend import db
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -50,7 +53,7 @@ def test_conftest_default_wins_the_race_against_production_dotenv():
     CI setting it externally) — either is a pass; only production is a
     failure.
     """
-    import backend.app  # noqa: F401  (import triggers db.load_dotenv(".env"))
+    importlib.import_module("backend.app")  # triggers db.load_dotenv(".env")
 
     dsn = os.environ["DATABASE_URL_VIZ"]
     assert _dbname(dsn) != PRODUCTION_DB, (
@@ -69,8 +72,6 @@ def test_a_later_dotenv_load_cannot_repoint_the_suite_at_production(tmp_path):
     stick. If that ever changed, importing backend.app would drag every
     test onto production.
     """
-    from backend import db
-
     dotenv = tmp_path / ".env"
     dotenv.write_text(f"DATABASE_URL_VIZ=postgresql:///{PRODUCTION_DB}\n")
 
