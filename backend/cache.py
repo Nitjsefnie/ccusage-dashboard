@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import functools
+import inspect
 import logging
 import threading
 import time
@@ -165,8 +166,6 @@ def warm(fn: Callable[..., dict], **overrides: Any) -> None:
     So start from the endpoint's own defaults and apply the overrides on
     top; guessing the kwargs would warm a key nobody ever reads.
     """
-    import inspect
-
     target = getattr(fn, "__wrapped__", fn)
     kwargs: dict[str, Any] = {}
     for name, param in inspect.signature(target).parameters.items():

@@ -1,11 +1,14 @@
 """FastAPI entrypoint for claudit."""
 from __future__ import annotations
 
+import asyncio
 import os
+import re
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
+from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI
 from fastapi.responses import ORJSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -13,7 +16,7 @@ from starlette.middleware.gzip import GZipMiddleware
 from starlette.requests import Request
 from starlette.responses import FileResponse, HTMLResponse, Response
 
-from backend import api, db, login, session
+from backend import api, db, events, ingest, login, session
 
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -24,13 +27,10 @@ _SRC = _REPO_ROOT / "src"
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
-    import asyncio as _asyncio
+async def lifespan(fastapi_app: FastAPI):
     db.schema_check()
-    from backend import ingest, events as _events
-    _events.set_loop(_asyncio.get_running_loop())
+    events.set_loop(asyncio.get_running_loop())
 
-    from apscheduler.schedulers.background import BackgroundScheduler
     sched = BackgroundScheduler(daemon=True, timezone="UTC")
     # Hourly maintenance.
     sched.add_job(
@@ -45,13 +45,13 @@ async def lifespan(app: FastAPI):
         next_run_time=datetime.now(timezone.utc),
     )
     sched.start()
-    app.state.scheduler = sched
+    fastapi_app.state.scheduler = sched
 
     yield
 
     # Wake SSE generators so uvicorn's graceful-shutdown drains immediately
     # instead of waiting for the (never-ending) heartbeat response.
-    _events.signal_shutdown()
+    events.signal_shutdown()
     sched.shutdown(wait=False)
 
 
@@ -125,8 +125,7 @@ def health() -> dict:
     # counters in the final UPDATE, and the derived-state rebuilds happen
     # AFTER finished_at is written — so a caller watching that row alone
     # sees nothing for minutes, then "done" while rebuilds are still going.
-    from backend import ingest as _ingest
-    prog = _ingest.progress_snapshot()
+    prog = ingest.progress_snapshot()
     running = prog.get("phase") not in (None, "idle")
     ingest_progress = None
     if running:
@@ -152,7 +151,6 @@ def health() -> dict:
 
 @app.post("/admin/ingest")
 async def admin_ingest() -> dict:
-    from backend import ingest
     return ingest.run_ingest(trigger="manual")
 
 
@@ -178,10 +176,9 @@ async def root_index(request: Request) -> Response:
         f'href="/app.css?v={int((_PUBLIC / "app.css").stat().st_mtime)}"',
     )
     # Also bust /src/* JSX/JS modules so Babel always picks up the latest.
-    import re as _re
     src_root = _PUBLIC.parent / "src"
 
-    def _bust_src(m: _re.Match) -> str:
+    def _bust_src(m: re.Match) -> str:
         path = m.group(1)
         try:
             v = int((src_root / path.lstrip("/").removeprefix("src/")).stat().st_mtime)
@@ -189,7 +186,7 @@ async def root_index(request: Request) -> Response:
             return m.group(0)
         return m.group(0).replace(path, f"{path}?v={v}")
 
-    html = _re.sub(r'src="(/src/[^"?]+)"', _bust_src, html)
+    html = re.sub(r'src="(/src/[^"?]+)"', _bust_src, html)
     return HTMLResponse(html)
 
 

@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
+import os
 import secrets
 import time
 from urllib.parse import urlparse
@@ -97,7 +99,6 @@ def write_user_config(user_id: int, config: dict) -> None:
 
     Used to store the freshly-minted web_session_secret on first login.
     """
-    import json
     with db.auth_conn() as c:
         c.execute(
             "UPDATE users SET config = %s::jsonb WHERE user_id = %s",
@@ -143,53 +144,78 @@ def check_origin(request: Request) -> bool:
 _AUTH_PUBLIC_PATHS = {"/health", "/login", "/logout", "/login/guest"}
 
 
-async def auth_middleware(request: Request, call_next):
-    import os
+def _admin_denied(request: Request) -> Response | None:
+    """Admin-token + origin gate for /admin/*; None means allowed."""
+    token = request.headers.get("x-admin-token", "")
+    expected = os.environ.get("ADMIN_TOKEN", "")
+    if not expected or not hmac.compare_digest(token, expected):
+        return JSONResponse(
+            {"ok": False, "error": "Unauthorized"}, status_code=401
+        )
+    if not check_origin(request):
+        return Response("Forbidden (cross-origin)", status_code=403)
+    return None
+
+
+def _unauthenticated(path: str) -> Response:
+    """APIs get a JSON 401; page loads get bounced to /login."""
+    if path.startswith("/api/"):
+        return JSONResponse(
+            {"ok": False, "error": "Unauthorized"}, status_code=401
+        )
+    return RedirectResponse("/login", status_code=302)
+
+
+def _guest_denied(request: Request) -> Response | None:
+    """403s for the endpoints/filters a guest session must not use."""
     path = request.url.path
-    if path in _AUTH_PUBLIC_PATHS:
-        return await call_next(request)
-    if path.startswith("/admin/"):
-        token = request.headers.get("x-admin-token", "")
-        expected = os.environ.get("ADMIN_TOKEN", "")
-        if not expected or not hmac.compare_digest(token, expected):
-            return JSONResponse(
-                {"ok": False, "error": "Unauthorized"}, status_code=401
-            )
-        if not check_origin(request):
-            return Response("Forbidden (cross-origin)", status_code=403)
-        return await call_next(request)
+    # /api/projects leaks project names (filesystem paths).
+    # /api/sessions* covers list, single detail, raw transcript, sidecar.
+    # Context-growth-by-session is allowed — just numbers, needed for graphs.
+    if (
+        path == "/api/projects"
+        or path.startswith("/api/sessions")
+        or path.startswith("/api/export")
+    ):
+        return JSONResponse(
+            {"ok": False, "error": "Forbidden (guest)"}, status_code=403
+        )
+    # Block project= filtering on aggregate endpoints — guest sees
+    # project-mixed data only.
+    if request.query_params.get("project"):
+        return JSONResponse(
+            {"ok": False, "error": "Forbidden (guest cannot filter by project)"},
+            status_code=403,
+        )
+    return None
+
+
+def _session_denied(request: Request) -> Response | None:
+    """Origin + session-cookie + guest gate; None means allowed."""
     if not check_origin(request):
         return Response("Forbidden (cross-origin)", status_code=403)
     cookie = request.cookies.get(SESSION_COOKIE_NAME, "")
     user_id = resolve_session_user_id(cookie) if cookie else None
     if user_id is None:
-        if path.startswith("/api/"):
-            return JSONResponse(
-                {"ok": False, "error": "Unauthorized"}, status_code=401
-            )
-        return RedirectResponse("/login", status_code=302)
+        return _unauthenticated(request.url.path)
     request.state.user_id = user_id
-    request.state.is_guest = (user_id == GUEST_USER_ID)
+    request.state.is_guest = user_id == GUEST_USER_ID
     # Gate per-session and per-project endpoints from guests, plus
     # disallow `project=` filters on aggregate endpoints so guests can
     # only see project-mixed data.
     if request.state.is_guest:
-        # /api/projects leaks project names (filesystem paths).
-        # /api/sessions* covers list, single detail, raw transcript, sidecar.
-        # Context-growth-by-session is allowed — just numbers, needed for graphs.
-        if (
-            path == "/api/projects"
-            or path.startswith("/api/sessions")
-            or path.startswith("/api/export")
-        ):
-            return JSONResponse(
-                {"ok": False, "error": "Forbidden (guest)"}, status_code=403
-            )
-        # Block project= filtering on aggregate endpoints — guest sees
-        # project-mixed data only.
-        if request.query_params.get("project"):
-            return JSONResponse(
-                {"ok": False, "error": "Forbidden (guest cannot filter by project)"},
-                status_code=403,
-            )
+        return _guest_denied(request)
+    return None
+
+
+async def auth_middleware(request: Request, call_next):
+    path = request.url.path
+    if path in _AUTH_PUBLIC_PATHS:
+        return await call_next(request)
+    if path.startswith("/admin/"):
+        denied = _admin_denied(request)
+    else:
+        denied = _session_denied(request)
+    if denied is not None:
+        return denied
     return await call_next(request)

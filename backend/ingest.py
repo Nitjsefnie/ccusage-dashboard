@@ -24,11 +24,12 @@ import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import contextmanager
 from datetime import datetime, timezone
 
 from botocore.exceptions import BotoCoreError, ClientError
 
-from backend import cache, db, events, parse, r2
+from backend import api, cache, db, events, parse, r2
 from backend.constants import LATENCY_BUCKETS
 
 log = logging.getLogger("claudit.ingest")
@@ -107,20 +108,38 @@ FETCH_ATTEMPTS = len(FETCH_BACKOFF_S) + 1
 FAILURE_KEYS_IN_SUMMARY = 5
 
 
-def run_ingest(trigger: str) -> dict:
-    if not _RUN_LOCK.acquire(blocking=False):
-        log.warning("ingest (%s) skipped: another run is still in flight", trigger)
-        return {"skipped": True, "reason": "ingest already running", "trigger": trigger}
+@contextmanager
+def _run_lock_nonblocking():
+    """Acquire _RUN_LOCK without blocking, as a context manager.
+
+    Yields False when another run holds the lock — a skipped run is
+    correct behaviour, not an error; the next hourly tick picks up
+    whatever is left.
+    """
+    acquired = _RUN_LOCK.acquire(blocking=False)
     try:
-        return run_ingest_locked(trigger)
+        yield acquired
     finally:
-        _RUN_LOCK.release()
+        if acquired:
+            _RUN_LOCK.release()
 
 
-def run_ingest_locked(trigger: str) -> dict:
-    started = datetime.now(timezone.utc)
-    parser_version = os.environ.get("PARSER_VERSION", "1")
+def run_ingest(trigger: str) -> dict:
+    with _run_lock_nonblocking() as acquired:
+        if not acquired:
+            log.warning(
+                "ingest (%s) skipped: another run is still in flight", trigger
+            )
+            return {
+                "skipped": True,
+                "reason": "ingest already running",
+                "trigger": trigger,
+            }
+        return run_ingest_locked(trigger)
 
+
+def _open_run(started: datetime, trigger: str) -> int:
+    """Insert the ingest_runs row, returning its id."""
     with db.viz_conn() as c, c.cursor() as cur:
         cur.execute(
             "INSERT INTO ingest_runs (started_at, trigger) VALUES (%s, %s) "
@@ -129,13 +148,180 @@ def run_ingest_locked(trigger: str) -> dict:
         )
         run_id = cur.fetchone()[0]
         c.commit()
+    return run_id
+
+
+def _existing_files() -> dict:
+    """file_key → (etag, parser_version) for reparse decisions."""
+    with db.viz_conn() as c:
+        return {
+            row[0]: (row[1], row[2])
+            for row in c.execute(
+                "SELECT file_key, r2_etag, parser_version FROM files"
+            ).fetchall()
+        }
+
+
+def _jsonl_suffix_len(key: str) -> int:
+    """Length of the object's JSONL suffix, or 0 for non-transcripts.
+
+    Objects may be stored plain or per-object xz-compressed; r2
+    get_object/get_stream inflate `.xz` transparently. Strip the
+    matched suffix so the stem (and thus is_main) is unaffected by
+    compression.
+    """
+    if key.endswith(".jsonl.xz"):
+        return len(".jsonl.xz")
+    if key.endswith(".jsonl"):
+        return len(".jsonl")
+    return 0
+
+
+def _track_project(seen_projects: dict[str, dict], project_id: str,
+                   last_modified) -> None:
+    """Accumulate first/last seen mtimes for one project."""
+    proj = seen_projects.setdefault(project_id, {
+        "project_id": project_id,
+        "display_name": project_id,
+        "first_seen_at": last_modified,
+        "last_seen_at": last_modified,
+    })
+    if last_modified < proj["first_seen_at"]:
+        proj["first_seen_at"] = last_modified
+    if last_modified > proj["last_seen_at"]:
+        proj["last_seen_at"] = last_modified
+
+
+def _collect_todo(existing: dict, parser_version: str) -> tuple:
+    """Walk the bucket: count objects, remember live keys, and queue the
+    files whose etag/parser_version says they need (re)parsing.
+
+    Returns (listed, todo, seen_keys); todo holds (obj, proj, stored) per
+    file needing work, fetched+parsed later on a pool. project_id,
+    session_id and is_main are derived from the key again in _persist.
+    """
+    listed = 0
+    seen_keys: set[str] = set()
+    seen_projects: dict[str, dict] = {}
+    todo: list[tuple] = []
+    for obj in r2.list_keys():
+        if not _jsonl_suffix_len(obj.key):
+            continue
+        parts = obj.key.split("/")
+        if len(parts) < 3:
+            continue
+        listed += 1
+        seen_keys.add(obj.key)
+        _track_project(seen_projects, parts[0], obj.last_modified)
+
+        stored = existing.get(obj.key)
+        need_reparse = (
+            stored is None
+            or stored[0] != obj.etag
+            or stored[1] != parser_version
+        )
+        if need_reparse:
+            todo.append((obj, seen_projects[parts[0]], stored))
+    return listed, todo, seen_keys
+
+
+def _fetch_parse_persist(todo: list[tuple], parser_version: str,
+                         failed: list[tuple[str, str]]) -> tuple[int, int]:
+    """Fetch+parse the queued files on a pool, persist on this thread.
+
+    Fetch + parse is ~88% of per-file wall time and is network-bound
+    (one R2 GET each), so it runs on a thread pool. Persistence stays
+    on this thread: the per-file transaction boundary, and therefore
+    ordering and failure semantics, are exactly as before. Work is
+    submitted in bounded chunks so an 8k-file reparse does not hold
+    every inflated blob in memory at once.
+
+    Returns (inserted, reparsed).
+    """
+    inserted = 0
+    reparsed = 0
+    _set_progress(phase="parsing", total=len(todo), done=0)
+    workers = worker_count()
+    chunk = max(1, workers * 4)
+    for start in range(0, len(todo), chunk):
+        batch = todo[start:start + chunk]
+        for (obj, proj, stored), parsed, exc in _resolve(
+            batch, lambda it: _fetch_and_parse(it[0].key), workers
+        ):
+            if exc is not None:
+                _record_failure(failed, obj.key, exc)
+                continue
+            _persist(obj, proj, parsed, parser_version)
+            if stored is None:
+                inserted += 1
+            else:
+                reparsed += 1
+            _set_progress(done=inserted + reparsed)
+    return inserted, reparsed
+
+
+def _delete_orphans(seen_keys: set[str]) -> int:
+    """Drop files rows whose R2 key is gone. CASCADE drops records."""
+    _set_progress(phase="orphans")
+    with db.viz_conn() as c, c.cursor() as cur:
+        if seen_keys:
+            cur.execute(
+                "DELETE FROM files WHERE file_key != ALL(%s) RETURNING 1",
+                (list(seen_keys),),
+            )
+        else:
+            cur.execute("DELETE FROM files RETURNING 1")
+        deleted = len(cur.fetchall())
+        c.commit()
+    return deleted
+
+
+def _close_run(run_id: int, finished: datetime, listed: int, reparsed: int,
+               inserted: int, deleted: int, err: str | None) -> None:
+    """Write the final counters onto the ingest_runs row."""
+    with db.viz_conn() as c, c.cursor() as cur:
+        cur.execute(
+            "UPDATE ingest_runs SET finished_at=%s, r2_listed=%s, "
+            "reparsed=%s, inserted=%s, deleted=%s, error=%s WHERE id=%s",
+            (finished, listed, reparsed, inserted, deleted, err, run_id),
+        )
+        c.commit()
+
+
+def _rebuild_derived_state() -> None:
+    """Canonical flags, then the rollups that read them."""
+    # Order matters: the rollup reads is_canonical.
+    _set_progress(phase="canonical")
+    recompute_canonical()
+    _set_progress(phase="usage_rollup")
+    rebuild_rollup()
+    _set_progress(phase="tool_rollup")
+    rebuild_tool_rollup()
+    _set_progress(phase="latency_rollup")
+    rebuild_latency_rollup()
+
+
+def _walk_and_persist(parser_version: str,
+                      failed: list[tuple[str, str]]) -> tuple[int, int, int, int]:
+    """The fallible body of a run: list, fetch+parse+persist, orphan sweep.
+
+    Returns (listed, inserted, reparsed, deleted). Exceptions propagate to
+    run_ingest_locked, which books them as the run-level `fatal`.
+    """
+    listed, todo, seen_keys = _collect_todo(_existing_files(), parser_version)
+    inserted, reparsed = _fetch_parse_persist(todo, parser_version, failed)
+    deleted = _delete_orphans(seen_keys)
+    return listed, inserted, reparsed, deleted
+
+
+def run_ingest_locked(trigger: str) -> dict:
+    started = datetime.now(timezone.utc)
+    parser_version = os.environ.get("PARSER_VERSION", "1")
+    run_id = _open_run(started, trigger)
 
     _set_progress(phase="listing", done=0, total=0,
                   run_id=run_id, started_at=started.isoformat())
-    listed = 0
-    inserted = 0
-    reparsed = 0
-    deleted = 0
+    listed = inserted = reparsed = deleted = 0
     # Per-object failures (key, message). Recorded in the run's `error`, but
     # deliberately NOT used to gate anything: one dropped connection out of
     # 9,213 files is a run with a retry pending, not a failed run.
@@ -144,107 +330,9 @@ def run_ingest_locked(trigger: str) -> dict:
     fatal = None
 
     try:
-        # Cache existing file_key → (etag, parser_version) for reparse decisions
-        with db.viz_conn() as c:
-            existing = {
-                row[0]: (row[1], row[2])
-                for row in c.execute(
-                    "SELECT file_key, r2_etag, parser_version FROM files"
-                ).fetchall()
-            }
-
-        seen_keys: set[str] = set()
-        seen_projects: dict[str, dict] = {}
-        # (obj, proj, project_id, session_id, is_main, stored) per file
-        # needing work; fetched+parsed below on a pool.
-        todo: list[tuple] = []
-
-        for obj in r2.list_keys():
-            # Objects may be stored plain or per-object xz-compressed; r2
-            # get_object/get_stream inflate `.xz` transparently. Strip the
-            # matched suffix so the stem (and thus is_main) is unaffected by
-            # compression.
-            if obj.key.endswith(".jsonl.xz"):
-                suffix_len = len(".jsonl.xz")
-            elif obj.key.endswith(".jsonl"):
-                suffix_len = len(".jsonl")
-            else:
-                continue
-            parts = obj.key.split("/")
-            if len(parts) < 3:
-                continue
-            project_id = parts[0]
-            session_dir = parts[1]
-            fname = parts[-1]
-            stem = fname[:-suffix_len]
-            is_main = (stem == session_dir)
-            session_id = session_dir
-            listed += 1
-            seen_keys.add(obj.key)
-
-            proj = seen_projects.setdefault(project_id, {
-                "project_id": project_id,
-                "display_name": project_id,
-                "first_seen_at": obj.last_modified,
-                "last_seen_at": obj.last_modified,
-            })
-            if obj.last_modified < proj["first_seen_at"]:
-                proj["first_seen_at"] = obj.last_modified
-            if obj.last_modified > proj["last_seen_at"]:
-                proj["last_seen_at"] = obj.last_modified
-
-            stored = existing.get(obj.key)
-            need_reparse = (
-                stored is None
-                or stored[0] != obj.etag
-                or stored[1] != parser_version
-            )
-            if not need_reparse:
-                continue
-
-            todo.append((obj, proj, project_id, session_id, is_main, stored))
-
-        # Fetch + parse is ~88% of per-file wall time and is network-bound
-        # (one R2 GET each), so it runs on a thread pool. Persistence stays
-        # on this thread: the per-file transaction boundary, and therefore
-        # ordering and failure semantics, are exactly as before. Work is
-        # submitted in bounded chunks so an 8k-file reparse does not hold
-        # every inflated blob in memory at once.
-        _set_progress(phase="parsing", total=len(todo), done=0)
-        workers = worker_count()
-        chunk = max(1, workers * 4)
-        for start in range(0, len(todo), chunk):
-            batch = todo[start:start + chunk]
-            for item, parsed, exc in _resolve(
-                batch, lambda it: _fetch_and_parse(it[0].key), workers
-            ):
-                obj, proj, project_id, session_id, is_main, stored = item
-                if exc is not None:
-                    _record_failure(failed, obj.key, exc)
-                    continue
-                _persist(
-                    obj, proj, project_id, session_id, is_main,
-                    parsed, parser_version,
-                )
-                if stored is None:
-                    inserted += 1
-                else:
-                    reparsed += 1
-                _set_progress(done=inserted + reparsed)
-
-        _set_progress(phase="orphans")
-        # Orphan files
-        with db.viz_conn() as c, c.cursor() as cur:
-            if seen_keys:
-                cur.execute(
-                    "DELETE FROM files WHERE file_key != ALL(%s) RETURNING 1",
-                    (list(seen_keys),),
-                )
-            else:
-                cur.execute("DELETE FROM files RETURNING 1")
-            deleted = len(cur.fetchall())
-            c.commit()
-
+        listed, inserted, reparsed, deleted = _walk_and_persist(
+            parser_version, failed
+        )
     except Exception as e:  # noqa: BLE001
         fatal = f"{type(e).__name__}: {e}"
 
@@ -252,13 +340,7 @@ def run_ingest_locked(trigger: str) -> dict:
     err = fatal if fatal is not None else failure_summary(failed)
 
     finished = datetime.now(timezone.utc)
-    with db.viz_conn() as c, c.cursor() as cur:
-        cur.execute(
-            "UPDATE ingest_runs SET finished_at=%s, r2_listed=%s, "
-            "reparsed=%s, inserted=%s, deleted=%s, error=%s WHERE id=%s",
-            (finished, listed, reparsed, inserted, deleted, err, run_id),
-        )
-        c.commit()
+    _close_run(run_id, finished, listed, reparsed, inserted, deleted, err)
 
     summary = {
         "id": run_id,
@@ -277,15 +359,7 @@ def run_ingest_locked(trigger: str) -> dict:
     # a thousand could not be fetched is what leaves the rollups and
     # is_canonical describing the PREVIOUS dataset until the next clean run.
     if fatal is None:
-        # Order matters: the rollup reads is_canonical.
-        _set_progress(phase="canonical")
-        recompute_canonical()
-        _set_progress(phase="usage_rollup")
-        rebuild_rollup()
-        _set_progress(phase="tool_rollup")
-        rebuild_tool_rollup()
-        _set_progress(phase="latency_rollup")
-        rebuild_latency_rollup()
+        _rebuild_derived_state()
 
     # Data changed: mark the response cache stale, then notify connected
     # SSE clients so the dashboard re-fetches without a page reload.
@@ -577,8 +651,6 @@ def warm_common() -> None:
     if os.environ.get("CLAUDIT_WARM_CACHE", "1").lower() in ("0", "false", "no"):
         return
 
-    from backend import api
-
     # Every range the picker offers, so no button lands on a cold query.
     # Must mirror RangePicker's preset values in src/app.jsx — a range the
     # UI can request but this does not list is a permanently cold key.
@@ -721,9 +793,12 @@ def _fetch_and_parse(key: str) -> dict:
     return parse.parse_file(key, _fetch_with_retry(key))
 
 
-def _persist(obj, proj, project_id, session_id, is_main, parsed,
-             parser_version) -> None:
+def _persist(obj, proj, parsed, parser_version) -> None:
     """One file, one transaction — identical to the pre-pool behaviour."""
+    parts = obj.key.split("/")
+    project_id, session_id = parts[0], parts[1]
+    stem = parts[-1][:-_jsonl_suffix_len(obj.key)]
+    is_main = stem == session_id
     with db.viz_conn() as c, c.cursor() as cur:
         # Project upsert. first_seen_at uses LEAST so a later
         # ingest seeing an older file drags it backward.
