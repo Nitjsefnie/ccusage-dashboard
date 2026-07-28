@@ -1,0 +1,21 @@
+[MASTER]
+
+[MESSAGES CONTROL]
+disable=
+    line-too-long,
+    missing-function-docstring,
+    missing-module-docstring,
+    missing-class-docstring,
+    unused-argument,
+    arguments-differ,
+    import-error,
+    invalid-name,
+    no-name-in-module,
+    broad-exception-caught,
+    broad-exception-raised,
+    global-statement,
+    too-few-public-methods
+max-attributes=30
+max-args=10
+max-positional-arguments=10
+min-similarity-lines=15

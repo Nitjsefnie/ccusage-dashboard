@@ -1,0 +1,77 @@
+{
+    "root": true,
+    "env": {
+        "browser": true,
+        "es2024": true
+    },
+    "parserOptions": {
+        "ecmaVersion": 2024,
+        "sourceType": "script",
+        "ecmaFeatures": {
+            "jsx": true
+        }
+    },
+    "plugins": ["react"],
+    "settings": {
+        "react": {
+            "version": "18.3.1"
+        }
+    },
+    "globals": {
+        "React": "readonly",
+        "ReactDOM": "readonly",
+        "BACKEND_URL": "readonly",
+        "ActivityHeatmapPanel": "readonly",
+        "App": "readonly",
+        "BurnRatePanel": "readonly",
+        "CacheTTLPanel": "readonly",
+        "CacheView": "readonly",
+        "CodeBlock": "readonly",
+        "ContextGrowthAgg": "readonly",
+        "ContextGrowthPanel": "readonly",
+        "ContextGrowthSessionDetail": "readonly",
+        "ContextGrowthView": "readonly",
+        "DashTooltip": "readonly",
+        "EventDetail": "readonly",
+        "HBar": "readonly",
+        "KV": "readonly",
+        "ReplyLatencyPanel": "readonly",
+        "ResponseSizesPanel": "readonly",
+        "TimeSeriesPanel": "readonly",
+        "TOOL_COLORS": "readonly",
+        "TYPE_META": "readonly",
+        "ToolErrorRatePanel": "readonly",
+        "ToolUsagePanel": "readonly",
+        "VBar": "readonly",
+        "capForModel": "readonly",
+        "computeSessionStats": "readonly",
+        "dashboardCol": "readonly",
+        "dashboardTheme": "readonly",
+        "datedRates": "readonly",
+        "eventOneLine": "readonly",
+        "fmtDate": "readonly",
+        "generateSyntheticData": "readonly",
+        "humanCurrency": "readonly",
+        "humanFmt": "readonly",
+        "inputPreview": "readonly",
+        "modelColors": "readonly",
+        "modelRates": "readonly",
+        "parseTranscript": "readonly",
+        "rateEpochs": "readonly",
+        "rateForModel": "readonly",
+        "renderEditDiff": "readonly",
+        "resolveModelRate": "readonly",
+        "shortModelName": "readonly",
+        "shortTime": "readonly",
+        "timeTicksUTC": "readonly",
+        "toolGlyph": "readonly",
+        "usageCtxInput": "readonly"
+    },
+    "rules": {
+        "no-undef": "error",
+        "no-unused-vars": "error",
+        "react/jsx-no-undef": ["error", { "allowGlobals": true }],
+        "react/jsx-uses-vars": "error",
+        "react/jsx-uses-react": "error"
+    }
+}

@@ -1,0 +1,10 @@
+# Lint / format / type-check toolchain (issue #8). Versions pinned so a
+# tool release cannot turn CI red on an unchanged commit.
+# Test-runner deps (pytest, pytest-asyncio, httpx) are already pinned in
+# backend/requirements.txt.
+autoflake==2.3.3
+autopep8==2.3.2
+isort==8.0.1
+pycodestyle==2.14.0
+pylint==4.0.6
+pyright==1.1.408

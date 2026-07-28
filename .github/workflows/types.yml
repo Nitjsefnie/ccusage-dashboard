@@ -1,0 +1,52 @@
+name: types
+
+# Type gate (issue #8): pyright at `basic` — strict on an existing
+# codebase produces noise that gets ignored, which is worse than no
+# check. Config is checked in (pyrightconfig.json) so CI and every editor
+# use the same settings. This is also the one tool that owns
+# unresolved-import reporting; pylint's import-error stays disabled.
+
+on:
+  push:
+    paths-ignore:
+      - '**/*.md'
+      - 'PRESENTATION.txt'
+      - 'docs/**'
+      - 'examples/**'
+      - '.claude/**'
+      - 'LICENSE'
+      - 'NOTICE'
+      - '.gitignore'
+  pull_request_review:
+    types: [submitted]
+
+concurrency:
+  group: types-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pyright:
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'push' ||
+      github.event.review.state == 'approved'
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install dependencies
+        # Runtime deps too, so pyright resolves third-party imports
+        # instead of reporting them all as missing.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt -r requirements-dev.txt
+
+      - name: pyright
+        run: pyright

@@ -1,0 +1,60 @@
+name: eslint
+
+# Frontend lint gate (issue #8): eslint over src/*.js and src/*.jsx.
+#
+# The app deliberately has NO bundler and NO build step — React is loaded
+# via in-browser Babel, and the src files are classic browser scripts that
+# share globals across <script> tags (window.HBar, window.humanCurrency,
+# ...). The checked-in .eslintrc.json reflects that reality:
+# sourceType "script", env browser, and a globals list derived from
+# public/index.html (React/ReactDOM CDN scripts, BACKEND_URL) plus every
+# name the src files attach to window (window.X = ... and the
+# Object.assign(window, {...}) block in event-helpers.jsx).
+#
+# The value here is no-undef / no-unused-vars — an undefined variable in
+# a component should be found by CI, not by a user. Stylistic rules stay
+# off, consistent with the Python gate.
+#
+# There is deliberately NO package.json: versions are pinned right here,
+# installed with --no-save into the (gitignored) node_modules, so the
+# repo does not read as having adopted a build step.
+
+on:
+  push:
+    paths-ignore:
+      - '**/*.md'
+      - 'PRESENTATION.txt'
+      - 'docs/**'
+      - 'examples/**'
+      - '.claude/**'
+      - 'LICENSE'
+      - 'NOTICE'
+      - '.gitignore'
+  pull_request_review:
+    types: [submitted]
+
+concurrency:
+  group: eslint-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  eslint:
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'push' ||
+      github.event.review.state == 'approved'
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install eslint (pinned, no package.json, no build step)
+        run: npm install --no-save --no-package-lock --no-audit --no-fund eslint@8.57.1 eslint-plugin-react@7.37.5
+
+      - name: eslint
+        run: npx --no-install eslint 'src/**/*.js' 'src/**/*.jsx'
