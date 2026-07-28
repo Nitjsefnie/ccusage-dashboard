@@ -1,0 +1,21 @@
+# Baseline before PARSER_VERSION 17 -> 18 reparse (tool_use fix)
+2026-07-28T08:59:52+02:00
+records=302223 canonical=291920
+tool_uses=80750 distinct_ids=80750
+files=9284 projects=68
+cost=53485.4596 tokens=62340391187 requests=291920
+# per-tool counts:
+  Bash=38950
+  Read=20150
+  Edit=9843
+  Write=1529
+  WebSearch=1355
+  WebFetch=1097
+  Grep=1023
+  TaskUpdate=906
+  mcp__daedalus__exec=875
+  Agent=667
+  Monitor=550
+  TaskCreate=443
+# tool_rollup:
+  rows=11243 n_total=80750 n_rated=80690 n_error=3470

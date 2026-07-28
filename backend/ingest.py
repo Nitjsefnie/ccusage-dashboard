@@ -21,6 +21,7 @@ import json
 import logging
 import lzma
 import os
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
@@ -30,6 +31,25 @@ from botocore.exceptions import BotoCoreError, ClientError
 from backend import cache, db, events, parse, r2
 
 log = logging.getLogger("claudit.ingest")
+
+# Live ingest progress, for /health. Held in memory rather than written to
+# ingest_runs: that row's counters are only filled by the final UPDATE, so for
+# the minutes a full reparse takes /health could report nothing at all. Single
+# process (no --workers), so the scheduler thread that mutates this and the
+# request thread that reads it share an interpreter.
+_PROGRESS: dict = {"phase": "idle", "done": 0, "total": 0,
+                   "run_id": None, "started_at": None}
+_PROGRESS_LOCK = threading.Lock()
+
+
+def progress_snapshot() -> dict:
+    with _PROGRESS_LOCK:
+        return dict(_PROGRESS)
+
+
+def _set_progress(**kw) -> None:
+    with _PROGRESS_LOCK:
+        _PROGRESS.update(kw)
 
 # What the fetch retry treats as transient. None of the boto3 failures is an
 # OSError — ConnectionClosedError and EndpointConnectionError are
@@ -82,6 +102,8 @@ def run_ingest(trigger: str) -> dict:
         run_id = cur.fetchone()[0]
         c.commit()
 
+    _set_progress(phase="listing", done=0, total=0,
+                  run_id=run_id, started_at=started.isoformat())
     listed = 0
     inserted = 0
     reparsed = 0
@@ -160,6 +182,7 @@ def run_ingest(trigger: str) -> dict:
         # ordering and failure semantics, are exactly as before. Work is
         # submitted in bounded chunks so an 8k-file reparse does not hold
         # every inflated blob in memory at once.
+        _set_progress(phase="parsing", total=len(todo), done=0)
         workers = _worker_count()
         chunk = max(1, workers * 4)
         for start in range(0, len(todo), chunk):
@@ -179,7 +202,9 @@ def run_ingest(trigger: str) -> dict:
                     inserted += 1
                 else:
                     reparsed += 1
+                _set_progress(done=inserted + reparsed)
 
+        _set_progress(phase="orphans")
         # Orphan files
         with db.viz_conn() as c, c.cursor() as cur:
             if seen_keys:
@@ -225,9 +250,13 @@ def run_ingest(trigger: str) -> dict:
     # is_canonical describing the PREVIOUS dataset until the next clean run.
     if fatal is None:
         # Order matters: the rollup reads is_canonical.
+        _set_progress(phase="canonical")
         recompute_canonical()
+        _set_progress(phase="usage_rollup")
         rebuild_rollup()
+        _set_progress(phase="tool_rollup")
         rebuild_tool_rollup()
+        _set_progress(phase="latency_rollup")
         rebuild_latency_rollup()
 
     # Data changed: mark the response cache stale, then notify connected
@@ -245,7 +274,9 @@ def run_ingest(trigger: str) -> dict:
         events.broadcast_threadsafe("ingest_done", summary)
 
     if fatal is None:
+        _set_progress(phase="warming")
         warm_common()
+    _set_progress(phase="idle", done=0, total=0)
     return summary
 
 

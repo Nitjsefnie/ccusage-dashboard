@@ -121,8 +121,29 @@ def health() -> dict:
             "parser_version": parser_version,
             "now": datetime.now(timezone.utc).isoformat(),
         }
+    # Live progress for the run in flight. ingest_runs only gains its
+    # counters in the final UPDATE, and the derived-state rebuilds happen
+    # AFTER finished_at is written — so a caller watching that row alone
+    # sees nothing for minutes, then "done" while rebuilds are still going.
+    from backend import ingest as _ingest
+    prog = _ingest.progress_snapshot()
+    running = prog.get("phase") not in (None, "idle")
+    ingest_progress = None
+    if running:
+        done, total = prog.get("done") or 0, prog.get("total") or 0
+        ingest_progress = {
+            "phase": prog.get("phase"),
+            "done": done,
+            "total": total,
+            "pct": round(100.0 * done / total, 1) if total else None,
+            "run_id": prog.get("run_id"),
+            "started_at": prog.get("started_at"),
+        }
+
     return {
         "ok": True, "db": True,
+        "ingest_running": running,
+        "ingest_progress": ingest_progress,
         "last_ingest": last_ingest,
         "parser_version": parser_version,
         "now": datetime.now(timezone.utc).isoformat(),
