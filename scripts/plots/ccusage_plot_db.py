@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Plot Claude Code usage by reading the claudit Postgres DB.
 
-Mirror of ccusage_plot.py (upstream nhz-io/ccusage-plot) with the JSONL
-walker swapped for a `claudit` SELECT — uses backend/parse.py's already-
-deduped + cost-priced `records` rows. DSN comes from DATABASE_URL_VIZ in
-the env or .env at the repo root."""
+A database-backed rewrite that shares an ancestor with ccusage_plot.py
+(upstream nhz-io/ccusage-plot), with the JSONL walker swapped for a
+`claudit` SELECT — uses backend/parse.py's already-deduped + cost-priced
+`records` rows. DSN comes from DATABASE_URL_VIZ in the env or .env at the
+repo root."""
 
 __version__ = "1.2.0-db"
 
@@ -14,7 +15,6 @@ import os
 import re
 import subprocess
 import sys
-import urllib.request
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -1188,73 +1188,6 @@ def plot_timeline(events, period_str, output_path, tz=None, highlight=None, proj
     print(f"Saved: {output_path}", file=sys.stderr)
 
 
-SCRIPT_URL = "https://raw.githubusercontent.com/nhz-io/ccusage-plot/main/ccusage_plot.py"
-
-
-def _resolve_script_path():
-    """Find the real path of this script, resolving symlinks and verifying identity."""
-    # resolve() follows symlinks and makes the path absolute
-    candidate = Path(__file__).resolve()
-
-    # If running via stdin (curl pipe), __file__ won't be a real path
-    if not candidate.is_file():
-        return None
-
-    # Verify this is actually our script by checking for our version string
-    try:
-        content = candidate.read_text(encoding="utf-8")
-        if f'__version__ = "{__version__}"' not in content:
-            return None
-    except Exception:
-        return None
-
-    return candidate
-
-
-def check_update(target_path=None):
-    """Check for a newer version and auto-update if available."""
-    script_path = Path(target_path).resolve() if target_path else _resolve_script_path()
-
-    if script_path is None:
-        print(
-            "Error: cannot determine script location (running via pipe?).\n"
-            "Use: --update /path/to/ccusage_plot.py",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    print(f"Script location: {script_path}", file=sys.stderr)
-
-    try:
-        with urllib.request.urlopen(SCRIPT_URL, timeout=10) as resp:
-            remote_source = resp.read().decode("utf-8")
-    except Exception as e:
-        print(f"Error checking for updates: {e}", file=sys.stderr)
-        sys.exit(1)
-
-    # Extract remote version
-    m = re.search(r'^__version__\s*=\s*["\']([^"\']+)["\']', remote_source, re.MULTILINE)
-    if not m:
-        print("Error: could not determine remote version.", file=sys.stderr)
-        sys.exit(1)
-
-    remote_version = m.group(1)
-    if remote_version == __version__:
-        print(f"Already up to date (v{__version__}).", file=sys.stderr)
-        sys.exit(0)
-
-    # Update in place
-    try:
-        script_path.write_text(remote_source, encoding="utf-8")
-        # Set executable bit on Unix (no-op on Windows)
-        if sys.platform != "win32":
-            script_path.chmod(script_path.stat().st_mode | 0o111)
-        print(f"Updated: v{__version__} -> v{remote_version}", file=sys.stderr)
-    except Exception as e:
-        print(f"Error writing update: {e}", file=sys.stderr)
-        sys.exit(1)
-
-
 def main():
     global DB_URL
     parser = argparse.ArgumentParser(
@@ -1264,14 +1197,6 @@ def main():
         "-v", "--version",
         action="version",
         version=f"%(prog)s {__version__}",
-    )
-    parser.add_argument(
-        "--update",
-        nargs="?",
-        const=True,
-        default=None,
-        metavar="PATH",
-        help="Auto-update to the latest version from GitHub. Optionally specify script path.",
     )
     parser.add_argument(
         "-p",
@@ -1322,11 +1247,6 @@ def main():
     args = parser.parse_args()
 
     DB_URL = _resolve_db_url(args.db_url)
-
-    if args.update is not None:
-        target = None if args.update is True else args.update
-        check_update(target_path=target)
-        sys.exit(0)
 
     tz = resolve_tz(args.tz) if args.tz else None
 
