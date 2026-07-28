@@ -563,6 +563,67 @@ function HBar({ title, rows, totalForPct, fmt, fixedColors, embedded }) {
   );
 }
 
+// --- Rotated axis-label geometry (Cost by Project) ---
+// VBar's x labels are end-anchored and rotated -VBAR_LABEL_ANGLE°, so a
+// label extends down-and-to-the-left from its anchor. A line of pixel
+// length L sitting on wrapped line k (0-based, dy = k * lineH) reaches
+//   depth = k * lineH * cos(A) + L * sin(A)
+// below the anchor — the dy step is rotated with the text, so each extra
+// line costs lineH*cos(A) vertically and shifts the line start RIGHT by
+// lineH*sin(A). padB is derived from the deepest wrapped label through
+// these helpers instead of being fixed, so long names are never clipped
+// and short names get no empty gutter. Pure functions (no DOM) so the
+// node-driven tests can drive them.
+const VBAR_LABEL_ANGLE = 35;  // degrees; matches rotate(-35 ...) below
+const VBAR_LABEL_FS = 10;     // px; matches the label <text> fontSize
+const VBAR_LABEL_LINE_H = VBAR_LABEL_FS * 1.2;
+const VBAR_LABEL_Y = 10;      // anchor offset below the x axis
+
+// Hard-wrap into lines of at most maxChars — wrapping, never truncation:
+// every character of the label survives on some line.
+function wrapAxisLabel(label, maxChars) {
+  const s = String(label);
+  const n = Math.max(1, Math.floor(maxChars));
+  const lines = [];
+  for (let i = 0; i < s.length; i += n) lines.push(s.slice(i, i + n));
+  return lines.length ? lines : [''];
+}
+
+// Vertical space below the anchor consumed by one wrapped label: the max
+// over its lines of (rotated line step + rotated line length).
+function axisLabelDepthPx(lines, charPx, lineH, angleDeg) {
+  const rad = angleDeg * Math.PI / 180;
+  const sin = Math.sin(rad), cos = Math.cos(rad);
+  let depth = 0;
+  for (let k = 0; k < lines.length; k++) {
+    depth = Math.max(depth, k * lineH * cos + lines[k].length * charPx * sin);
+  }
+  return depth;
+}
+
+// Chars per wrapped line: cap a line's horizontal projection (L*cos(A))
+// at the bar slot so neighbours don't overlap, and at padL + slot/2 so
+// the leftmost label — anchored only slot/2 + padL from the SVG's left
+// edge — cannot cross it.
+function axisLabelMaxChars(slot, padL, charPx, angleDeg) {
+  const cos = Math.cos(angleDeg * Math.PI / 180);
+  const capPx = Math.min(slot, padL + slot / 2) / cos;
+  return Math.max(1, Math.floor(capPx / charPx));
+}
+
+// Bottom padding: anchor offset + deepest wrapped label + one
+// line-height of descent/clearance below the deepest baseline point.
+function vbarPadB(rows, slot, padL, charPx) {
+  const maxChars = axisLabelMaxChars(slot, padL, charPx, VBAR_LABEL_ANGLE);
+  let depth = 0;
+  for (const r of rows) {
+    depth = Math.max(depth, axisLabelDepthPx(
+      wrapAxisLabel(r.label, maxChars), charPx, VBAR_LABEL_LINE_H,
+      VBAR_LABEL_ANGLE));
+  }
+  return { padB: VBAR_LABEL_Y + depth + VBAR_LABEL_LINE_H, maxChars };
+}
+
 // --- Vertical bar chart (column) ---
 // The transpose of HBar, for Cost by Project: with ~11 short-valued
 // categories the horizontal form wasted most of its width on a label
@@ -581,12 +642,17 @@ function VBar({ title, rows, fmt, fixedColors, embedded }) {
     return () => ro.disconnect();
   }, []);
 
-  const padT = 44, padB = 104, padL = 12, padR = 12;
+  const padT = 44, padL = 12, padR = 12;
   const plotH = 210;
-  const h = padT + plotH + padB;
   const plotW = Math.max(10, w - padL - padR);
   const n = Math.max(1, rows.length);
   const slot = plotW / n;
+  // padB fits the tallest wrapped axis label (helpers above): a fixed
+  // gutter clipped long rotated names and wasted space under short ones.
+  const charPx = monoAdvancePx(VBAR_LABEL_FS);
+  const { padB, maxChars } = vbarPadB(rows, slot, padL, charPx);
+  const wrappedLabels = rows.map(r => wrapAxisLabel(r.label, maxChars));
+  const h = padT + plotH + padB;
   // Cap the bar so a 3-project range doesn't render three slabs; otherwise
   // take most of the slot — "bars can be wider" is the whole point of the
   // transpose.
@@ -645,14 +711,16 @@ function VBar({ title, rows, fmt, fixedColors, embedded }) {
                 textAnchor="middle" fontFamily="monospace">
                 {fmt ? fmt(r) : humanFmt(r.value)}
               </text>
-              <text x={cx} y={y - 4} fontSize="10" fill={TH.textDim || TH.text}
-                fillOpacity={0.75} textAnchor="middle" fontFamily="monospace">
+              <text x={cx} y={y - 4} fontSize="10" fill={TH.text}
+                textAnchor="middle" fontFamily="monospace">
                 ({pct}%)
               </text>
-              <text x={cx} y={padT + plotH + 10} fontSize="10" fill={TH.text}
-                textAnchor="end" fontFamily="monospace"
-                transform={`rotate(-35 ${cx} ${padT + plotH + 10})`}>
-                {r.label}
+              <text x={cx} y={padT + plotH + VBAR_LABEL_Y} fontSize={VBAR_LABEL_FS}
+                fill={TH.text} textAnchor="end" fontFamily="monospace"
+                transform={`rotate(-${VBAR_LABEL_ANGLE} ${cx} ${padT + plotH + VBAR_LABEL_Y})`}>
+                {wrappedLabels[idx].map((ln, li) => (
+                  <tspan key={li} x={cx} dy={li === 0 ? 0 : VBAR_LABEL_LINE_H}>{ln}</tspan>
+                ))}
               </text>
             </g>
           );
