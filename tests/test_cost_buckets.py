@@ -7,7 +7,8 @@ from datetime import timezone
 
 import pytest
 
-from backend import api, pricing
+from backend import pricing
+from backend.api_common import epoch_ts, fold_per_model, rate_epoch_sql
 
 UTC = timezone.utc
 
@@ -20,7 +21,7 @@ def _row(model, epoch, fresh=0, cc=0, cr=0, output=0, eph5=0, eph1h=0, cost=0.0)
 
 def test_buckets_sum_to_total_within_a_single_epoch():
     rows = [_row("claude-opus-4-8", 0, fresh=1_000_000, cost=5.00)]
-    out = api.fold_per_model(rows)
+    out = fold_per_model(rows)
     assert len(out) == 1
     m = out[0]
     assert m["cost_total"] == pytest.approx(5.00)
@@ -34,7 +35,7 @@ def test_buckets_sum_to_total_across_a_dated_rate_cutover():
         _row("claude-sonnet-5", 0, fresh=1_000_000, cost=2.00),
         _row("claude-sonnet-5", 1, fresh=1_000_000, cost=3.00),
     ]
-    out = api.fold_per_model(rows)
+    out = fold_per_model(rows)
     assert len(out) == 1, "epochs must fold into one row per model"
     m = out[0]
     assert m["fresh"] == 2_000_000
@@ -45,13 +46,13 @@ def test_buckets_sum_to_total_across_a_dated_rate_cutover():
 
 
 def test_epoch_index_selects_the_rate_in_force_for_that_window():
-    intro = api.epoch_ts(0)
-    listed = api.epoch_ts(1)
+    intro = epoch_ts(0)
+    listed = epoch_ts(1)
     assert pricing.rate_for("claude-sonnet-5", intro)["fresh"] == 2.00
     assert pricing.rate_for("claude-sonnet-5", listed)["fresh"] == 3.00
 
 
 def test_epoch_sql_expression_has_one_case_per_boundary():
-    expr, params = api.rate_epoch_sql("ts")
+    expr, params = rate_epoch_sql("ts")
     assert len(params) == len(pricing.RATE_EPOCHS)
     assert expr.count("CASE") == len(pricing.RATE_EPOCHS)

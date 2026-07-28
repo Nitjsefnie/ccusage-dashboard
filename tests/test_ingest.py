@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from backend import api, cache, db, ingest
+from backend.api_dashboard import dashboard
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -268,7 +269,7 @@ def test_warm_common_covers_every_warmed_range(fresh_db, mini_r2_env, monkeypatc
     ingest.run_ingest(trigger="manual")
 
     warmed = (
-        api.dashboard, api.activity_heatmap, api.tool_usage,
+        dashboard, api.activity_heatmap, api.tool_usage,
         api.tool_error_rate, api.reply_latency, api.list_projects,
     )
     # The warms run on a background pool; give them a bounded moment.
@@ -299,7 +300,7 @@ def _warm_key(fn, rng: str) -> str:
     for name, param in inspect.signature(target).parameters.items():
         default = param.default
         kwargs[name] = getattr(default, "default", default)
-    kwargs["range"] = rng
+    kwargs["rng"] = rng
     if "fresh" in kwargs:
         kwargs["fresh"] = 0
     return target.__qualname__ + ":" + repr(sorted(kwargs.items()))

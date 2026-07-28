@@ -12,7 +12,7 @@ import pytest
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
 
-from backend import api, cache, db, ingest, pricing
+from backend import api, api_export, cache, db, ingest, pricing
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -27,7 +27,7 @@ def _load_plot_db_module():
 
 
 def test_build_export_argv_period_and_project():
-    argv = api.build_export_argv("7d", "myproj", "/tmp/out.png")
+    argv = api_export.build_export_argv("7d", "myproj", "/tmp/out.png")
     assert "/tmp/out.png" in argv
     assert argv[argv.index("-p") + 1] == "7d"
     assert argv[argv.index("--project") + 1] == "myproj"
@@ -36,7 +36,7 @@ def test_build_export_argv_period_and_project():
 
 
 def test_build_export_argv_all_and_no_project():
-    argv = api.build_export_argv("all", None, "/tmp/out.png")
+    argv = api_export.build_export_argv("all", None, "/tmp/out.png")
     assert "--all" in argv
     assert "-p" not in argv
     assert "--project" not in argv
@@ -52,7 +52,7 @@ def test_export_returns_png_attachment(app_with_data, monkeypatch):
         with open(out_path, "wb") as fh:
             fh.write(b"\x89PNG\r\n\x1a\n" + b"fake")
 
-    monkeypatch.setattr(api, "_render_export", fake_render)
+    monkeypatch.setattr(api_export, "_render_export", fake_render)
 
     resp = app_with_data.get("/api/export?range=7d")
     assert resp.status_code == 200
@@ -65,7 +65,7 @@ def test_export_returns_png_attachment(app_with_data, monkeypatch):
 def test_export_bad_range_400(app_with_data, monkeypatch):
     async def fake_render(argv, out_path):  # should never be called
         raise AssertionError("render must not run on bad range")
-    monkeypatch.setattr(api, "_render_export", fake_render)
+    monkeypatch.setattr(api_export, "_render_export", fake_render)
     resp = app_with_data.get("/api/export?range=banana")
     assert resp.status_code == 400
 
@@ -73,7 +73,7 @@ def test_export_bad_range_400(app_with_data, monkeypatch):
 def test_export_render_timeout_returns_503(app_with_data, monkeypatch):
     async def fake_render(argv, out_path):
         raise HTTPException(503, "export render timed out")
-    monkeypatch.setattr(api, "_render_export", fake_render)
+    monkeypatch.setattr(api_export, "_render_export", fake_render)
     resp = app_with_data.get("/api/export?range=7d")
     assert resp.status_code == 503
 
@@ -81,7 +81,7 @@ def test_export_render_timeout_returns_503(app_with_data, monkeypatch):
 def test_export_render_failure_returns_500(app_with_data, monkeypatch):
     async def fake_render(argv, out_path):
         raise HTTPException(500, "export render failed")
-    monkeypatch.setattr(api, "_render_export", fake_render)
+    monkeypatch.setattr(api_export, "_render_export", fake_render)
     resp = app_with_data.get("/api/export?range=7d")
     assert resp.status_code == 500
 

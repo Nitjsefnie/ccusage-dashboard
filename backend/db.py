@@ -10,10 +10,26 @@ from __future__ import annotations
 
 import os
 from contextlib import contextmanager
+from typing import cast
+
+from psycopg.abc import Query
 from psycopg_pool import ConnectionPool
 
 _VIZ: ConnectionPool | None = None
 _AUTH: ConnectionPool | None = None
+
+
+def sql_text(query: str) -> Query:
+    """Mark a programmatically assembled query string as executable.
+
+    psycopg 3.2 types Cursor.execute() as taking a LiteralString, so a
+    static checker flags every runtime-built SQL string. The queries
+    passed through here are assembled exclusively from our own fragments
+    — branch-selected WHERE clauses, integer bucket widths — and user
+    input only ever reaches the DB as a %s parameter, so the
+    literal-only guarantee the type wants is upheld by construction.
+    """
+    return cast(Query, query)
 
 
 def viz_pool() -> ConnectionPool:

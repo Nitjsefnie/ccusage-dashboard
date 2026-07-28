@@ -30,6 +30,7 @@ from datetime import datetime, timezone
 from botocore.exceptions import BotoCoreError, ClientError
 
 from backend import api, cache, db, events, parse, r2
+from backend.api_dashboard import dashboard
 from backend.constants import LATENCY_BUCKETS
 
 log = logging.getLogger("claudit.ingest")
@@ -660,16 +661,16 @@ def warm_common() -> None:
     # below the rollups' 1h gate, so it is the one range still served by
     # live queries.)
     for rng in WARM_RANGES:
-        cache.warm(api.dashboard, range=rng)
-        cache.warm(api.activity_heatmap, range=rng)
-        cache.warm(api.tool_usage, range=rng)
-        cache.warm(api.tool_error_rate, range=rng)
-        cache.warm(api.reply_latency, range=rng)
+        cache.warm(dashboard, rng=rng)
+        cache.warm(api.activity_heatmap, rng=rng)
+        cache.warm(api.tool_usage, rng=rng)
+        cache.warm(api.tool_error_rate, rng=rng)
+        cache.warm(api.reply_latency, rng=rng)
         # /api/projects became range-scoped, so it needs warming per range
         # like everything else. Warming it bare took the endpoint's own
         # signature default ("30d") while the UI opens on "all", leaving
         # the one request every page load makes permanently uncached.
-        cache.warm(api.list_projects, range=rng)
+        cache.warm(api.list_projects, rng=rng)
     log.info("warm_common: queued %d range(s)", len(WARM_RANGES))
 
 
