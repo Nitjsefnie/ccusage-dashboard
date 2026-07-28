@@ -131,6 +131,9 @@ function App() {
   const [isGuest, setIsGuest] = useState(!!window.IS_GUEST);
 
   const backendOn = !!(window.BACKEND_URL && window.BACKEND_URL.length > 0);
+  // Bumped by the SSE listener on `ingest_done`; declared up here because
+  // the projects fetch below lists it as a dependency.
+  const [dashNonce, setDashNonce] = useState(0);
 
   // Synthetic data is the no-backend demo dataset. When a backend is
   // configured its numbers are thrown away the moment /api/dashboard
@@ -157,13 +160,16 @@ function App() {
   // is range-scoped server-side, so a range change must refetch it.
   // Skipped for guests — the endpoint is server-side blocked anyway,
   // and the picker isn't rendered in guest mode.
+  // Also re-runs on the SSE ingest nonce: a new project appearing in an
+  // ingest otherwise stays missing from the picker until a range change
+  // or a full reload.
   useEffect(() => {
     if (!backendOn || isGuest) return;
     fetch(`/api/projects?range=${encodeURIComponent(activeRange)}`, { credentials: 'same-origin' })
       .then(r => r.json())
       .then(b => setProjects(b.projects || []))
       .catch(err => console.error('projects fetch failed', err));
-  }, [backendOn, isGuest, activeRange]);
+  }, [backendOn, isGuest, activeRange, dashNonce]);
 
   // Model list — distinct raw model strings + counts. Frontend dedups
   // by short name (e.g. claude-opus-4-7-* → opus-4-7).
@@ -178,7 +184,6 @@ function App() {
   // Fetch dashboard whenever the active project / range / nonce change.
   // `dashNonce` is a counter bumped by the SSE listener below to trigger
   // a re-fetch without changing project/range.
-  const [dashNonce, setDashNonce] = useState(0);
   useEffect(() => {
     if (!backendOn) return;
     const q = activeProject ? `&project=${encodeURIComponent(activeProject)}` : '';
