@@ -12,7 +12,7 @@ I kept eyeballing my Claude Code spend, so I built something that stops guessing
 
 Read-only, no signup, loaded with my real data. Poke at every panel before you decide whether it's worth pointing at your own transcripts.
 
-Against my own history: **9,200 transcripts** · **1,391 sessions** · **296.8k requests** · **67 projects** · **60.9B tokens** · **$52.3k** · Jan–Jul 2026 — that's what you'll be clicking through.
+Against my own history: **9,284 transcripts** · **1,400 sessions** · **302.3k requests** · **68 projects** · **62.4B tokens** · **$53.5k** · Jan–Jul 2026 — that's what you'll be clicking through.
 
 ## :bug: Why another usage tool
 Most of them quietly get the accounting wrong. Two that bit me:
@@ -23,10 +23,12 @@ Most of them quietly get the accounting wrong. Two that bit me:
 
 :gear: claudit does per-requestId max-merge, TTL-split pricing, dated rate changes (Sonnet 5's intro price runs out Aug 31), and cross-file uuid dedup so sub-agent transcripts don't double-count their parent — 3.5% of my records are cross-file duplicates.
 
+:warning: And one I got wrong myself: a turn's tool calls land on JSONL lines *after* the first line of their `requestId`. Keying tool extraction on the first line looked like sensible dedupe and silently dropped **57-71%** of them. The premise was false too — every block id was already distinct, so there was nothing to dedupe. Fixing it took my recorded tool calls from **80,750 to 309,043**: I had been storing roughly one call in four.
+
 :mag: It also refuses to invent a price. An unrecognised model falls back to its family's rates and the response flags the figure as estimated, rather than presenting a guess as fact.
 
 ## :test_tube: Correctness
-**135 tests.** One walks every API response and asserts each field is actually read by the frontend — it found four that weren't, including 1 MB of context traces duplicating another field, and a `file_count` reporting 67,969 files for a project that has 2,173.
+**156 tests.** One walks every API response and asserts each field is actually read by the frontend — it found four that weren't, including 1 MB of context traces duplicating another field, and a `file_count` reporting 67,969 files for a project that has 2,173.
 
 ## :tools: Stack
 FastAPI + Postgres + React with **no build step** — in-browser Babel, no npm, no bundler. Ingest pulls from Cloudflare R2 or a local directory; there is no upload path, by design.
@@ -67,5 +69,5 @@ The first version re-derived all of history from raw rows on every request. Fixi
 /api/cache              19.1s       0.52s
 /api/reply-latency       0.44s      0.12s   (median)
 response payload         4.6 MB     982 KB  (243 KB gzipped)
-test suite             170s        64s
+test suite (per test)  1.26s      0.47s
 ```
