@@ -23,8 +23,6 @@ Most of them quietly get the accounting wrong. Two that bit me:
 
 :gear: claudit does per-requestId max-merge, TTL-split pricing, dated rate changes (Sonnet 5's intro price runs out Aug 31), and cross-file uuid dedup so sub-agent transcripts don't double-count their parent — 3.5% of my records are cross-file duplicates.
 
-:warning: And one I got wrong myself: a turn's tool calls land on JSONL lines *after* the first line of their `requestId`. Keying tool extraction on the first line looked like sensible dedupe and silently dropped **57-71%** of them. The premise was false too — every block id was already distinct, so there was nothing to dedupe. Fixing it took my recorded tool calls from **80,750 to 309,043**: I had been storing roughly one call in four.
-
 :mag: It also refuses to invent a price. An unrecognised model falls back to its family's rates and the response flags the figure as estimated, rather than presenting a guess as fact.
 
 ## :test_tube: Correctness
@@ -71,3 +69,44 @@ The first version re-derived all of history from raw rows on every request. Fixi
 response payload         4.6 MB     982 KB  (243 KB gzipped)
 test suite (per test)  1.26s      0.47s
 ```
+
+
+═══════════════════════════════════════════════════════════════
+MESSAGE 3 — follow-up
+═══════════════════════════════════════════════════════════════
+
+## :lady_beetle: Follow-up: I was storing one tool call in four
+
+The last post was about bugs *other* tools have. Here's one of mine, found after I'd already shipped the thing.
+
+Claude Code writes one JSONL line per content block. A turn's tool calls therefore land on lines **after** the first line of their `requestId` — so extracting them only from that first line silently drops the rest. Measured across three of my own sessions, the share of `tool_use` blocks sitting on a later line:
+
+```
+520 blocks -> 370 dropped   71%
+545 blocks -> 313 dropped   57%
+401 blocks -> 271 dropped   68%
+```
+
+The comment defending it said streaming duplicates carried the same blocks, so only the first should count. That premise was simply false: block count equalled *distinct id* count in every transcript I checked (520/520, 545/545, 401/401). There were no duplicates. It was discarding real calls to solve a problem that did not exist.
+
+Reparsing everything after keying on the globally-unique block id instead:
+
+```
+tool calls recorded   80,750  ->  309,043
+Bash                  38,950  ->  154,307
+Read                  20,150  ->   67,119
+```
+
+**Roughly one call in four was making it into the database.** Every tool-usage and tool-error-rate number I have published until now was drawn from that quarter.
+
+Three things worth taking from it:
+
+:one: **The dangerous comment is the one that sounds reasonable.** "Streaming dupes shouldn't be double-counted" is a real concern, so nobody questioned whether it applied here. Checking took one line: compare block count to distinct-id count.
+
+:two: **Two other implementations were already right.** The canonical parser and the in-browser one both parse content outside the requestId branch, gating only the token merge. My backend was the odd one out — a port that drifted, not a design decision. Three implementations of one spec means two can quietly disagree with the third.
+
+:three: **The totals looked fine throughout.** Cost, tokens and request counts were all correct, because the bug touched only tool extraction. Nothing about the dashboard looked broken — the tool panels just showed a smaller world than the real one.
+
+:mag: Credit to @Floral-Overcast, who found it in a fork and fixed it there. I verified it independently before porting — a good reminder that "the numbers look plausible" is not a test.
+
+:link: https://github.com/Nitjsefnie/claudit
