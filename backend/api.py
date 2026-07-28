@@ -217,7 +217,7 @@ _export_lock = asyncio.Semaphore(1)
 HEATMAP_TZ = "Europe/Prague"
 
 
-def _build_export_argv(rng: str, project: str | None, out_path: str) -> list[str]:
+def build_export_argv(rng: str, project: str | None, out_path: str) -> list[str]:
     """Construct the argv for the plot subprocess. The child inherits
     DATABASE_URL_VIZ from the environment, so the DSN is NOT passed on the
     command line (keeps credentials out of the process list)."""
@@ -270,7 +270,7 @@ async def export_png(
     fd, out_path = tempfile.mkstemp(suffix=".png", prefix="claudit_export_")
     os.close(fd)
     try:
-        argv = _build_export_argv(range, project, out_path)
+        argv = build_export_argv(range, project, out_path)
         async with _export_lock:
             await _render_export(argv, out_path)
         with open(out_path, "rb") as fh:

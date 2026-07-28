@@ -3,11 +3,16 @@ import json
 import os
 import shutil
 import tempfile
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import psycopg
 import pytest
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
+
+from backend import api, cache, db, ingest, pricing
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -22,8 +27,7 @@ def _load_plot_db_module():
 
 
 def test_build_export_argv_period_and_project():
-    from backend import api
-    argv = api._build_export_argv("7d", "myproj", "/tmp/out.png")
+    argv = api.build_export_argv("7d", "myproj", "/tmp/out.png")
     assert "/tmp/out.png" in argv
     assert argv[argv.index("-p") + 1] == "7d"
     assert argv[argv.index("--project") + 1] == "myproj"
@@ -32,8 +36,7 @@ def test_build_export_argv_period_and_project():
 
 
 def test_build_export_argv_all_and_no_project():
-    from backend import api
-    argv = api._build_export_argv("all", None, "/tmp/out.png")
+    argv = api.build_export_argv("all", None, "/tmp/out.png")
     assert "--all" in argv
     assert "-p" not in argv
     assert "--project" not in argv
@@ -41,8 +44,6 @@ def test_build_export_argv_all_and_no_project():
 
 
 def test_export_returns_png_attachment(app_with_data, monkeypatch):
-    from backend import api
-
     captured = {}
 
     async def fake_render(argv, out_path):
@@ -62,7 +63,6 @@ def test_export_returns_png_attachment(app_with_data, monkeypatch):
 
 
 def test_export_bad_range_400(app_with_data, monkeypatch):
-    from backend import api
     async def fake_render(argv, out_path):  # should never be called
         raise AssertionError("render must not run on bad range")
     monkeypatch.setattr(api, "_render_export", fake_render)
@@ -71,8 +71,6 @@ def test_export_bad_range_400(app_with_data, monkeypatch):
 
 
 def test_export_render_timeout_returns_503(app_with_data, monkeypatch):
-    from backend import api
-    from fastapi import HTTPException
     async def fake_render(argv, out_path):
         raise HTTPException(503, "export render timed out")
     monkeypatch.setattr(api, "_render_export", fake_render)
@@ -81,8 +79,6 @@ def test_export_render_timeout_returns_503(app_with_data, monkeypatch):
 
 
 def test_export_render_failure_returns_500(app_with_data, monkeypatch):
-    from backend import api
-    from fastapi import HTTPException
     async def fake_render(argv, out_path):
         raise HTTPException(500, "export render failed")
     monkeypatch.setattr(api, "_render_export", fake_render)
@@ -100,8 +96,7 @@ def test_plot_db_project_filter_subsets_events(app_with_data):
     assert all_events, "fixture should yield records"
 
     # Discover a real project_id from the test DB.
-    import psycopg
-    with psycopg.connect(mod.DB_URL) as conn, conn.cursor() as cur:
+    with closing(psycopg.connect(mod.DB_URL)) as conn, conn.cursor() as cur:
         cur.execute("SELECT DISTINCT project_id FROM files ORDER BY 1")
         project_ids = [r[0] for r in cur.fetchall()]
     assert len(project_ids) >= 2, "mini fixture has 2 projects"
@@ -126,30 +121,16 @@ def _build_api_client(mp, test_db: str):
     shutil.copytree(src, Path(tmp) / "r2")
     mp.setenv("R2_ENDPOINT", f"file://{tmp}/r2/")
 
-    from backend import db as _db
-    if _db._VIZ is not None:
-        try:
-            _db._VIZ.close()
-        except Exception:
-            pass
-    _db._VIZ = None
+    db.reset_viz_pool()
 
-    from backend import ingest
     ingest.run_ingest(trigger="manual")
 
-    from fastapi import FastAPI
-    from backend import api as api_mod
     a = FastAPI()
-    a.include_router(api_mod.router)
+    a.include_router(api.router)
 
     yield TestClient(a)
 
-    if _db._VIZ is not None:
-        try:
-            _db._VIZ.close()
-        except Exception:
-            pass
-    _db._VIZ = None
+    db.reset_viz_pool()
     shutil.rmtree(tmp)
     os.system(f"dropdb --if-exists {test_db} 2>/dev/null")
 
@@ -159,8 +140,8 @@ def _build_api_client(mp, test_db: str):
 # and was ~2-5s of pure `setup` on every one of ~40 read-only tests —
 # the whole reason the suite took 170s. Tests that WRITE must not share
 # it; they take `app_with_fresh_data` below.
-@pytest.fixture(scope="module")
-def app_with_data():
+@pytest.fixture(scope="module", name="app_with_data")
+def _app_with_data_fixture():
     mp = pytest.MonkeyPatch()          # monkeypatch itself is function-scoped
     try:
         yield from _build_api_client(mp, "claudit_test_api")
@@ -168,8 +149,8 @@ def app_with_data():
         mp.undo()
 
 
-@pytest.fixture
-def app_with_fresh_data():
+@pytest.fixture(name="app_with_fresh_data")
+def _app_with_fresh_data_fixture():
     """Function-scoped variant for tests that mutate rows, so they cannot
     contaminate the shared module-scoped client."""
     mp = pytest.MonkeyPatch()
@@ -199,8 +180,7 @@ def test_projects_range_scoped_ordering_and_zero_cost_exclusion(app_with_fresh_d
     not be conflated. A project with real all-time cost but nothing in the
     selected range stays listed, sorted last, with its reported (range)
     cost at 0."""
-    import psycopg
-    with psycopg.connect(os.environ["DATABASE_URL_VIZ"]) as conn, conn.cursor() as cur:
+    with closing(psycopg.connect(os.environ["DATABASE_URL_VIZ"])) as conn, conn.cursor() as cur:
         cur.execute(
             "INSERT INTO projects (project_id, display_name, first_seen_at, last_seen_at) VALUES "
             "('projNeverCost', 'projNeverCost', now(), now()), "
@@ -324,8 +304,6 @@ def test_cache_session_total_estimated_rate_true_when_any_model_estimated(
     exact — a genuine mixed session, same shape a live account would show
     the day a new model ships before the rate table is updated.
     """
-    from backend import pricing
-
     patched = {k: v for k, v in pricing.MODEL_RATES.items() if k != "claude-sonnet-4-5"}
     monkeypatch.setattr(pricing, "MODEL_RATES", patched)
 
@@ -358,7 +336,6 @@ def test_transcript_streams(app_with_data):
     r = app_with_data.get("/api/sessions/sess-A/transcript")
     assert r.status_code == 200
     assert r.headers["content-type"] == "application/x-ndjson"
-    import json
     first = r.text.split("\n")[0]
     assert "type" in json.loads(first)
 
@@ -445,8 +422,8 @@ def test_tool_error_rate_returns_expected_shape(app_with_data):
         assert b["n_error"] <= b["n_total"]
 
 
-@pytest.fixture
-def app_with_rl_data(monkeypatch):
+@pytest.fixture(name="app_with_rl_data")
+def _app_with_rl_data_fixture(monkeypatch):
     """Fresh DB + R2 mirror plus one session whose file mtime is current
     but which carries both an in-range and an out-of-range rate-limit hit.
 
@@ -495,30 +472,16 @@ def app_with_rl_data(monkeypatch):
         + _rl(out_range, "rl-h2") + "\n"
     )
 
-    from backend import db as _db
-    if _db._VIZ is not None:
-        try:
-            _db._VIZ.close()
-        except Exception:
-            pass
-    _db._VIZ = None
+    db.reset_viz_pool()
 
-    from backend import ingest
     ingest.run_ingest(trigger="manual")
 
-    from fastapi import FastAPI
-    from backend import api as api_mod
     a = FastAPI()
-    a.include_router(api_mod.router)
+    a.include_router(api.router)
 
     yield TestClient(a), in_range, out_range
 
-    if _db._VIZ is not None:
-        try:
-            _db._VIZ.close()
-        except Exception:
-            pass
-    _db._VIZ = None
+    db.reset_viz_pool()
     shutil.rmtree(tmp)
     os.system(f"dropdb --if-exists {test_db} 2>/dev/null")
 
@@ -567,10 +530,7 @@ def test_a_malformed_hit_ts_does_not_take_down_the_dashboard(app_with_fresh_data
     matches the shape passes them straight through to the cast it was
     meant to protect. Only real input validation excludes them.
     """
-    import psycopg
-    from backend import cache
-
-    with psycopg.connect(os.environ["DATABASE_URL_VIZ"]) as conn, conn.cursor() as cur:
+    with closing(psycopg.connect(os.environ["DATABASE_URL_VIZ"])) as conn, conn.cursor() as cur:
         cur.execute(
             "UPDATE files SET r2_last_modified = now(), "
             "       rate_limit_hits = %s::jsonb "
@@ -602,8 +562,6 @@ def test_a_malformed_hit_ts_does_not_take_down_the_dashboard(app_with_fresh_data
 
 
 def test_dashboard_response_is_cached_and_fresh_bypasses(app_with_fresh_data):
-    from backend import cache, db
-
     cache.response_cache.clear()
     first = app_with_fresh_data.get("/api/dashboard?range=all").json()
 
@@ -654,9 +612,6 @@ def test_dashboard_cost_by_project_omitted_for_guest(app_with_data):
     flag the real middleware sets. The guest call reuses the non-guest
     call's query params, so it is served from the SHARED response cache —
     proving the strip happens per-request, outside the cached payload."""
-    from fastapi import FastAPI, Request
-    from backend import api as api_mod
-
     body = app_with_data.get("/api/dashboard?range=3650d").json()
     assert "cost_by_project" in body
 
@@ -667,7 +622,7 @@ def test_dashboard_cost_by_project_omitted_for_guest(app_with_data):
         request.state.is_guest = True
         return await call_next(request)
 
-    a.include_router(api_mod.router)
+    a.include_router(api.router)
     guest = TestClient(a).get("/api/dashboard?range=3650d")
     assert guest.status_code == 200
     assert "cost_by_project" not in guest.json()
@@ -680,8 +635,7 @@ def test_dashboard_cost_by_project_omitted_for_guest(app_with_data):
 def _insert_tz_probe_rows():
     """Two records with a unique model, one in winter (CET, UTC+1) and one
     in summer (CEST, UTC+2), to prove the endpoint is DST-aware."""
-    import psycopg
-    with psycopg.connect(os.environ["DATABASE_URL_VIZ"]) as conn, conn.cursor() as cur:
+    with closing(psycopg.connect(os.environ["DATABASE_URL_VIZ"])) as conn, conn.cursor() as cur:
         cur.execute(
             "INSERT INTO projects (project_id, display_name, first_seen_at, last_seen_at) "
             "VALUES ('projTZ', 'projTZ', now(), now()) ON CONFLICT DO NOTHING"
@@ -705,7 +659,6 @@ def _insert_tz_probe_rows():
     # it here or the endpoint cannot see them (SV-ROLLUP: the rollup is
     # derived state; anything mutating `records` outside ingest must
     # rebuild it).
-    from backend import ingest
     ingest.rebuild_rollup()
 
 

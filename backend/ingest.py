@@ -111,12 +111,12 @@ def run_ingest(trigger: str) -> dict:
         log.warning("ingest (%s) skipped: another run is still in flight", trigger)
         return {"skipped": True, "reason": "ingest already running", "trigger": trigger}
     try:
-        return _run_ingest_locked(trigger)
+        return run_ingest_locked(trigger)
     finally:
         _RUN_LOCK.release()
 
 
-def _run_ingest_locked(trigger: str) -> dict:
+def run_ingest_locked(trigger: str) -> dict:
     started = datetime.now(timezone.utc)
     parser_version = os.environ.get("PARSER_VERSION", "1")
 
@@ -210,7 +210,7 @@ def _run_ingest_locked(trigger: str) -> dict:
         # submitted in bounded chunks so an 8k-file reparse does not hold
         # every inflated blob in memory at once.
         _set_progress(phase="parsing", total=len(todo), done=0)
-        workers = _worker_count()
+        workers = worker_count()
         chunk = max(1, workers * 4)
         for start in range(0, len(todo), chunk):
             batch = todo[start:start + chunk]
@@ -248,7 +248,7 @@ def _run_ingest_locked(trigger: str) -> dict:
         fatal = f"{type(e).__name__}: {e}"
 
     # `error` reports BOTH kinds of trouble, but only `fatal` gates anything.
-    err = fatal if fatal is not None else _failure_summary(failed)
+    err = fatal if fatal is not None else failure_summary(failed)
 
     finished = datetime.now(timezone.utc)
     with db.viz_conn() as c, c.cursor() as cur:
@@ -357,7 +357,7 @@ def _record_failure(failed: list[tuple[str, str]], key: str,
     )
 
 
-def _failure_summary(failed: list[tuple[str, str]]) -> str | None:
+def failure_summary(failed: list[tuple[str, str]]) -> str | None:
     """One line naming how many objects failed and which, or None.
 
     Goes into ingest_runs.error so a partial run is visible in the admin
@@ -661,7 +661,7 @@ def rebuild_rollup() -> int:
     return written
 
 
-def _worker_count() -> int:
+def worker_count() -> int:
     """Fetch+parse concurrency.
 
     Unset or unparseable -> auto (network-bound work, so oversubscribe

@@ -32,6 +32,19 @@ def viz_pool() -> ConnectionPool:
     return _VIZ
 
 
+def reset_viz_pool() -> None:
+    """Close and drop the cached viz pool so the next viz_pool() call
+    re-reads DATABASE_URL_VIZ. Test suites need this between scratch-DB
+    configurations; production code never calls it."""
+    global _VIZ
+    if _VIZ is not None:
+        try:
+            _VIZ.close()
+        except Exception:
+            pass
+    _VIZ = None
+
+
 def auth_pool() -> ConnectionPool:
     global _AUTH
     if _AUTH is None:

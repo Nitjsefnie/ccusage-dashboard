@@ -1,14 +1,16 @@
+import inspect
 import lzma
 import os
 import shutil
 import tempfile
 import threading
+import time
 from collections import Counter
 from pathlib import Path
 
 import pytest
 
-from backend import db, ingest
+from backend import api, cache, db, ingest
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -17,32 +19,22 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 _FLAKY_KEY = "projA/sess-A/sess-A.jsonl"
 
 
-@pytest.fixture
-def fresh_db(monkeypatch):
+@pytest.fixture(name="fresh_db")
+def _fresh_db_fixture(monkeypatch):
     """Per-test schema reset on a separate DB."""
     test_db = "claudit_test"
     os.system(f"dropdb --if-exists {test_db} 2>/dev/null")
     os.system(f"createdb {test_db} 2>/dev/null")
     os.system(f"psql {test_db} -f {_REPO_ROOT / 'backend/schema.sql'} >/dev/null")
     monkeypatch.setenv("DATABASE_URL_VIZ", f"postgresql:///{test_db}")
-    if db._VIZ is not None:
-        try:
-            db._VIZ.close()
-        except Exception:
-            pass
-    db._VIZ = None
+    db.reset_viz_pool()
     yield
-    if db._VIZ is not None:
-        try:
-            db._VIZ.close()
-        except Exception:
-            pass
-    db._VIZ = None
+    db.reset_viz_pool()
     os.system(f"dropdb --if-exists {test_db} 2>/dev/null")
 
 
-@pytest.fixture
-def mini_r2_env(monkeypatch):
+@pytest.fixture(name="mini_r2_env")
+def _mini_r2_env_fixture(monkeypatch):
     src = _REPO_ROOT / "fixtures/r2_mini"
     tmp = tempfile.mkdtemp(prefix="sv-ingest-")
     shutil.copytree(src, Path(tmp) / "r2")
@@ -159,7 +151,6 @@ def test_first_seen_at_uses_least(fresh_db, mini_r2_env):
     """projects.first_seen_at must NOT be locked at first-ingest mtime.
     Add a NEW file under an existing project with an earlier mtime;
     re-ingest must drag first_seen_at backward via LEAST(...) in ON CONFLICT."""
-    import os as _os
     ingest.run_ingest(trigger="manual")
     with db.viz_conn() as c:
         before = c.execute(
@@ -178,7 +169,7 @@ def test_first_seen_at_uses_least(fresh_db, mini_r2_env):
         '"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}\n'
     )
     older_ts = before.timestamp() - 3600
-    _os.utime(new_file, (older_ts, older_ts))
+    os.utime(new_file, (older_ts, older_ts))
 
     ingest.run_ingest(trigger="manual")
     with db.viz_conn() as c:
@@ -273,9 +264,6 @@ def test_warm_common_covers_every_warmed_range(fresh_db, mini_r2_env, monkeypatc
     to the endpoint's signature default ("30d") while the UI opens on
     "all", so the one request every page load makes was never warmed.
     """
-    import time as _time
-    from backend import api, cache
-
     monkeypatch.setenv("CLAUDIT_WARM_CACHE", "1")
     ingest.run_ingest(trigger="manual")
 
@@ -284,9 +272,9 @@ def test_warm_common_covers_every_warmed_range(fresh_db, mini_r2_env, monkeypatc
         api.tool_error_rate, api.reply_latency, api.list_projects,
     )
     # The warms run on a background pool; give them a bounded moment.
-    deadline = _time.time() + 60
+    deadline = time.time() + 60
     missing = None
-    while _time.time() < deadline:
+    while time.time() < deadline:
         missing = [
             f"{fn.__qualname__}(range={rng})"
             for rng in ingest.WARM_RANGES
@@ -295,7 +283,7 @@ def test_warm_common_covers_every_warmed_range(fresh_db, mini_r2_env, monkeypatc
         ]
         if not missing:
             break
-        _time.sleep(0.25)
+        time.sleep(0.25)
 
     assert not missing, "warm_common left these uncached: " + ", ".join(missing)
 
@@ -306,9 +294,6 @@ def _warm_key(fn, rng: str) -> str:
     Built from the endpoint's own signature so it stays correct as params
     are added — which is exactly what broke /api/projects.
     """
-    import inspect
-    from fastapi import Query  # noqa: F401  (Query defaults unwrap below)
-
     target = getattr(fn, "__wrapped__", fn)
     kwargs = {}
     for name, param in inspect.signature(target).parameters.items():
@@ -328,8 +313,6 @@ def test_ingest_marks_response_cache_stale(fresh_db, mini_r2_env):
     Stale-while-revalidate keeps the previous numbers available while the
     refresh runs off the request path.
     """
-    from backend import cache
-
     cache.response_cache.put("stale-key", {"v": "old"})
     entry = cache.response_cache.get_entry("stale-key")
     assert entry == ({"v": "old"}, False), "fresh before ingest"
@@ -399,11 +382,11 @@ def test_parallel_ingest_matches_sequential_exactly(
 
 def test_ingest_workers_defaults_and_clamps(monkeypatch):
     monkeypatch.delenv("INGEST_WORKERS", raising=False)
-    assert ingest._worker_count() >= 1
+    assert ingest.worker_count() >= 1
     monkeypatch.setenv("INGEST_WORKERS", "0")
-    assert ingest._worker_count() == 1
+    assert ingest.worker_count() == 1
     monkeypatch.setenv("INGEST_WORKERS", "not-a-number")
-    assert ingest._worker_count() >= 1
+    assert ingest.worker_count() >= 1
 
 
 # ------------------------------------------- per-object R2 failures (#2)
@@ -430,7 +413,7 @@ def _patch_fetch(monkeypatch, key, fail_times, exc=None):
         return real_get(k)
 
     monkeypatch.setattr(ingest.r2, "get_object", flaky)
-    monkeypatch.setattr(ingest.time, "sleep", lambda s: slept.append(s))
+    monkeypatch.setattr(ingest.time, "sleep", slept.append)
     return counts, slept
 
 
@@ -583,7 +566,7 @@ def test_a_corrupt_xz_object_is_one_failure_not_a_dead_run(
     )
     assert result["inserted"] == 5, "the intact objects are still persisted"
     assert counts[_CORRUPT_XZ_KEY] == 1, "a corrupt object must not be re-fetched"
-    assert slept == [], "and must not sleep between attempts it does not make"
+    assert not slept, "and must not sleep between attempts it does not make"
     with db.viz_conn() as c:
         rollup = c.execute("SELECT COUNT(*) FROM usage_rollup").fetchone()[0]
         stored = c.execute(
@@ -610,7 +593,7 @@ def test_a_programming_error_in_the_fetch_is_not_retried(
     result = ingest.run_ingest(trigger="manual")
 
     assert counts[_FLAKY_KEY] == 1, "a bug must not be retried"
-    assert slept == [], "and must not sleep"
+    assert not slept, "and must not sleep"
     assert result["failed"] == 0, "it is not a per-object failure"
     assert result["error"].startswith("FatalFetchError:"), result["error"]
     assert "TypeError" in result["error"], "the type must survive into the run"
@@ -655,11 +638,11 @@ def test_failure_summary_truncates_a_long_key_list():
     """A 9,213-file run losing its connection must not write a novel into
     ingest_runs.error."""
     failed = [(f"p/s{i}/s{i}.jsonl", "OSError: boom") for i in range(9)]
-    summary = ingest._failure_summary(failed)
+    summary = ingest.failure_summary(failed)
     assert summary.startswith("9 objects failed after retries: ")
     assert summary.endswith(", ... (+4 more)")
     assert summary.count(".jsonl") == ingest.FAILURE_KEYS_IN_SUMMARY
-    assert ingest._failure_summary([]) is None
+    assert ingest.failure_summary([]) is None
 
 
 def test_a_second_ingest_is_skipped_while_one_is_running(fresh_db, mini_r2_env):
@@ -668,20 +651,18 @@ def test_a_second_ingest_is_skipped_while_one_is_running(fresh_db, mini_r2_env):
     startup reparse and both walked the whole bucket — duplicate GETs,
     duplicate parses, two sets of rollup rebuilds, and a progress readout that
     went backwards. A concurrent run must decline, not pile on."""
-    import threading
-
     started = threading.Event()
     release = threading.Event()
     seen = {}
 
-    real = ingest._run_ingest_locked
+    real = ingest.run_ingest_locked
 
     def slow(trigger):
         started.set()
         release.wait(timeout=30)
         return real(trigger)
 
-    ingest._run_ingest_locked = slow
+    ingest.run_ingest_locked = slow
     try:
         t = threading.Thread(target=lambda: seen.update(first=ingest.run_ingest("startup")))
         t.start()
@@ -691,7 +672,7 @@ def test_a_second_ingest_is_skipped_while_one_is_running(fresh_db, mini_r2_env):
         release.set()
         t.join(timeout=60)
     finally:
-        ingest._run_ingest_locked = real
+        ingest.run_ingest_locked = real
 
     assert second.get("skipped") is True, second
     assert "already running" in second.get("reason", "")
