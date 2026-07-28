@@ -41,6 +41,16 @@ _PROGRESS: dict = {"phase": "idle", "done": 0, "total": 0,
                    "run_id": None, "started_at": None}
 _PROGRESS_LOCK = threading.Lock()
 
+# Only one ingest at a time. The hourly cron fires regardless of whether a
+# previous run is still going, and a full reparse (PARSER_VERSION bump) takes
+# ~40min — so a cron landed on top of a startup reparse and both walked the
+# whole bucket: duplicate R2 GETs, duplicate parses, competing writes, and two
+# sets of rollup rebuilds. The second run also built its todo list before the
+# first had committed anything, so it redid work already done.
+# Non-blocking: a skipped run is correct behaviour, not an error — the next
+# hourly tick picks up whatever is left.
+_RUN_LOCK = threading.Lock()
+
 
 def progress_snapshot() -> dict:
     with _PROGRESS_LOCK:
@@ -48,6 +58,13 @@ def progress_snapshot() -> dict:
 
 
 def _set_progress(**kw) -> None:
+    """Update live progress.
+
+    Single-writer by construction: _RUN_LOCK admits one run at a time, so
+    nothing else can interleave into this dict. That guarantee is the fix for
+    the readout that showed `total` changing mid-run, `done` reaching 106% and
+    then going backwards — two overlapping runs sharing one slot.
+    """
     with _PROGRESS_LOCK:
         _PROGRESS.update(kw)
 
@@ -90,6 +107,16 @@ FAILURE_KEYS_IN_SUMMARY = 5
 
 
 def run_ingest(trigger: str) -> dict:
+    if not _RUN_LOCK.acquire(blocking=False):
+        log.warning("ingest (%s) skipped: another run is still in flight", trigger)
+        return {"skipped": True, "reason": "ingest already running", "trigger": trigger}
+    try:
+        return _run_ingest_locked(trigger)
+    finally:
+        _RUN_LOCK.release()
+
+
+def _run_ingest_locked(trigger: str) -> dict:
     started = datetime.now(timezone.utc)
     parser_version = os.environ.get("PARSER_VERSION", "1")
 

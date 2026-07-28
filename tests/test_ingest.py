@@ -660,3 +660,46 @@ def test_failure_summary_truncates_a_long_key_list():
     assert summary.endswith(", ... (+4 more)")
     assert summary.count(".jsonl") == ingest.FAILURE_KEYS_IN_SUMMARY
     assert ingest._failure_summary([]) is None
+
+
+def test_a_second_ingest_is_skipped_while_one_is_running(fresh_db, mini_r2_env):
+    """The hourly cron fires regardless of whether a run is still going. A
+    PARSER_VERSION bump makes a run take ~40min, so a cron landed on top of a
+    startup reparse and both walked the whole bucket — duplicate GETs,
+    duplicate parses, two sets of rollup rebuilds, and a progress readout that
+    went backwards. A concurrent run must decline, not pile on."""
+    import threading
+
+    started = threading.Event()
+    release = threading.Event()
+    seen = {}
+
+    real = ingest._run_ingest_locked
+
+    def slow(trigger):
+        started.set()
+        release.wait(timeout=30)
+        return real(trigger)
+
+    ingest._run_ingest_locked = slow
+    try:
+        t = threading.Thread(target=lambda: seen.update(first=ingest.run_ingest("startup")))
+        t.start()
+        assert started.wait(timeout=10), "first run never entered"
+        # Second run arrives while the first still holds the lock.
+        second = ingest.run_ingest(trigger="cron")
+        release.set()
+        t.join(timeout=60)
+    finally:
+        ingest._run_ingest_locked = real
+
+    assert second.get("skipped") is True, second
+    assert "already running" in second.get("reason", "")
+    assert seen["first"].get("skipped") is not True, "the first run must NOT be skipped"
+
+
+def test_ingest_runs_again_once_the_lock_is_free(fresh_db, mini_r2_env):
+    """The skip is per-overlap, not sticky — the lock must be released."""
+    ingest.run_ingest(trigger="manual")
+    again = ingest.run_ingest(trigger="manual")
+    assert again.get("skipped") is not True, again
