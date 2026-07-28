@@ -783,7 +783,7 @@ function Dashboard({ synth, models, backendOn, activeProject, activeRange, dashN
           selected project would make this a one-bar chart. */}
       {activeProject === '' && costByProject.length > 0 && (
         <div className="dash-resp">
-          <window.HBar
+          <window.VBar
             title="Cost by Project"
             rows={costByProject}
             fmt={r => window.humanCurrency(r.value)} />

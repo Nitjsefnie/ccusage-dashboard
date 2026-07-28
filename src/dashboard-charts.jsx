@@ -563,6 +563,106 @@ function HBar({ title, rows, totalForPct, fmt, fixedColors, embedded }) {
   );
 }
 
+// --- Vertical bar chart (column) ---
+// The transpose of HBar, for Cost by Project: with ~11 short-valued
+// categories the horizontal form wasted most of its width on a label
+// gutter and gave each row a 26px sliver. Columns put the width into the
+// bars and the length into the labels, which are long path-ish ids.
+function VBar({ title, rows, fmt, fixedColors, embedded }) {
+  const ref = React.useRef(null);
+  const [w, setW] = React.useState(800);
+  const [hover, setHover] = React.useState(null);
+  const [mouse, setMouse] = React.useState({ x: 0, y: 0 });
+
+  React.useEffect(() => {
+    if (!ref.current) return;
+    const ro = new ResizeObserver(es => setW(es[0].contentRect.width));
+    ro.observe(ref.current);
+    return () => ro.disconnect();
+  }, []);
+
+  const padT = 44, padB = 104, padL = 12, padR = 12;
+  const plotH = 210;
+  const h = padT + plotH + padB;
+  const plotW = Math.max(10, w - padL - padR);
+  const n = Math.max(1, rows.length);
+  const slot = plotW / n;
+  // Cap the bar so a 3-project range doesn't render three slabs; otherwise
+  // take most of the slot — "bars can be wider" is the whole point of the
+  // transpose.
+  const barW = Math.max(6, Math.min(96, slot * 0.72));
+  const max = Math.max(1, ...rows.map(r => r.value));
+  // Headroom for the two-line value label sitting above the tallest bar.
+  const yMax = max * 1.18;
+  const total = rows.reduce((a, r) => a + r.value, 0);
+
+  function rowTip(r) {
+    const c = (fixedColors && fixedColors[r.label]) || r.color || COL.inputTokens;
+    return {
+      x: mouse.x, y: mouse.y, title: r.label, accent: c,
+      lines: [
+        ['value', fmt ? fmt(r) : humanFmt(r.value)],
+        ['share', total > 0 ? ((r.value / total) * 100).toFixed(2) + '%' : '0%'],
+      ],
+    };
+  }
+
+  return (
+    <div ref={ref} style={{
+      background: embedded ? 'transparent' : TH.bgAxes,
+      border: embedded ? 'none' : `1px solid ${TH.border}`,
+      borderRadius: 4, padding: 0, position: 'relative',
+    }}
+    onMouseMove={e => {
+      const rect = ref.current.getBoundingClientRect();
+      setMouse({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+    }}
+    onMouseLeave={() => setHover(null)}>
+      <svg data-panel={title} width={w} height={h} style={{ display: 'block' }}>
+        <text x={w/2} y={20} fontSize="13" fontWeight="bold" fill={TH.text}
+          textAnchor="middle" fontFamily="monospace">{title}</text>
+        <line x1={padL} x2={w - padR} y1={padT + plotH} y2={padT + plotH}
+          stroke={TH.border} strokeWidth="1" />
+        {rows.map((r, idx) => {
+          const cx = padL + idx * slot + slot / 2;
+          const barH = Math.max(2, (r.value / yMax) * plotH);
+          const y = padT + plotH - barH;
+          const c = (fixedColors && fixedColors[r.label]) || r.color || COL.inputTokens;
+          const isHover = hover === idx;
+          const pct = total > 0 ? (r.value / total * 100).toFixed(1) : '0.0';
+          return (
+            <g key={idx}
+              onMouseEnter={() => setHover(idx)}
+              style={{ cursor: 'pointer' }}>
+              <rect x={cx - slot / 2} y={padT} width={slot} height={plotH + padB}
+                fill="transparent" />
+              <rect x={cx - barW / 2} y={y} width={barW} height={barH}
+                fill={c} fillOpacity={isHover ? 1 : 0.85}
+                stroke={isHover ? '#fff' : 'none'} strokeOpacity={0.5} />
+              {/* Cost and share stacked, so both fit above a narrow bar
+                  instead of one long line overrunning its neighbour. */}
+              <text x={cx} y={y - 15} fontSize="11" fontWeight="bold" fill={TH.text}
+                textAnchor="middle" fontFamily="monospace">
+                {fmt ? fmt(r) : humanFmt(r.value)}
+              </text>
+              <text x={cx} y={y - 4} fontSize="10" fill={TH.textDim || TH.text}
+                fillOpacity={0.75} textAnchor="middle" fontFamily="monospace">
+                ({pct}%)
+              </text>
+              <text x={cx} y={padT + plotH + 10} fontSize="10" fill={TH.text}
+                textAnchor="end" fontFamily="monospace"
+                transform={`rotate(-35 ${cx} ${padT + plotH + 10})`}>
+                {r.label}
+              </text>
+            </g>
+          );
+        })}
+      </svg>
+      {hover != null && <Tooltip tip={rowTip(rows[hover])} />}
+    </div>
+  );
+}
+
 // --- Burn rate panel ---
 function BurnRatePanel({ events, sessions, limitHits, range: propRange, windowBoundaries }) {
   const ref = React.useRef(null);
@@ -973,6 +1073,7 @@ function BurnRatePanel({ events, sessions, limitHits, range: propRange, windowBo
 
 window.TimeSeriesPanel = TimeSeriesPanel;
 window.HBar = HBar;
+window.VBar = VBar;
 window.BurnRatePanel = BurnRatePanel;
 window.dashboardTheme = TH;
 window.dashboardCol = COL;
