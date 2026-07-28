@@ -77,36 +77,22 @@ MESSAGE 3 — follow-up
 
 ## :lady_beetle: Follow-up: I was storing one tool call in four
 
-The last post was about bugs *other* tools have. Here's one of mine, found after I'd already shipped the thing.
+Last post was bugs *other* tools have. This one's mine.
 
-Claude Code writes one JSONL line per content block. A turn's tool calls therefore land on lines **after** the first line of their `requestId` — so extracting them only from that first line silently drops the rest. Measured across three of my own sessions, the share of `tool_use` blocks sitting on a later line:
+Claude Code writes one JSONL line per content block, so a turn's tool calls land on lines **after** the first line of their `requestId`. I extracted them only from that first line — dropping **57-71%** of every tool call, across every session.
 
-```
-520 blocks -> 370 dropped   71%
-545 blocks -> 313 dropped   57%
-401 blocks -> 271 dropped   68%
-```
+The comment defending it said streaming duplicates carried the same blocks. That was simply false: block count equalled *distinct id* count in every transcript I checked (520/520, 545/545, 401/401). There were no duplicates. It was discarding real calls to solve a problem that did not exist.
 
-The comment defending it said streaming duplicates carried the same blocks, so only the first should count. That premise was simply false: block count equalled *distinct id* count in every transcript I checked (520/520, 545/545, 401/401). There were no duplicates. It was discarding real calls to solve a problem that did not exist.
-
-Reparsing everything after keying on the globally-unique block id instead:
+After reparsing:
 
 ```
-tool calls recorded   80,750  ->  309,043
-Bash                  38,950  ->  154,307
-Read                  20,150  ->   67,119
+tool calls   80,750 -> 309,043
+Bash         38,950 -> 154,307
+Read         20,150 ->  67,119
 ```
 
-**Roughly one call in four was making it into the database.** Every tool-usage and tool-error-rate number I have published until now was drawn from that quarter.
+Nothing looked broken — cost, tokens and request counts were all correct, because the bug only touched tool extraction. The tool panels just quietly showed a smaller world.
 
-Three things worth taking from it:
-
-:one: **The dangerous comment is the one that sounds reasonable.** "Streaming dupes shouldn't be double-counted" is a real concern, so nobody questioned whether it applied here. Checking took one line: compare block count to distinct-id count.
-
-:two: **Two other implementations were already right.** The canonical parser and the in-browser one both parse content outside the requestId branch, gating only the token merge. My backend was the odd one out — a port that drifted, not a design decision. Three implementations of one spec means two can quietly disagree with the third.
-
-:three: **The totals looked fine throughout.** Cost, tokens and request counts were all correct, because the bug touched only tool extraction. Nothing about the dashboard looked broken — the tool panels just showed a smaller world than the real one.
-
-:mag: Credit to @Floral-Overcast, who found it in a fork and fixed it there. I verified it independently before porting — a good reminder that "the numbers look plausible" is not a test.
+:mag: Found by @Floral-Overcast in a fork. The canonical parser and the in-browser one were both already right; my backend was a port that had drifted.
 
 :link: https://github.com/Nitjsefnie/claudit
