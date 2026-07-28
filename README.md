@@ -181,9 +181,10 @@ restart).
 - `public/` — `index.html`, `app.css`. Served at `/`.
 - `src/` — React JSX modules. Served at `/src/*` with mtime-based
   cache-bust.
-- `scripts/` — `plots/ccusage_plot.py`, the upstream
-  `nhz-io/ccusage-plot` reference. Canonical analyst scripts are not
-  vendored here; invoke them by absolute path under `~/.claude/scripts/`.
+- `scripts/` — `plots/ccusage_plot_db.py`, our DB-backed usage-plotting
+  script (queries the claudit Postgres `records` table). Canonical analyst
+  scripts are not vendored here; invoke them by absolute path under
+  `~/.claude/scripts/`.
 - `tests/` — pytest suite (parser fixtures, ingest, API).
 - `fixtures/` — small JSONL + zip samples for parser tests.
 - `examples/` — sample systemd service file.
