@@ -8,13 +8,16 @@ Cost is precomputed per-record using pricing.MODEL_RATES so the
 read path doesn't need to JOIN against rates. Bumps to the rate
 table OR to the parse algorithm both require a PARSER_VERSION
 bump to invalidate every files row.
+
+Structure: _LineWalk carries the mutable per-file state through the
+line-by-line pass (one method per record kind); the module-level
+helpers then project the walked events into records and ctx_turns.
 """
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Iterable
 
-import orjson
+from orjson import JSONDecodeError, loads
 
 from backend import pricing
 
@@ -115,50 +118,75 @@ def _to_dt(s: str | None):
         return None
 
 
-def parse_file(file_key: str, blob: bytes) -> dict:
-    """Parse one jsonl. Returns {records, ctx_turns, turn_count, rate_limit_hits}.
+def _content_metrics(msg: dict) -> tuple[int, list]:
+    """(text_chars, tool_use blocks) for one assistant message.
 
-    records: list of dicts with keys
-      file_key, line_num, uuid, request_id, ts (datetime|None), model,
-      fresh_tokens, cache_creation_tokens, cache_read_tokens,
-      output_tokens, eph5_tokens, eph1h_tokens, cost_usd
-
-    ctx_turns: list of dicts with keys
-      idx, ts, line, input, output, delta
-
-    rate_limit_hits: list of dicts with keys
-      line, ts (string ISO), content
-    Detected by mirroring src/parser.js: any `type:"system"` line whose
-    content+subtype lower-cased contains "rate limit", "rate_limit", or
-    "429".
-
-    records + ctx_turns are AFTER Phase 1 within-file requestId max-merge.
-    Records WITHOUT a request_id are NOT dedup'd (each kept distinct).
+    Visible-response size: sum character lengths of `text` blocks
+    in the assistant message. Per analyst (2026-05-07), thinking
+    tokens roll into output_tokens undifferentiated, so token-based
+    response-size metrics conflate "size" with "how much the model
+    thought". Character count of text content blocks is the clean
+    measure of visible response size.
+    Also extract every `tool_use` block — the `name` field is what
+    the canonical parser exposes via --tools. Stored later as one
+    row per tool call in the `tool_uses` table for the per-tool
+    ratio panel.
     """
-    seen_request: dict[str, dict] = {}
-    records_in_order: list[dict] = []
-    user_text_lines: list[int] = []
-    rate_limit_hits: list[dict] = []
-    tool_uses: list[dict] = []
-    seen_tool_ids: set[str] = set()
-    # Per-file map of assistant tool_use.id -> bool(is_error).
-    # Populated from later user tool_result blocks; consumed after
-    # the line walk to fill tool_uses[*]["is_error"].
-    tool_result_is_error: dict[str, bool] = {}
-    # Reply-latency anchor: last NON-instrumentation, NON-interrupt user
-    # message timestamp. Cleared when consumed by an assistant message,
-    # an interrupt marker, or superseded by a fresher user message.
-    # Mirrors compute_reply_latency() in parse_session.py at the
-    # message granularity (we treat the assistant message line as the
-    # terminator since all assistant content blocks share its ts).
-    last_user_ts: datetime | None = None
-    # Per-file first-seen line for each user-record uuid. A user record
-    # whose uuid already appeared on an EARLIER, DIFFERENT line is a
-    # replay and is invisible to reply-latency anchoring/superseding.
-    seen_user_uuids: dict[str, int] = {}
+    msg_content = msg.get("content")
+    text_chars = 0
+    msg_tool_uses: list[dict] = []
+    if isinstance(msg_content, list):
+        for idx, blk in enumerate(msg_content):
+            if not isinstance(blk, dict):
+                continue
+            btype = blk.get("type")
+            if btype == "text":
+                text_chars += len(str(blk.get("text", "")))
+            elif btype in ("tool_use", "server_tool_use"):
+                # server_tool_use = model invoked an Anthropic-hosted
+                # tool (e.g. WebSearch). Same shape as tool_use; treat
+                # both as tool calls in the panel.
+                name = str(blk.get("name", "") or "")
+                if name:
+                    msg_tool_uses.append({
+                        "idx": idx,
+                        "tool_name": name,
+                        "tool_use_id": str(blk.get("id", "") or ""),
+                    })
+    elif isinstance(msg_content, str):
+        text_chars = len(msg_content)
+    return text_chars, msg_tool_uses
 
-    def _handle_user_text(
-        text: str, line_num: int, ts_str: str, mutate_anchor: bool = True
+
+class _LineWalk:
+    """Mutable per-file state for the line-by-line pass."""
+
+    def __init__(self, file_key: str) -> None:
+        self.file_key = file_key
+        self.seen_request: dict[str, dict] = {}
+        self.records_in_order: list[dict] = []
+        self.user_text_lines: list[int] = []
+        self.rate_limit_hits: list[dict] = []
+        self.tool_uses: list[dict] = []
+        self.seen_tool_ids: set[str] = set()
+        # Per-file map of assistant tool_use.id -> bool(is_error).
+        # Populated from later user tool_result blocks; consumed after
+        # the line walk to fill tool_uses[*]["is_error"].
+        self.tool_result_is_error: dict[str, bool] = {}
+        # Reply-latency anchor: last NON-instrumentation, NON-interrupt user
+        # message timestamp. Cleared when consumed by an assistant message,
+        # an interrupt marker, or superseded by a fresher user message.
+        # Mirrors compute_reply_latency() in parse_session.py at the
+        # message granularity (we treat the assistant message line as the
+        # terminator since all assistant content blocks share its ts).
+        self.last_user_ts: datetime | None = None
+        # Per-file first-seen line for each user-record uuid. A user record
+        # whose uuid already appeared on an EARLIER, DIFFERENT line is a
+        # replay and is invisible to reply-latency anchoring/superseding.
+        self.seen_user_uuids: dict[str, int] = {}
+
+    def handle_user_text(
+        self, text: str, line_num: int, ts_str: str, mutate_anchor: bool = True
     ) -> None:
         """Apply instrumentation/interrupt/anchor logic to a user text string.
 
@@ -167,7 +195,6 @@ def parse_file(file_key: str, blob: bytes) -> dict:
         count toward ``prompt_count`` and ctx-turn boundaries but never
         touch the latency anchor.
         """
-        nonlocal last_user_ts
         if not text.strip():
             return
         stripped = text.lstrip()
@@ -175,99 +202,96 @@ def parse_file(file_key: str, blob: bytes) -> dict:
             return
         if stripped.startswith(_INTERRUPT_MARKER):
             if mutate_anchor:
-                last_user_ts = None
+                self.last_user_ts = None
             return
-        user_text_lines.append(line_num)
+        self.user_text_lines.append(line_num)
         ts_dt = _to_dt(ts_str)
         if ts_dt is not None and mutate_anchor:
-            last_user_ts = ts_dt
+            self.last_user_ts = ts_dt
 
-    for line_num, raw in enumerate(blob.splitlines(), 1):
-        if not raw:
-            continue
-        try:
-            obj = orjson.loads(raw)
-        except orjson.JSONDecodeError:
-            continue
+    def handle_rate_limit(self, obj: dict, line_num: int) -> bool:
+        """Book a rate-limit hit if this record is one. Returns True when
+        the record was consumed — a rate-limit error record carries no
+        usage, so there is nothing else to do with it.
 
-        msg_type = obj.get("type", "")
-        if msg_type not in ("user", "assistant"):
-            continue
-
-        # Rate-limit-hit detection (per analyst, 2026-05-07):
-        # Hits live on type:"assistant" records with isApiErrorMessage=True
-        # and error="rate_limit", and the message text contains "out of
-        # extra usage". Per-minute API 429s also have error="rate_limit"
-        # but say "Server is temporarily limiting requests" — those are
-        # ignored (text-match on "out of extra usage" is the reliable signal).
-        if (
-            msg_type == "assistant"
+        Detection (per analyst, 2026-05-07): hits live on type:"assistant"
+        records with isApiErrorMessage=True and error="rate_limit", and
+        the message text contains "out of extra usage". Per-minute API
+        429s also have error="rate_limit" but say "Server is temporarily
+        limiting requests" — those are ignored (text-match on "out of
+        extra usage" is the reliable signal).
+        """
+        if not (
+            obj.get("type", "") == "assistant"
             and obj.get("isApiErrorMessage") is True
             and obj.get("error") == "rate_limit"
         ):
-            content_list = (obj.get("message") or {}).get("content") or []
-            joined = " ".join(
-                str(c.get("text", ""))
-                for c in content_list
-                if isinstance(c, dict) and c.get("type") == "text"
+            return False
+        content_list = (obj.get("message") or {}).get("content") or []
+        joined = " ".join(
+            str(c.get("text", ""))
+            for c in content_list
+            if isinstance(c, dict) and c.get("type") == "text"
+        )
+        if "out of extra usage" in joined.lower():
+            self.rate_limit_hits.append({
+                "line": line_num,
+                "ts": obj.get("timestamp", "") or "",
+                "content": joined[:500],
+            })
+        return True
+
+    def handle_user_line(self, obj: dict, msg: dict, line_num: int) -> None:
+        """One user-role record: replay detection, then the content walk."""
+        uuid = obj.get("uuid") or ""
+        is_replay = False
+        if uuid:
+            first_line = self.seen_user_uuids.get(uuid)
+            if first_line is None:
+                self.seen_user_uuids[uuid] = line_num
+            elif first_line != line_num:
+                is_replay = True
+        mutate_anchor = not is_replay
+
+        content = msg.get("content")
+        ts_str = obj.get("timestamp", "") or ""
+        if isinstance(content, str) and content.strip():
+            self.handle_user_text(
+                content, line_num, ts_str, mutate_anchor=mutate_anchor
             )
-            if "out of extra usage" in joined.lower():
-                rate_limit_hits.append({
-                    "line": line_num,
-                    "ts": obj.get("timestamp", "") or "",
-                    "content": joined[:500],
-                })
-            # rate-limit error records carry no usage; nothing else to do
-            continue
+        elif isinstance(content, list):
+            for blk in content:
+                self._handle_user_block(blk, line_num, ts_str, mutate_anchor)
 
-        msg = obj.get("message") or {}
-        role = msg.get("role")
-        if role == "user":
-            uuid = obj.get("uuid") or ""
-            is_replay = False
-            if uuid:
-                first_line = seen_user_uuids.get(uuid)
-                if first_line is None:
-                    seen_user_uuids[uuid] = line_num
-                elif first_line != line_num:
-                    is_replay = True
-            mutate_anchor = not is_replay
-
-            content = msg.get("content")
-            if isinstance(content, str) and content.strip():
-                _handle_user_text(
-                    content, line_num, obj.get("timestamp", "") or "",
-                    mutate_anchor=mutate_anchor,
+    def _handle_user_block(self, blk, line_num: int, ts_str: str,
+                           mutate_anchor: bool) -> None:
+        if not isinstance(blk, dict):
+            return
+        btype = blk.get("type")
+        if btype == "tool_result":
+            # Tool results live here. Each block carries
+            # tool_use_id (referencing the assistant's
+            # tool_use.id) and an optional is_error flag.
+            tu_id = blk.get("tool_use_id")
+            if not tu_id:
+                return
+            self.tool_result_is_error[str(tu_id)] = bool(
+                blk.get("is_error", False)
+            )
+        elif btype == "text":
+            text = blk.get("text", "") or ""
+            if isinstance(text, str) and text.strip():
+                self.handle_user_text(
+                    text, line_num, ts_str, mutate_anchor=mutate_anchor
                 )
-            elif isinstance(content, list):
-                for blk in content:
-                    if not isinstance(blk, dict):
-                        continue
-                    btype = blk.get("type")
-                    if btype == "tool_result":
-                        # Tool results live here. Each block carries
-                        # tool_use_id (referencing the assistant's
-                        # tool_use.id) and an optional is_error flag.
-                        tu_id = blk.get("tool_use_id")
-                        if not tu_id:
-                            continue
-                        tool_result_is_error[str(tu_id)] = bool(
-                            blk.get("is_error", False)
-                        )
-                    elif btype == "text":
-                        text = blk.get("text", "") or ""
-                        if isinstance(text, str) and text.strip():
-                            _handle_user_text(
-                                text, line_num, obj.get("timestamp", "") or "",
-                                mutate_anchor=mutate_anchor,
-                            )
-            continue
 
-        if role != "assistant":
-            continue
+    def handle_assistant_line(self, obj: dict, msg: dict,
+                              line_num: int) -> None:
+        """One usage-bearing assistant record: metrics, Phase 1 merge,
+        tool calls."""
         usage = msg.get("usage")
         if not usage:
-            continue
+            return
         usage = _flatten_usage(usage)
         # Skip synthetic stubs: Claude Code emits these after `/exit`
         # (text='No response requested.') and for interrupted partial
@@ -278,61 +302,10 @@ def parse_file(file_key: str, blob: bytes) -> dict:
         # ctx_turns empty even when real records preceded them.
         # (Mirrors parse_session.py 1.20.4 fix from analyst 2026-05-07.)
         if (msg.get("model") or "") == "<synthetic>":
-            continue
+            return
 
-        # Visible-response size: sum character lengths of `text` blocks
-        # in the assistant message. Per analyst (2026-05-07), thinking
-        # tokens roll into output_tokens undifferentiated, so token-based
-        # response-size metrics conflate "size" with "how much the model
-        # thought". Character count of text content blocks is the clean
-        # measure of visible response size.
-        # Also extract every `tool_use` block — the `name` field is what
-        # the canonical parser exposes via --tools. Stored later as one
-        # row per tool call in the `tool_uses` table for the per-tool
-        # ratio panel.
-        msg_content = msg.get("content")
-        text_chars = 0
-        msg_tool_uses: list[dict] = []
-        if isinstance(msg_content, list):
-            for idx, blk in enumerate(msg_content):
-                if not isinstance(blk, dict):
-                    continue
-                btype = blk.get("type")
-                if btype == "text":
-                    text_chars += len(str(blk.get("text", "")))
-                elif btype in ("tool_use", "server_tool_use"):
-                    # server_tool_use = model invoked an Anthropic-hosted
-                    # tool (e.g. WebSearch). Same shape as tool_use; treat
-                    # both as tool calls in the panel.
-                    name = str(blk.get("name", "") or "")
-                    if name:
-                        msg_tool_uses.append({
-                            "idx": idx,
-                            "tool_name": name,
-                            "tool_use_id": str(blk.get("id", "") or ""),
-                        })
-        elif isinstance(msg_content, str):
-            text_chars = len(msg_content)
-
+        text_chars, msg_tool_uses = _content_metrics(msg)
         req_id = obj.get("requestId", "") or ""
-        # Reply latency: gap from last anchored user-message ts to
-        # this assistant message's ts. NULL when there's no preceding
-        # anchored user message (session start, or every recent user
-        # msg was instrumentation/interrupt) OR when delta is
-        # negative (analyst 2026-05-07: negative deltas are
-        # session-restore / compaction replay artifacts where the
-        # assistant message came from a prior, re-emitted state and
-        # isn't actually a reply to the visually-preceding user msg).
-        # Clamping to 0 would pollute the p0/p50 distribution; drop
-        # the measurement instead.
-        reply_latency_s: float | None = None
-        if last_user_ts is not None:
-            assistant_dt = _to_dt(obj.get("timestamp", "") or "")
-            if assistant_dt is not None:
-                delta_s = (assistant_dt - last_user_ts).total_seconds()
-                if delta_s >= 0:
-                    reply_latency_s = delta_s
-        last_user_ts = None  # anchor consumed by this assistant reply
         ev = {
             "line_num": line_num,
             "uuid": obj.get("uuid") or None,
@@ -341,10 +314,10 @@ def parse_file(file_key: str, blob: bytes) -> dict:
             "model": msg.get("model") or "(unknown)",
             "usage": dict(usage),
             "text_chars": text_chars,
-            "reply_latency_s": reply_latency_s,
+            "reply_latency_s": self._consume_anchor(obj),
         }
-        if req_id and req_id in seen_request:
-            existing = seen_request[req_id]
+        if req_id and req_id in self.seen_request:
+            existing = self.seen_request[req_id]
             existing["usage"] = _merge_usage_max(existing["usage"], usage)
             # Same Phase 1 max-merge for text_chars: streaming responses
             # log incrementally; the largest sample is the final size.
@@ -352,9 +325,36 @@ def parse_file(file_key: str, blob: bytes) -> dict:
                 existing["text_chars"] = text_chars
         else:
             if req_id:
-                seen_request[req_id] = ev
-            records_in_order.append(ev)
+                self.seen_request[req_id] = ev
+            self.records_in_order.append(ev)
 
+        self._record_tool_uses(
+            msg_tool_uses, req_id, line_num, obj.get("timestamp", "") or ""
+        )
+
+    def _consume_anchor(self, obj: dict) -> float | None:
+        """Reply latency: gap from last anchored user-message ts to
+        this assistant message's ts. NULL when there's no preceding
+        anchored user message (session start, or every recent user
+        msg was instrumentation/interrupt) OR when delta is
+        negative (analyst 2026-05-07: negative deltas are
+        session-restore / compaction replay artifacts where the
+        assistant message came from a prior, re-emitted state and
+        isn't actually a reply to the visually-preceding user msg).
+        Clamping to 0 would pollute the p0/p50 distribution; drop
+        the measurement instead."""
+        reply_latency_s = None
+        if self.last_user_ts is not None:
+            assistant_dt = _to_dt(obj.get("timestamp", "") or "")
+            if assistant_dt is not None:
+                delta_s = (assistant_dt - self.last_user_ts).total_seconds()
+                if delta_s >= 0:
+                    reply_latency_s = delta_s
+        self.last_user_ts = None  # anchor consumed by this assistant reply
+        return reply_latency_s
+
+    def _record_tool_uses(self, msg_tool_uses: list, req_id: str,
+                          line_num: int, ts_str: str) -> None:
         # Tool calls: dedupe on tool_use.id, NOT on first-line-of-request.
         # Claude Code writes one JSONL line per content block, so a turn's
         # tool_use blocks land on LATER lines of the same requestId — and
@@ -368,70 +368,74 @@ def parse_file(file_key: str, blob: bytes) -> dict:
         # Idless blocks fall back to (req, line, idx).
         for tu in msg_tool_uses:
             tu_key = tu["tool_use_id"] or f"{req_id}:{line_num}:{tu['idx']}"
-            if tu_key in seen_tool_ids:
+            if tu_key in self.seen_tool_ids:
                 continue
-            seen_tool_ids.add(tu_key)
-            tool_uses.append({
-                "file_key": file_key,
+            self.seen_tool_ids.add(tu_key)
+            self.tool_uses.append({
+                "file_key": self.file_key,
                 "line_num": line_num,
                 "idx": tu["idx"],
-                "ts": _to_dt(obj.get("timestamp", "") or ""),
+                "ts": _to_dt(ts_str),
                 "tool_name": tu["tool_name"],
                 "tool_use_id": tu["tool_use_id"],
                 "is_error": None,  # filled after the line walk
             })
 
-    # Resolve tool_result.is_error onto each tool_uses entry by
-    # tool_use_id. Unmatched entries keep is_error=None and are
-    # excluded from rate denominators at query time.
+
+def _resolve_tool_errors(tool_uses: list, tool_result_is_error: dict) -> None:
+    """Resolve tool_result.is_error onto each tool_uses entry by
+    tool_use_id. Unmatched entries keep is_error=None and are
+    excluded from rate denominators at query time."""
     for tu in tool_uses:
         tu_id = tu.pop("tool_use_id", "")
         if tu_id and tu_id in tool_result_is_error:
             tu["is_error"] = tool_result_is_error[tu_id]
 
-    # Project usage → token columns + cost; drop the raw 'usage' dict.
-    records: list[dict] = []
-    for ev in records_in_order:
-        u = ev["usage"]
-        fresh = int(u.get("input_tokens", 0) or 0)
-        create = int(u.get("cache_creation_input_tokens", 0) or 0)
-        read = int(u.get("cache_read_input_tokens", 0) or 0)
-        output = int(u.get("output_tokens", 0) or 0)
-        eph = u.get("cache_creation") or {}
-        eph5 = int(eph.get("ephemeral_5m_input_tokens", 0) or 0)
-        eph1h = int(eph.get("ephemeral_1h_input_tokens", 0) or 0)
-        unsplit = max(0, create - eph5 - eph1h)
-        ts = _to_dt(ev["ts"])
-        cost = pricing.compute_cost(
-            ev["model"],
-            fresh=fresh, output=output,
-            eph5=eph5, eph1h=eph1h,
-            unsplit_create=unsplit, read=read,
-            # Dated rates apply to when the tokens were spent, not to
-            # when this file happens to be parsed.
-            ts=ts,
-        )
-        records.append({
-            "file_key": file_key,
-            "line_num": ev["line_num"],
-            "uuid": ev["uuid"],
-            "request_id": ev["request_id"],
-            "ts": ts,
-            "model": ev["model"],
-            "fresh_tokens": fresh,
-            "cache_creation_tokens": create,
-            "cache_read_tokens": read,
-            "output_tokens": output,
-            "text_chars": int(ev.get("text_chars", 0)),
-            "reply_latency_s": ev.get("reply_latency_s"),
-            "eph5_tokens": eph5,
-            "eph1h_tokens": eph1h,
-            "cost_usd": round(cost, 6),
-            "ctx_input": _usage_ctx_input(u),
-        })
 
-    # Build ctx_turns by user-text boundary, mirroring
-    # parse_session.py:compute_context_growth lines 2680-2740.
+def _project_record(file_key: str, ev: dict) -> dict:
+    """One walked event → its records-table row (token columns + cost)."""
+    u = ev["usage"]
+    fresh = int(u.get("input_tokens", 0) or 0)
+    create = int(u.get("cache_creation_input_tokens", 0) or 0)
+    read = int(u.get("cache_read_input_tokens", 0) or 0)
+    output = int(u.get("output_tokens", 0) or 0)
+    eph = u.get("cache_creation") or {}
+    eph5 = int(eph.get("ephemeral_5m_input_tokens", 0) or 0)
+    eph1h = int(eph.get("ephemeral_1h_input_tokens", 0) or 0)
+    unsplit = max(0, create - eph5 - eph1h)
+    ts = _to_dt(ev["ts"])
+    cost = pricing.compute_cost(
+        ev["model"],
+        fresh=fresh, output=output,
+        eph5=eph5, eph1h=eph1h,
+        unsplit_create=unsplit, read=read,
+        # Dated rates apply to when the tokens were spent, not to
+        # when this file happens to be parsed.
+        ts=ts,
+    )
+    return {
+        "file_key": file_key,
+        "line_num": ev["line_num"],
+        "uuid": ev["uuid"],
+        "request_id": ev["request_id"],
+        "ts": ts,
+        "model": ev["model"],
+        "fresh_tokens": fresh,
+        "cache_creation_tokens": create,
+        "cache_read_tokens": read,
+        "output_tokens": output,
+        "text_chars": int(ev.get("text_chars", 0)),
+        "reply_latency_s": ev.get("reply_latency_s"),
+        "eph5_tokens": eph5,
+        "eph1h_tokens": eph1h,
+        "cost_usd": round(cost, 6),
+        "ctx_input": _usage_ctx_input(u),
+    }
+
+
+def _build_ctx_turns(records: list, user_text_lines: list) -> list:
+    """Build ctx_turns by user-text boundary, mirroring
+    parse_session.py:compute_context_growth lines 2680-2740."""
     boundary_lines = sorted(user_text_lines)
     sorted_recs = sorted(
         records, key=lambda r: (r["ts"] or datetime.min, r["line_num"])
@@ -466,6 +470,55 @@ def parse_file(file_key: str, blob: bytes) -> dict:
             "delta": ctx_input - prev_input,
         })
         prev_input = ctx_input
+    return ctx_turns
+
+
+def parse_file(file_key: str, blob: bytes) -> dict:
+    """Parse one jsonl. Returns {records, ctx_turns, turn_count, rate_limit_hits}.
+
+    records: list of dicts with keys
+      file_key, line_num, uuid, request_id, ts (datetime|None), model,
+      fresh_tokens, cache_creation_tokens, cache_read_tokens,
+      output_tokens, eph5_tokens, eph1h_tokens, cost_usd
+
+    ctx_turns: list of dicts with keys
+      idx, ts, line, input, output, delta
+
+    rate_limit_hits: list of dicts with keys
+      line, ts (string ISO), content
+    Detected by mirroring src/parser.js: any `type:"system"` line whose
+    content+subtype lower-cased contains "rate limit", "rate_limit", or
+    "429".
+
+    records + ctx_turns are AFTER Phase 1 within-file requestId max-merge.
+    Records WITHOUT a request_id are NOT dedup'd (each kept distinct).
+    """
+    walk = _LineWalk(file_key)
+    for line_num, raw in enumerate(blob.splitlines(), 1):
+        if not raw:
+            continue
+        try:
+            obj = loads(raw)
+        except JSONDecodeError:
+            continue
+
+        if obj.get("type", "") not in ("user", "assistant"):
+            continue
+        if walk.handle_rate_limit(obj, line_num):
+            continue
+
+        msg = obj.get("message") or {}
+        role = msg.get("role")
+        if role == "user":
+            walk.handle_user_line(obj, msg, line_num)
+        elif role == "assistant":
+            walk.handle_assistant_line(obj, msg, line_num)
+
+    _resolve_tool_errors(walk.tool_uses, walk.tool_result_is_error)
+    records = [
+        _project_record(file_key, ev) for ev in walk.records_in_order
+    ]
+    ctx_turns = _build_ctx_turns(records, walk.user_text_lines)
 
     return {
         "records": records,
@@ -476,7 +529,7 @@ def parse_file(file_key: str, blob: bytes) -> dict:
         # `turn_count` only counts prompts that produced a usage-bearing
         # assistant reply; `prompt_count` is the raw "how many times did
         # the user actually type something" total. Prompts ≥ Turns.
-        "prompt_count": len(user_text_lines),
-        "rate_limit_hits": rate_limit_hits,
-        "tool_uses": tool_uses,
+        "prompt_count": len(walk.user_text_lines),
+        "rate_limit_hits": walk.rate_limit_hits,
+        "tool_uses": walk.tool_uses,
     }
