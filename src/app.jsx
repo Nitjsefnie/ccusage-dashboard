@@ -687,13 +687,18 @@ function Dashboard({ synth, models, backendOn, activeProject, activeRange, dashN
   const windowBoundaries = computed.windowBoundaries;
 
   const totals = useMemo(() => {
-    const t = { input: 0, output: 0, cc: 0, cr: 0, cost: 0, eph5: 0, eph1h: 0 };
+    const t = { input: 0, output: 0, cc: 0, cr: 0, cost: 0, eph5: 0, eph1h: 0,
+                linesAdded: 0, linesDeleted: 0 };
     const byModel = {};
     for (const e of events) {
       t.input += e.input_tokens; t.output += e.output_tokens;
       t.cc += e.cache_create; t.cr += e.cache_read;
       t.cost += e.cost_usd;
       t.eph5 += e.ephemeral_5m; t.eph1h += e.ephemeral_1h;
+      // Churn is attached to the first model row of each bucket only
+      // (see api_dashboard._attach_churn), so a plain sum over events
+      // is already de-duplicated across models.
+      t.linesAdded += e.lines_added || 0; t.linesDeleted += e.lines_deleted || 0;
       byModel[e.model] = (byModel[e.model] || 0) + e.cost_usd;
     }
     t.total = t.input + t.output + t.cc + t.cr;
@@ -751,6 +756,13 @@ function Dashboard({ synth, models, backendOn, activeProject, activeRange, dashN
         {totalTurns != null && <Stat label="turns" value={totalTurns.toLocaleString()} />}
         <Stat label="requests" value={events.reduce((s, e) => s + (e.requests == null ? 1 : e.requests), 0).toLocaleString()} />
         <Stat label="total tokens" value={window.humanFmt(totals.total)} />
+        <Stat label="lines added / deleted" value={
+          <span>
+            <span style={{ color: window.dashboardCol.linesAdded }}>+{window.humanFmt(totals.linesAdded)}</span>
+            <span style={{ color: 'var(--muted-2)' }}> / </span>
+            <span style={{ color: window.dashboardCol.linesDeleted }}>−{window.humanFmt(totals.linesDeleted)}</span>
+          </span>
+        } />
         <Stat label="total cost" value={totalCostStr} highlight />
         <Stat label="rate-limit hits" value={String(limitHits.length)} warn={limitHits.length > 0} />
       </div>
