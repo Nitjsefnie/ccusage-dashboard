@@ -235,6 +235,11 @@ a.loadbtn { display: inline-block; text-decoration: none; }
 .dash-summary .stat { border-right: 1px solid var(--border); padding: 14px 18px; }
 .dash-summary .stat:last-child { border-right: 0; }
 .dash-summary .stat:hover { background: rgba(255,255,255,0.015); }
+/* 13 cards into 6 columns leaves the last one alone against five empty
+   ones. Stretch a card that both starts a row and ends the list across
+   the full row instead. No-op at any count that divides evenly, and the
+   two narrower breakpoints below restate it for their column count. */
+.dash-summary .stat:nth-child(6n+1):last-child { grid-column: 1 / -1; }
 
 .dash-grid {
   display: grid;
@@ -621,6 +626,8 @@ button:focus-visible, .navbtn:focus-visible, .chip:focus-visible, .fchip:focus-v
 @media (max-width: 1200px) {
   .dash-summary { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .dash-summary .stat:nth-child(4n) { border-right: 0; }
+  .dash-summary .stat:nth-child(6n+1):last-child { grid-column: auto; }
+  .dash-summary .stat:nth-child(4n+1):last-child { grid-column: 1 / -1; }
 }
 @media (max-width: 1000px) {
   .dash-grid,
@@ -630,6 +637,8 @@ button:focus-visible, .navbtn:focus-visible, .chip:focus-visible, .fchip:focus-v
 @media (max-width: 860px) {
   .dash-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .dash-summary .stat:nth-child(2n) { border-right: 0; }
+  .dash-summary .stat:nth-child(4n+1):last-child { grid-column: auto; }
+  .dash-summary .stat:nth-child(2n+1):last-child { grid-column: 1 / -1; }
   .session-body { grid-template-columns: 1fr; }
   .session-side {
     border-right: 0;
