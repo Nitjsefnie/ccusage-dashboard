@@ -270,6 +270,56 @@ def test_reply_latency_ignores_replayed_prompt():
     assert out["prompt_count"] == 2
 
 
+def test_edit_call_yields_added_deleted_counts():
+    """Edit churn comes from the CALL arguments (old_string/new_string),
+    not the result text: 2-line old → 4-line new is deleted=2, added=4.
+    Two separate positive series (issue #10)."""
+    out = parse.parse_file(
+        "k/sess-edit/sess-edit.jsonl", _read("edit_churn.jsonl")
+    )
+    assert len(out["tool_uses"]) == 1
+    tu = out["tool_uses"][0]
+    assert tu["tool_name"] == "Edit"
+    assert tu["is_error"] is False
+    assert tu["lines_added"] == 4
+    assert tu["lines_deleted"] == 2
+
+
+def test_write_call_counts_whole_content_as_added():
+    """A Write carries no old content in the call, so it is all
+    additions; 'x\\ny\\nz' (no trailing newline) is 3 lines."""
+    out = parse.parse_file(
+        "k/sess-write/sess-write.jsonl", _read("write_churn.jsonl")
+    )
+    tu = out["tool_uses"][0]
+    assert tu["tool_name"] == "Write"
+    assert tu["lines_added"] == 3
+    assert tu["lines_deleted"] == 0
+
+
+def test_errored_edit_contributes_zero_churn():
+    """An errored Edit changed nothing on disk — its churn is zeroed
+    once the tool_result resolves is_error=True."""
+    out = parse.parse_file(
+        "k/sess-editerr/sess-editerr.jsonl", _read("edit_error.jsonl")
+    )
+    tu = out["tool_uses"][0]
+    assert tu["is_error"] is True
+    assert tu["lines_added"] == 0
+    assert tu["lines_deleted"] == 0
+
+
+def test_non_edit_tool_has_no_churn():
+    """Tools outside the edit/write set always report 0/0."""
+    out = parse.parse_file(
+        "k/sess-ok/sess-ok.jsonl", _read("tool_success.jsonl")
+    )
+    tu = out["tool_uses"][0]
+    assert tu["tool_name"] == "Bash"
+    assert tu["lines_added"] == 0
+    assert tu["lines_deleted"] == 0
+
+
 def test_dated_rate_prices_each_record_at_its_own_timestamp():
     # Sonnet 5 introductory pricing runs through 2026-08-31 UTC; a record
     # on either side of the cutover must be priced by when it was spent,

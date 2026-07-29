@@ -109,6 +109,46 @@ def _flatten_usage(usage: dict) -> dict:
     return out
 
 
+def _line_count(s: str) -> int:
+    """Lines in a payload string, git-style: "a\nb\n" and "a\nb" are both
+    2 lines; "" is 0."""
+    if not s:
+        return 0
+    return s.count("\n") + (0 if s.endswith("\n") else 1)
+
+
+def _tool_churn(name: str, tool_input: dict) -> tuple[int, int]:
+    """(lines_added, lines_deleted) for one edit/write tool CALL.
+
+    Derived from the call ARGUMENTS, not the tool result: the result's
+    text is a bare confirmation ("The file ... has been updated
+    successfully"), and while ~80% of results also carry a structured
+    toolUseResult diff, 20% carry none — the call args are the one
+    source present on every call (verified over the full corpus:
+    27,045 Edit + 8,365 Write, all with old/new payloads). Two
+    separate POSITIVE series per issue #10 — deletions are NOT
+    encoded as negative additions.
+
+    Only Edit and Write occur in the corpus (no MultiEdit /
+    NotebookEdit rows at all), so those are the only names handled.
+    Known approximations: an Edit with replace_all=true is counted
+    once (the call does not say how many occurrences exist), and a
+    Write overwriting an existing file counts its old content as 0
+    deletions (the call does not carry it).
+    """
+    if name == "Edit":
+        return (
+            _line_count(str(tool_input.get("new_string", "") or "")),
+            _line_count(str(tool_input.get("old_string", "") or "")),
+        )
+    if name == "Write":
+        return (
+            _line_count(str(tool_input.get("content", "") or "")),
+            0,
+        )
+    return 0, 0
+
+
 def _to_dt(s: str | None):
     if not s:
         return None
@@ -148,10 +188,15 @@ def _content_metrics(msg: dict) -> tuple[int, list]:
                 # both as tool calls in the panel.
                 name = str(blk.get("name", "") or "")
                 if name:
+                    added, deleted = _tool_churn(
+                        name, blk.get("input") or {}
+                    )
                     msg_tool_uses.append({
                         "idx": idx,
                         "tool_name": name,
                         "tool_use_id": str(blk.get("id", "") or ""),
+                        "lines_added": added,
+                        "lines_deleted": deleted,
                     })
     elif isinstance(msg_content, str):
         text_chars = len(msg_content)
@@ -379,17 +424,25 @@ class _LineWalk:
                 "tool_name": tu["tool_name"],
                 "tool_use_id": tu["tool_use_id"],
                 "is_error": None,  # filled after the line walk
+                "lines_added": tu["lines_added"],
+                "lines_deleted": tu["lines_deleted"],
             })
 
 
 def _resolve_tool_errors(tool_uses: list, tool_result_is_error: dict) -> None:
     """Resolve tool_result.is_error onto each tool_uses entry by
     tool_use_id. Unmatched entries keep is_error=None and are
-    excluded from rate denominators at query time."""
+    excluded from rate denominators at query time. An errored call
+    changed nothing on disk, so its churn is zeroed (an unmatched
+    call keeps its churn: the file may simply end before the
+    result record)."""
     for tu in tool_uses:
         tu_id = tu.pop("tool_use_id", "")
         if tu_id and tu_id in tool_result_is_error:
             tu["is_error"] = tool_result_is_error[tu_id]
+            if tu["is_error"]:
+                tu["lines_added"] = 0
+                tu["lines_deleted"] = 0
 
 
 def _project_record(file_key: str, ev: dict) -> dict:
