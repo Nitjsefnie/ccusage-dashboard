@@ -2,9 +2,8 @@
 
 Split out of api.py (issue #8 module split). The endpoint body is broken
 into _dashboard_sources (shared SQL fragments), _dashboard_queries (the
-seven panel queries) and _dashboard_build (row folding) so no single
-function trips the locals/branches/statements gates. Behaviour is
-unchanged from the pre-split monolith.
+eight panel queries) and _dashboard_build (row folding) so no single
+function trips the locals/branches/statements gates.
 """
 from __future__ import annotations
 
@@ -59,6 +58,37 @@ def _rollup_source(use_rollup: bool, roll_proj: str, roll_model: str) -> str:
     """
 
 
+def _churn_source(project: str | None, model: str | None,
+                  since: datetime) -> tuple[str, list]:
+    """The FROM+WHERE fragment (and its args) for the line-churn query.
+
+    Line churn (issue #10) lives on tool_uses, not records, so it can
+    never come out of usage_rollup — it is a live pass like
+    response_sizes, bucketed on the tool call's own ts. The model
+    filter needs the records join (same shape as tool_error_rate's);
+    without a filter the join is skipped so calls on usage-less
+    assistant lines still count.
+    """
+    proj_filter = "AND f.project_id = %s" if project else ""
+    model_join = ""
+    model_filter = ""
+    args: list[Any] = [since]
+    if project:
+        args.append(project)
+    if model:
+        model_join = ("JOIN records r ON r.file_key = tu.file_key "
+                      "AND r.line_num = tu.line_num")
+        model_filter = "AND r.model LIKE %s"
+        args.append(f"%{model}%")
+    return f"""
+        FROM tool_uses tu
+        JOIN files f ON f.file_key = tu.file_key
+        {model_join}
+        WHERE tu.ts >= %s {proj_filter} {model_filter}
+          AND (tu.lines_added > 0 OR tu.lines_deleted > 0)
+    """, args
+
+
 def _dashboard_sources(project: str | None, model: str | None,
                        since: datetime, bucket_s: int) -> dict:
     """Shared SQL fragments + their param lists for the panel queries."""
@@ -91,28 +121,31 @@ def _dashboard_sources(project: str | None, model: str | None,
     if model:
         canon_args.append(f"%{model}%")
 
-    use_rollup = bucket_s >= 3600
     roll_proj = "AND u.project_id = %s" if project else ""
     roll_model = "AND u.model LIKE %s" if model else ""
-    roll_src = _rollup_source(use_rollup, roll_proj, roll_model)
+    roll_src = _rollup_source(bucket_s >= 3600, roll_proj, roll_model)
     roll_args: list[Any] = [since]
     if project:
         roll_args.append(project)
     if model:
         roll_args.append(f"%{model}%")
 
+    churn_src, churn_args = _churn_source(project, model, since)
+
     return {
         "canon_src": canon_src,
         "canon_args": canon_args,
         "roll_src": roll_src,
         "roll_args": roll_args,
+        "churn_src": churn_src,
+        "churn_args": churn_args,
         "proj_filter": proj_filter,
         "file_args": file_args,
     }
 
 
 def _dashboard_queries(c, ph: Phases, bucket_s: int, src: dict) -> dict:
-    """Run the seven panel queries against one connection."""
+    """Run the eight panel queries against one connection."""
     hourly_rows = ph.execute(
         "hourly", c, f"""
         SELECT to_timestamp(
@@ -152,6 +185,23 @@ def _dashboard_queries(c, ph: Phases, bucket_s: int, src: dict) -> dict:
         ORDER BY 1, 2
         """,
         src["canon_args"],
+    ).fetchall()
+
+    # Line churn per bucket, folded onto the hourly panel entries below.
+    # Live pass over tool_uses (~313k rows, but the >0 predicate keeps
+    # only edit/write calls — ~11% of them).
+    churn_rows = ph.execute(
+        "churn", c, f"""
+        SELECT to_timestamp(
+                 floor(EXTRACT(EPOCH FROM tu.ts) / {bucket_s}) * {bucket_s} + {bucket_s} / 2
+               ) AS hour,
+               SUM(tu.lines_added)   AS lines_added,
+               SUM(tu.lines_deleted) AS lines_deleted
+        {src["churn_src"]}
+        GROUP BY 1
+        ORDER BY 1
+        """,
+        src["churn_args"],
     ).fetchall()
 
     total_sessions_row = ph.execute(
@@ -333,6 +383,7 @@ def _dashboard_queries(c, ph: Phases, bucket_s: int, src: dict) -> dict:
     return {
         "hourly": hourly_rows,
         "response_sizes": response_sizes_rows,
+        "churn": churn_rows,
         "total_sessions_row": total_sessions_row,
         "cost_by_project": cost_by_project_rows,
         "file_counts_row": file_counts_row,
@@ -384,6 +435,29 @@ def _fold_hourly(hourly_rows) -> tuple[list, list]:
         reverse=True,
     )
     return hourly, cost_by_model
+
+
+def _attach_churn(hourly: list, churn_rows) -> None:
+    """Fold per-bucket line churn onto the hourly entries (issue #10).
+
+    Churn is bucketed per hour, NOT per model, so — like session_count —
+    it is attributed to the first model row of each hour only: the
+    TimeSeriesPanel bins sum the key across every entry in the bin, and
+    attaching it to each (hour, model) row would multiply it by the
+    model count."""
+    churn_by_hour = {
+        _iso(hour): (int(added or 0), int(deleted or 0))
+        for (hour, added, deleted) in churn_rows
+    }
+    seen_hours: set[str | None] = set()
+    for entry in hourly:
+        hour_iso = entry["hour"]
+        added, deleted = 0, 0
+        if hour_iso not in seen_hours:
+            seen_hours.add(hour_iso)
+            added, deleted = churn_by_hour.get(hour_iso, (0, 0))
+        entry["lines_added"] = added
+        entry["lines_deleted"] = deleted
 
 
 def _fold_cost_by_project(rows) -> list:
@@ -473,6 +547,7 @@ def _dashboard_build(rows: dict, rng: str, project: str | None,
                      bucket_s: int) -> dict:
     """Fold the raw panel rows into the response payload."""
     hourly, cost_by_model = _fold_hourly(rows["hourly"])
+    _attach_churn(hourly, rows["churn"])
     file_counts_row = rows["file_counts_row"] or (0, 0, 0, 0, 0, 0)
     total_sessions_row = rows["total_sessions_row"]
     return {

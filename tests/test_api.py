@@ -509,6 +509,51 @@ def test_dashboard_returns_prompts_and_turns_totals(app_with_data):
     assert body_b["total_turns"] == 3
 
 
+def test_dashboard_hourly_carries_line_churn(app_with_fresh_data):
+    """Issue #10: lines added/deleted ride the hourly panel entries.
+    Churn lives on tool_uses (not records/usage_rollup) and is bucketed
+    per hour, attributed to the hour's first model row like
+    session_count — so summing the key across entries is exact, and the
+    project/model filters scope it."""
+    with closing(psycopg.connect(os.environ["DATABASE_URL_VIZ"])) as conn, conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO tool_uses (file_key, line_num, idx, ts, tool_name, "
+            "is_error, lines_added, lines_deleted) VALUES "
+            # line_num=2 is sess-A's usage-bearing assistant record, so
+            # the model filter's records join can find it.
+            "('projA/sess-A/sess-A.jsonl', 2, 0, '2026-05-07T10:00:01Z', "
+            " 'Edit', FALSE, 10, 4), "
+            # Errored call: parsed as zero churn, must add nothing.
+            "('projA/sess-A/sess-A.jsonl', 2, 1, '2026-05-07T10:00:02Z', "
+            " 'Edit', TRUE, 0, 0)"
+        )
+        conn.commit()
+
+    def churn(body):
+        return (sum(h["lines_added"] for h in body["hourly"]),
+                sum(h["lines_deleted"] for h in body["hourly"]))
+
+    body = app_with_fresh_data.get("/api/dashboard?range=3650d").json()
+    assert "lines_added" in body["hourly"][0]
+    assert "lines_deleted" in body["hourly"][0]
+    assert churn(body) == (10, 4)
+
+    body_a = app_with_fresh_data.get(
+        "/api/dashboard?range=3650d&project=projA").json()
+    assert churn(body_a) == (10, 4)
+    body_b = app_with_fresh_data.get(
+        "/api/dashboard?range=3650d&project=projB").json()
+    assert churn(body_b) == (0, 0)
+
+    # The model filter joins tool_uses to records on (file_key, line_num).
+    body_m = app_with_fresh_data.get(
+        "/api/dashboard?range=3650d&model=sonnet").json()
+    assert churn(body_m) == (10, 4)
+    body_x = app_with_fresh_data.get(
+        "/api/dashboard?range=3650d&model=no-such-model").json()
+    assert churn(body_x) == (0, 0)
+
+
 def test_dashboard_excludes_rate_limit_hits_older_than_range(app_with_rl_data):
     client, in_range, out_range = app_with_rl_data
 

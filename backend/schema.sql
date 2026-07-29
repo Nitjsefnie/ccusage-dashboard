@@ -201,6 +201,17 @@ CREATE INDEX IF NOT EXISTS tool_uses_tool_idx ON tool_uses (tool_name);
 -- the error rate over settled calls only.
 ALTER TABLE tool_uses ADD COLUMN IF NOT EXISTS is_error BOOLEAN;
 
+-- 2026-07-29 (issue #10): per-call line churn for edit/write tools,
+-- derived from the tool CALL arguments at parse time (see
+-- parse._tool_churn). Two separate POSITIVE series — deletions are
+-- not negative additions. Errored calls are zeroed at parse. Both
+-- default 0, so historical rows read as "no churn known" until a
+-- PARSER_VERSION bump reparses them.
+ALTER TABLE tool_uses ADD COLUMN IF NOT EXISTS
+  lines_added BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE tool_uses ADD COLUMN IF NOT EXISTS
+  lines_deleted BIGINT NOT NULL DEFAULT 0;
+
 CREATE TABLE IF NOT EXISTS ingest_runs (
   id              BIGSERIAL PRIMARY KEY,
   started_at      TIMESTAMPTZ NOT NULL,

@@ -876,8 +876,10 @@ def _persist(obj, proj, parsed, parser_version) -> None:
         if parsed.get("tool_uses"):
             cur.executemany(
                 """
-                INSERT INTO tool_uses (file_key, line_num, idx, ts, tool_name, is_error)
-                VALUES (%(file_key)s, %(line_num)s, %(idx)s, %(ts)s, %(tool_name)s, %(is_error)s)
+                INSERT INTO tool_uses (file_key, line_num, idx, ts, tool_name,
+                  is_error, lines_added, lines_deleted)
+                VALUES (%(file_key)s, %(line_num)s, %(idx)s, %(ts)s, %(tool_name)s,
+                  %(is_error)s, %(lines_added)s, %(lines_deleted)s)
                 """,
                 parsed["tool_uses"],
             )
