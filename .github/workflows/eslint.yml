@@ -7,9 +7,13 @@ name: eslint
 # share globals across <script> tags (window.HBar, window.humanCurrency,
 # ...). The checked-in .eslintrc.json reflects that reality:
 # sourceType "script", env browser, and a globals list derived from
-# public/index.html (React/ReactDOM CDN scripts, BACKEND_URL) plus every
+# public/index.html (React/ReactDOM CDN scripts, BACKEND_URL), every
 # name the src files attach to window (window.X = ... and the
-# Object.assign(window, {...}) block in event-helpers.jsx).
+# Object.assign(window, {...}) block in event-helpers.jsx), AND every
+# top-level `function` declaration in src/**/*.js(x) — the sources load
+# as classic scripts, so a top-level function is a cross-file global
+# without any window assignment. Derivation is mechanical (grep
+# '^function NAME' over src); extend it the same way when adding files.
 #
 # The value here is no-undef / no-unused-vars — an undefined variable in
 # a component should be found by CI, not by a user. Stylistic rules stay

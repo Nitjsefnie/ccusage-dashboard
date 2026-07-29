@@ -2,7 +2,7 @@
 // Loads synthetic events for the dashboard preview; lets you drop a real
 // .jsonl on the Session view to inspect a single transcript.
 
-const { useState, useEffect, useMemo, useRef } = React;
+const { useState, useEffect, useMemo } = React;
 
 function txToDashData(tx) {
   // Convert a real transcript into dashboard-shaped {events, limitHits, range}.
