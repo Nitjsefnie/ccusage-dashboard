@@ -113,8 +113,8 @@ def _dashboard_sources(project: str | None, model: str | None,
 
 def _dashboard_queries(c, ph: Phases, bucket_s: int, src: dict) -> dict:
     """Run the seven panel queries against one connection."""
-    hourly_rows = ph.execute("hourly", c,
-        f"""
+    hourly_rows = ph.execute(
+        "hourly", c, f"""
         SELECT to_timestamp(
                  floor(EXTRACT(EPOCH FROM u.hour) / {bucket_s}) * {bucket_s} + {bucket_s} / 2
                ) AS hour,
@@ -137,8 +137,8 @@ def _dashboard_queries(c, ph: Phases, bucket_s: int, src: dict) -> dict:
     # Percentiles are the one thing that cannot be rolled up — p50/p90
     # of a union of hours is not derivable from per-hour p50/p90 — so
     # this stays a live pass, narrowed to the text-bearing rows.
-    response_sizes_rows = ph.execute("response_sizes", c,
-        f"""
+    response_sizes_rows = ph.execute(
+        "response_sizes", c, f"""
         SELECT to_timestamp(
                  floor(EXTRACT(EPOCH FROM d.ts) / {bucket_s}) * {bucket_s} + {bucket_s} / 2
                ) AS bucket,
@@ -154,8 +154,8 @@ def _dashboard_queries(c, ph: Phases, bucket_s: int, src: dict) -> dict:
         src["canon_args"],
     ).fetchall()
 
-    total_sessions_row = ph.execute("total_sessions", c,
-        f"""
+    total_sessions_row = ph.execute(
+        "total_sessions", c, f"""
         SELECT COUNT(DISTINCT u.session_id) AS n
         {src["roll_src"]}
         """,
@@ -166,8 +166,8 @@ def _dashboard_queries(c, ph: Phases, bucket_s: int, src: dict) -> dict:
     # out of the same rollup source as cost_by_model (range-, project-
     # and model-filtered alike). Sorted DESC here so the top-10/Other
     # fold below is a plain slice.
-    cost_by_project_rows = ph.execute("cost_by_project", c,
-        f"""
+    cost_by_project_rows = ph.execute(
+        "cost_by_project", c, f"""
         SELECT u.project_id, SUM(u.cost_usd) AS cost_usd
         {src["roll_src"]}
         GROUP BY 1
@@ -176,8 +176,8 @@ def _dashboard_queries(c, ph: Phases, bucket_s: int, src: dict) -> dict:
         src["roll_args"],
     ).fetchall()
 
-    file_counts_row = ph.execute("file_counts", c,
-        f"""
+    file_counts_row = ph.execute(
+        "file_counts", c, f"""
         -- The two EXISTS predicates were correlated subqueries
         -- evaluated once per file row (four of them, ~9.2k files).
         -- Resolve each to a set once and LEFT JOIN instead.
@@ -217,8 +217,8 @@ def _dashboard_queries(c, ph: Phases, bucket_s: int, src: dict) -> dict:
     # dominant model is argmax(requests) over the in-range rows — exactly
     # what MODE() WITHIN GROUP computed from the raw records, without
     # re-sorting them.
-    sessions_rows = ph.execute("sessions", c,
-        f"""
+    sessions_rows = ph.execute(
+        "sessions", c, f"""
         WITH per_session_model AS (
           SELECT u.session_id, u.model,
                  SUM(u.requests)              AS requests,
@@ -269,8 +269,8 @@ def _dashboard_queries(c, ph: Phases, bucket_s: int, src: dict) -> dict:
     # treats each file as its own conversation, so a sub-agent
     # invocation surfaces under whatever model it ran on, even if
     # there's no main session file on disk.
-    ctx_traces_rows = ph.execute("ctx_traces", c,
-        f"""
+    ctx_traces_rows = ph.execute(
+        "ctx_traces", c, f"""
         WITH scoped_files AS (
           SELECT f.file_key, f.session_id, f.is_main, f.ctx_turns
           FROM files f
@@ -301,8 +301,8 @@ def _dashboard_queries(c, ph: Phases, bucket_s: int, src: dict) -> dict:
         list(src["file_args"]),
     ).fetchall()
 
-    rl_rows = ph.execute("rate_limit_hits", c,
-        f"""
+    rl_rows = ph.execute(
+        "rate_limit_hits", c, f"""
         SELECT f.session_id, hit
         FROM files f, jsonb_array_elements(f.rate_limit_hits) AS hit
         WHERE f.r2_last_modified >= %s {src["proj_filter"]}

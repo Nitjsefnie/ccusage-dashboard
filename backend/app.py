@@ -66,6 +66,8 @@ app = FastAPI(
     # orjson serialises the same payload in 11ms.
     default_response_class=ORJSONResponse,
 )
+
+
 class _SelectiveGZip(GZipMiddleware):
     """GZip everything except the SSE stream.
 

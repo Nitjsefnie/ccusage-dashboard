@@ -71,6 +71,7 @@ def _set_progress(**kw) -> None:
     with _PROGRESS_LOCK:
         _PROGRESS.update(kw)
 
+
 # What the fetch retry treats as transient. None of the boto3 failures is an
 # OSError — ConnectionClosedError and EndpointConnectionError are
 # BotoCoreErrors, and ClientError descends from neither — so catching

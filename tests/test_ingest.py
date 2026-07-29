@@ -79,14 +79,10 @@ def test_records_populated_with_no_write_time_dedup(fresh_db, mini_r2_env):
         n = _scalar(c, "SELECT COUNT(*) FROM records")
         assert n > 0
         # All three files' rows for 'shared-uuid-1' kept verbatim
-        cnt = _scalar(c,
-            "SELECT COUNT(*) FROM records WHERE uuid = 'shared-uuid-1'"
-        )
+        cnt = _scalar(c, "SELECT COUNT(*) FROM records WHERE uuid = 'shared-uuid-1'")
         assert cnt == 3
         # Query-time dedup gives 1
-        cnt_distinct = _scalar(c,
-            "SELECT COUNT(DISTINCT uuid) FROM records WHERE uuid = 'shared-uuid-1'"
-        )
+        cnt_distinct = _scalar(c, "SELECT COUNT(DISTINCT uuid) FROM records WHERE uuid = 'shared-uuid-1'")
         assert cnt_distinct == 1
 
 
@@ -103,17 +99,13 @@ def test_ctx_turns_stored_per_file(fresh_db, mini_r2_env):
 def test_etag_change_triggers_per_file_reparse(fresh_db, mini_r2_env):
     ingest.run_ingest(trigger="manual")
     with db.viz_conn() as c:
-        before_etag = _scalar(c,
-            "SELECT r2_etag FROM files WHERE file_key LIKE '%sess-A.jsonl'"
-        )
+        before_etag = _scalar(c, "SELECT r2_etag FROM files WHERE file_key LIKE '%sess-A.jsonl'")
     target = mini_r2_env / "projA" / "sess-A" / "sess-A.jsonl"
     target.write_text(target.read_text() + "\n")
     result = ingest.run_ingest(trigger="manual")
     assert result["reparsed"] == 1
     with db.viz_conn() as c:
-        after_etag = _scalar(c,
-            "SELECT r2_etag FROM files WHERE file_key LIKE '%sess-A.jsonl'"
-        )
+        after_etag = _scalar(c, "SELECT r2_etag FROM files WHERE file_key LIKE '%sess-A.jsonl'")
     assert before_etag != after_etag
 
 
@@ -131,9 +123,7 @@ def test_deleted_file_removed(fresh_db, mini_r2_env):
     result = ingest.run_ingest(trigger="manual")
     assert result["deleted"] == 1
     with db.viz_conn() as c:
-        n = _scalar(c,
-            "SELECT COUNT(*) FROM files WHERE file_key LIKE '%sess-B.jsonl'"
-        )
+        n = _scalar(c, "SELECT COUNT(*) FROM files WHERE file_key LIKE '%sess-B.jsonl'")
         assert n == 0
 
 
@@ -143,9 +133,7 @@ def test_records_cascade_on_file_delete(fresh_db, mini_r2_env):
     target.unlink()
     ingest.run_ingest(trigger="manual")
     with db.viz_conn() as c:
-        n = _scalar(c,
-            "SELECT COUNT(*) FROM records WHERE file_key LIKE '%sess-A.jsonl'"
-        )
+        n = _scalar(c, "SELECT COUNT(*) FROM records WHERE file_key LIKE '%sess-A.jsonl'")
         assert n == 0
 
 
@@ -162,9 +150,7 @@ def test_first_seen_at_uses_least(fresh_db, mini_r2_env):
     re-ingest must drag first_seen_at backward via LEAST(...) in ON CONFLICT."""
     ingest.run_ingest(trigger="manual")
     with db.viz_conn() as c:
-        before = _scalar(c,
-            "SELECT first_seen_at FROM projects WHERE project_id = 'projA'"
-        )
+        before = _scalar(c, "SELECT first_seen_at FROM projects WHERE project_id = 'projA'")
 
     new_dir = mini_r2_env / "projA" / "sess-NEW"
     new_dir.mkdir()
@@ -182,9 +168,7 @@ def test_first_seen_at_uses_least(fresh_db, mini_r2_env):
 
     ingest.run_ingest(trigger="manual")
     with db.viz_conn() as c:
-        after = _scalar(c,
-            "SELECT first_seen_at FROM projects WHERE project_id = 'projA'"
-        )
+        after = _scalar(c, "SELECT first_seen_at FROM projects WHERE project_id = 'projA'")
     assert after < before, f"first_seen_at should move backward: was {before}, now {after}"
 
 
@@ -212,9 +196,7 @@ def test_xz_compressed_jsonl_ingests_transparently(fresh_db, mini_r2_env):
         assert row[2] == "sess-A"
         n_main = _scalar(c, "SELECT COUNT(*) FROM files WHERE is_main")
         assert n_main == 4
-        n_rec = _scalar(c,
-            "SELECT COUNT(*) FROM records WHERE file_key LIKE '%sess-A.jsonl.xz'"
-        )
+        n_rec = _scalar(c, "SELECT COUNT(*) FROM records WHERE file_key LIKE '%sess-A.jsonl.xz'")
         assert n_rec > 0, "records populate from decompressed bytes"
 
 
@@ -465,12 +447,8 @@ def test_per_object_failure_still_rebuilds_derived_state(
     """
     ingest.run_ingest(trigger="manual")
     with db.viz_conn() as c:
-        rollup_before = _scalar(c,
-            "SELECT COUNT(*) FROM usage_rollup"
-        )
-        dupes_before = _scalar(c,
-            "SELECT COUNT(*) FROM records WHERE NOT is_canonical"
-        )
+        rollup_before = _scalar(c, "SELECT COUNT(*) FROM usage_rollup")
+        dupes_before = _scalar(c, "SELECT COUNT(*) FROM records WHERE NOT is_canonical")
     assert rollup_before > 0 and dupes_before > 0, "fixture proves nothing"
 
     with db.viz_conn() as c:
@@ -494,15 +472,9 @@ def test_per_object_failure_still_rebuilds_derived_state(
     assert result["reparsed"] == 4
 
     with db.viz_conn() as c:
-        rollup_after = _scalar(c,
-            "SELECT COUNT(*) FROM usage_rollup"
-        )
-        dupes_after = _scalar(c,
-            "SELECT COUNT(*) FROM records WHERE NOT is_canonical"
-        )
-        tool_rollup_after = _scalar(c,
-            "SELECT COUNT(*) FROM tool_rollup"
-        )
+        rollup_after = _scalar(c, "SELECT COUNT(*) FROM usage_rollup")
+        dupes_after = _scalar(c, "SELECT COUNT(*) FROM records WHERE NOT is_canonical")
+        tool_rollup_after = _scalar(c, "SELECT COUNT(*) FROM tool_rollup")
     assert rollup_after == rollup_before, "usage_rollup was not rebuilt"
     assert dupes_after == dupes_before, "is_canonical was not recomputed"
     assert tool_rollup_after > 0, "tool_rollup was not rebuilt"
@@ -522,9 +494,7 @@ def test_a_transient_fetch_failure_is_retried_and_recovers(
     assert counts[_FLAKY_KEY] == 3
     assert slept == [0.5, 1.0], "exponential backoff between attempts"
     with db.viz_conn() as c:
-        n = _scalar(c,
-            "SELECT COUNT(*) FROM files WHERE file_key = %s", (_FLAKY_KEY,)
-        )
+        n = _scalar(c, "SELECT COUNT(*) FROM files WHERE file_key = %s", (_FLAKY_KEY,))
     assert n == 1
 
 
@@ -578,9 +548,7 @@ def test_a_corrupt_xz_object_is_one_failure_not_a_dead_run(
     assert not slept, "and must not sleep between attempts it does not make"
     with db.viz_conn() as c:
         rollup = _scalar(c, "SELECT COUNT(*) FROM usage_rollup")
-        stored = _scalar(c,
-            "SELECT COUNT(*) FROM files WHERE file_key = %s", (_CORRUPT_XZ_KEY,)
-        )
+        stored = _scalar(c, "SELECT COUNT(*) FROM files WHERE file_key = %s", (_CORRUPT_XZ_KEY,))
     assert rollup > 0, "derived state must still be rebuilt"
     assert stored == 0
 

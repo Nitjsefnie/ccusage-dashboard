@@ -26,7 +26,6 @@ except ImportError:
     mdates = gridspec = plt = None
 
 
-
 def _tz_label(tz):
     """UTC, or the short alias when the tz maps to one."""
     if not tz:
@@ -342,8 +341,6 @@ def _plot_token_breakdown(ax_breakdown, events):
         ax_breakdown.set_xlim(0, max(cat_totals) * 1.35)
 
 
-
-
 def _plot_panels(axes, ctx, events, highlight, tz):
     """The six binned metric panels + cost-by-model + token breakdown."""
     for idx, (title, key, is_currency) in enumerate(CHARTS):
@@ -357,6 +354,7 @@ def _plot_panels(axes, ctx, events, highlight, tz):
     # Hide unused axes slots
     for i in range(len(CHARTS) + 2, len(axes)):
         axes[i].set_visible(False)
+
 
 def plot_timeline(events, period_str, output_path, tz=None, highlight=None,
                   limit_hits=None):
