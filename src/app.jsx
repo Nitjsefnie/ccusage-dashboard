@@ -426,6 +426,8 @@ function backendDashToShape(b) {
     ephemeral_5m: h.cache_5m_tokens,
     ephemeral_1h: h.cache_1h_tokens,
     cost_usd: h.cost_usd,
+    lines_added: h.lines_added || 0,
+    lines_deleted: h.lines_deleted || 0,
     requests: h.requests || 1,
     session_count: h.session_count || 0,
   })).filter(e => !isNaN(e.ts));
@@ -768,6 +770,10 @@ function Dashboard({ synth, models, backendOn, activeProject, activeRange, dashN
           valueKey="_t" color={window.dashboardCol.totalTokens} range={range} binMs={binMs} />
         <window.TimeSeriesPanel title="Cost (USD)"    events={events} valueKey="cost_usd"
           color={window.dashboardCol.costUSD} range={range} binMs={binMs} isCurrency />
+        <window.TimeSeriesPanel title="Lines Added"   events={events} valueKey="lines_added"
+          color={window.dashboardCol.linesAdded} range={range} binMs={binMs} />
+        <window.TimeSeriesPanel title="Lines Deleted" events={events} valueKey="lines_deleted"
+          color={window.dashboardCol.linesDeleted} range={range} binMs={binMs} />
       </div>
 
       <div className="dash-grid-2">

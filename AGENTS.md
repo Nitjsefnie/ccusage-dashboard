@@ -7,7 +7,7 @@
 
 **claudit** (Claude Code Usage Dashboard) is a self-hosted web application that visualises Claude Code session JSONL transcripts. It ingests transcripts from Cloudflare R2 (or a local `file://` mirror), parses them into Postgres, and serves dashboards and raw transcripts to a React frontend rendered via in-browser Babel (no npm/build step).
 
-The dashboard panels include: Session Burn Rate, Cost by Model, Token Breakdown, Prompt-Cache TTL Split, Per-Session Context Growth, Response Sizes, Tool Usage Ratio, Reply Latency, Tool Error Rate, and Activity Heatmap.
+The dashboard panels include: Session Burn Rate, Cost by Model, Token Breakdown, Prompt-Cache TTL Split, Per-Session Context Growth, Response Sizes, Tool Usage Ratio, Reply Latency, Tool Error Rate, Activity Heatmap, and Lines Added/Deleted (per-edit/write-call churn from tool call arguments, stored on `tool_uses`).
 
 ## Technology stack
 
@@ -40,7 +40,10 @@ backend/          — FastAPI application
   api_export.py   — /api/export PNG render subprocess
   constants.py    — Dependency-free shared constants (LATENCY_BUCKETS);
                     exists to keep the api/ingest import graph acyclic
-  parse.py        — JSONL → records + ctx_turns + rate_limit_hits.
+  parse.py        — JSONL → records + ctx_turns + rate_limit_hits +
+                    tool_uses (incl. per-call lines_added/lines_deleted
+                    for Edit/Write, derived from the call arguments;
+                    errored calls are zeroed).
                     Mirrors canonical ~/.claude/scripts/parse_session.py
                     for Phase 1 within-file requestId max-merge.
   pricing.py      — Single source of truth for per-model token rates (USD/M).

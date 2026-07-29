@@ -27,6 +27,8 @@ const COL = {
   cacheReadTokens:   'oklch(0.72 0.14 25)',
   totalTokens:       'oklch(0.78 0.14 245)',
   costUSD:           cssVar('--gold', 'oklch(0.85 0.14 90)'),
+  linesAdded:        'oklch(0.75 0.16 155)',  // green — insertions
+  linesDeleted:      'oklch(0.68 0.19 15)',   // red — deletions (positive series)
 };
 
 const MODEL_COLORS = {
