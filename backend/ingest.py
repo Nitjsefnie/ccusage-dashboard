@@ -147,7 +147,9 @@ def _open_run(started: datetime, trigger: str) -> int:
             "RETURNING id",
             (started, trigger),
         )
-        run_id = cur.fetchone()[0]
+        row = cur.fetchone()
+        assert row is not None  # INSERT ... RETURNING always yields a row
+        run_id = row[0]
         c.commit()
     return run_id
 
@@ -572,7 +574,7 @@ def rebuild_latency_rollup() -> int:
                 ("''", ""),
             ):
                 cur = c.execute(
-                    f"""
+                    db.sql_text(f"""
                     WITH src AS (
                       SELECT to_timestamp(
                                floor(EXTRACT(EPOCH FROM r.ts) / {bs}) * {bs} + {bs} / 2
@@ -622,7 +624,7 @@ def rebuild_latency_rollup() -> int:
                            b.p10, b.p50, b.p90, COALESCE(p.outliers, '[]'::jsonb)
                       FROM bands b
                       LEFT JOIN picked p USING (bucket, project_id, model)
-                    """
+                    """),
                 )
                 written += cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
         c.commit()
