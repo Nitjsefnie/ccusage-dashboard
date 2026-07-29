@@ -26,11 +26,20 @@ The dashboard panels include: Session Burn Rate, Cost by Model, Token Breakdown,
 backend/          — FastAPI application
   app.py          — Startup/shutdown, route mounting, static asset serving,
                     index.html rewriting with cache-bust and auth injection
-  api.py          — REST endpoints (/api/me, /api/projects, /api/dashboard,
-                    /api/cache, /api/context-growth/{agg,session},
-                    /api/sessions*, /api/events SSE, /api/tool-usage,
-                    /api/tool-error-rate, /api/reply-latency, /api/models,
-                    /api/export)
+  api.py          — REST router assembly + the smaller panel endpoints
+                    (/api/me, /api/projects, /api/tool-usage,
+                    /api/tool-error-rate, /api/activity-heatmap,
+                    /api/reply-latency, /api/events SSE, /api/models,
+                    /api/context-growth/{agg,session}); includes the four
+                    sub-routers below
+  api_common.py   — Shared endpoint helpers: Phases timing, dated-rate
+                    fold, _parse_range/_bucket_seconds/_iso, HEATMAP_TZ
+  api_dashboard.py — /api/dashboard (sources/queries/build split)
+  api_cache.py    — /api/cache (parse_session --cache replica)
+  api_sessions.py — /api/sessions*, transcript, sidecar
+  api_export.py   — /api/export PNG render subprocess
+  constants.py    — Dependency-free shared constants (LATENCY_BUCKETS);
+                    exists to keep the api/ingest import graph acyclic
   parse.py        — JSONL → records + ctx_turns + rate_limit_hits.
                     Mirrors canonical ~/.claude/scripts/parse_session.py
                     for Phase 1 within-file requestId max-merge.
@@ -74,10 +83,14 @@ src/              — React JSX modules served at /src/* (in-browser Babel)
     cache-view.jsx           — Cache analysis view.
     context-growth-view-v2.jsx — Updated context growth view.
 
-scripts/          — scripts/plots/ccusage_plot_db.py: our DB-backed
-                    usage-plotting script, queries the claudit Postgres
-                    `records` table (visual-design parity with upstream
-                    nhz-io/ccusage-plot). Canonical analyst scripts
+scripts/          — scripts/plots/: our DB-backed usage-plotting script,
+                    split into ccusage_plot_db.py (DSN resolution,
+                    load_events, find_limit_hits, CLI main),
+                    ccusage_plot_render.py (theme, burn-rate panel,
+                    session/EMA math) and ccusage_plot_timeline.py
+                    (metric panels, plot_timeline). Queries the claudit
+                    Postgres `records` table (visual-design parity with
+                    upstream nhz-io/ccusage-plot). Canonical analyst scripts
                     (parse_session.py, discord_mb.py) are NOT vendored
                     here — invoke them by absolute path under
                     ~/.claude/scripts/.
@@ -237,7 +250,7 @@ backstop, not the first check.
 - **Cost is always TTL-split**. `cache_creation` decomposes into `ephemeral_5m` (× 1.25 base) + `ephemeral_1h` (× 2 base). Tokens with no `ephemeral_*` split (legacy SDK) are charged at the 5m rate. Single-rate `cache_create` cost is banned.
 - **Cross-file uuid dedup is resolved at INGEST** into `records.is_canonical` (SV-CANONICAL-FLAG); read paths filter that boolean and must not reintroduce `DISTINCT ON (uuid)`. Per-file `requestId` max-merge also happens at ingest.
 - **Aggregates are precomputed at ingest** into `usage_rollup` (grain: session × hour × model × is_main), `tool_rollup` (hour × project × model × tool) and `latency_rollup` — see SV-ROLLUP. The first two hold pure sums/counts/min/max and are summed up to the display bucket; they are valid only for buckets ≥ 1h, so the 24h view takes a live path.
-- **`latency_rollup` is different**: percentiles do NOT compose across buckets, so it is stored once *per display bucket width* (`ingest.LATENCY_BUCKETS`) — possible only because the widths are epoch-aligned and there are just a handful. It also stores a separate all-projects row (`project_id = ''`), because a project filter changes the population inside each group and `p50` over all projects is not derivable from per-project `p50`s. Response-size percentiles are still live.
+- **`latency_rollup` is different**: percentiles do NOT compose across buckets, so it is stored once *per display bucket width* (`constants.LATENCY_BUCKETS`) — possible only because the widths are epoch-aligned and there are just a handful. It also stores a separate all-projects row (`project_id = ''`), because a project filter changes the population inside each group and `p50` over all projects is not derivable from per-project `p50`s. Response-size percentiles are still live.
 - **Don't invoke `~/.claude/scripts/parse_session.py`** at runtime, and don't edit it from this repo. If the canonical Python and our port drift, fix it here, not there.
 - **Tests use fixtures, not real R2.** The R2 client supports `R2_ENDPOINT=file:///path/to/mirror/` for offline dev.
 - **Parser version invalidation:** Bump `PARSER_VERSION` in `.env` whenever parser semantics or `pricing.py` rates change — every file reparses on next ingest.
