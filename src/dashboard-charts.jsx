@@ -580,13 +580,29 @@ const VBAR_LABEL_LINE_H = VBAR_LABEL_FS * 1.2;
 const VBAR_LABEL_Y = 10;      // anchor offset below the x axis
 
 // Hard-wrap into lines of at most maxChars — wrapping, never truncation:
-// every character of the label survives on some line.
+// every character of the label survives on some line. Separator-aware:
+// paths/identifiers split blindly every N chars land mid-token (e.g.
+// "-root-robot-isla" / "nds"), so each line takes the longest prefix that
+// is <= maxChars and ends on a break char ('/', '-', '_'), keeping the
+// break at the END of the line. Falls back to a hard cut at exactly
+// maxChars when no break char appears in that window (e.g. a long hash).
 function wrapAxisLabel(label, maxChars) {
   const s = String(label);
   const n = Math.max(1, Math.floor(maxChars));
+  const isBreak = (ch) => ch === '/' || ch === '-' || ch === '_';
   const lines = [];
-  for (let i = 0; i < s.length; i += n) lines.push(s.slice(i, i + n));
-  return lines.length ? lines : [''];
+  let rest = s;
+  while (rest.length > n) {
+    let cut = -1;
+    for (let i = Math.min(n, rest.length) - 1; i >= 0; i--) {
+      if (isBreak(rest[i])) { cut = i + 1; break; }
+    }
+    if (cut === -1) cut = n;
+    lines.push(rest.slice(0, cut));
+    rest = rest.slice(cut);
+  }
+  lines.push(rest);
+  return lines;
 }
 
 // Vertical space below the anchor consumed by one wrapped label: the max

@@ -82,6 +82,15 @@ def _node_probe():
           wrapped: wrapped,
           lossless: wrapped.join('') === longName,
           maxLen: Math.max(...wrapped.map((l) => l.length)),
+          // Separator-aware wrap (issue: breaks landing mid-token, e.g.
+          // "-root-robot-isla" / "nds"): break on '/', '-', '_' and keep
+          // the separator at the end of the line it closes.
+          cleanBreak: wrapAxisLabel('-root-robot-islands', 16),
+          multiBreak: wrapAxisLabel(
+            'C--Users-multimedia-Desktop-kvalita', 16),
+          hardCutFallback: wrapAxisLabel(
+            'abcdefghijklmnopqrstuvwxyz0123456789', 16),
+          shortNoWrap: wrapAxisLabel('kvalita', 16),
         }},
         depth: {{
           oneLine: axisLabelDepthPx(['aaaaaaaaaa'], 6, 12, {ANGLE}),
@@ -132,6 +141,21 @@ def test_wrap_never_truncates(js):
     assert w["clamped"] == ["a", "b", "c", "d"]  # maxChars < 1 clamps to 1
     assert w["lossless"]                   # every character survives
     assert w["maxLen"] <= 12
+
+
+def test_wrap_breaks_on_separators_not_mid_token(js):
+    # Blind every-N-chars chunking split "-root-robot-islands" into
+    # "-root-robot-isla" / "nds" — mid-word. The wrap must instead break
+    # on '/', '-', '_' and keep the separator at the end of the line.
+    w = js["wrap"]
+    assert w["cleanBreak"] == ["-root-robot-", "islands"]
+    assert w["multiBreak"] == ["C--Users-", "multimedia-", "Desktop-kvalita"]
+    # No separator anywhere in the 16-char window (e.g. a long hash):
+    # fall back to the old hard cut at exactly maxChars.
+    assert w["hardCutFallback"] == [
+        "abcdefghijklmnop", "qrstuvwxyz012345", "6789"]
+    # A label already <= maxChars needs no wrapping at all.
+    assert w["shortNoWrap"] == ["kvalita"]
 
 
 def test_depth_is_the_rotated_line_step_plus_rotated_length(js):
