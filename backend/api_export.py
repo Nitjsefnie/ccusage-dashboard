@@ -43,9 +43,9 @@ def build_export_argv(rng: str, project: str | None, out_path: str) -> list[str]
 
 
 def _export_filename(rng: str, project: str | None) -> str:
-    """Safe download filename: ccusage_<project-or-all>_<range>.png."""
+    """Safe download filename: claudit_<project-or-all>_<range>.png."""
     proj_slug = re.sub(r"[^A-Za-z0-9._-]", "_", project) if project else "all"
-    return f"ccusage_{proj_slug}_{rng}.png"
+    return f"claudit_{proj_slug}_{rng}.png"
 
 
 async def _render_export(argv: list[str], out_path: str) -> None:

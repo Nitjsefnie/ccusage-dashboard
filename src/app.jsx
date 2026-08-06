@@ -316,7 +316,7 @@ function ExportButton({ range, project }) {
       const objUrl = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = objUrl;
-      a.download = `ccusage_${project || 'all'}_${range}.png`;
+      a.download = `claudit_${project || 'all'}_${range}.png`;
       document.body.appendChild(a);
       a.click();
       a.remove();
