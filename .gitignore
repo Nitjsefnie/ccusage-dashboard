@@ -39,3 +39,4 @@ __pycache__/
 
 # never commit: the secrecy-check literal list
 .secrecy-literals
+.env.bak-*
