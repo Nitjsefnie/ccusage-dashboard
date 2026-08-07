@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Blocks a push that would publish a forbidden literal.
+# Install: scripts/install-hooks.sh   Override: SKIP_SECRECY_CHECK=1 git push
+
+set -uo pipefail
+
+[ "${SKIP_SECRECY_CHECK:-0}" = "1" ] && exit 0
+
+# Full check, not --tree: a tree-only check passes forever on a value that is
+# still in history.
+if ! "$(git rev-parse --show-toplevel)/scripts/secrecy-check.sh"; then
+  echo "pre-push: BLOCKED, nothing pushed. SKIP_SECRECY_CHECK=1 to override." >&2
+  exit 1
+fi
