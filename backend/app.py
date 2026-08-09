@@ -53,6 +53,7 @@ async def lifespan(fastapi_app: FastAPI):
     # instead of waiting for the (never-ending) heartbeat response.
     events.signal_shutdown()
     sched.shutdown(wait=False)
+    events.clear_loop()
 
 
 app = FastAPI(

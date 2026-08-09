@@ -31,6 +31,13 @@ def set_loop(loop: asyncio.AbstractEventLoop) -> None:
     _shutdown_event = asyncio.Event()
 
 
+def clear_loop() -> None:
+    """Release lifespan-owned asyncio state before the loop closes."""
+    global _main_loop, _shutdown_event
+    _main_loop = None
+    _shutdown_event = None
+
+
 def shutdown_event() -> asyncio.Event | None:
     """Subscribed-to by SSE generators so they can exit promptly when the
     server is shutting down (otherwise uvicorn's graceful-shutdown waits
@@ -40,8 +47,16 @@ def shutdown_event() -> asyncio.Event | None:
 
 def signal_shutdown() -> None:
     """Called from lifespan exit. Wakes up every SSE generator."""
-    if _shutdown_event is not None and _main_loop is not None:
-        _main_loop.call_soon_threadsafe(_shutdown_event.set)
+    loop = _main_loop
+    event = _shutdown_event
+    if event is None or loop is None or loop.is_closed():
+        return
+    try:
+        loop.call_soon_threadsafe(event.set)
+    except RuntimeError:
+        # The event loop can close between is_closed() and this call.
+        if not loop.is_closed():
+            raise
 
 
 def subscribe() -> asyncio.Queue:
@@ -60,7 +75,8 @@ def broadcast_threadsafe(event: str, data: dict) -> None:
     """Push an SSE event to every connected subscriber. Safe from any
     thread (worker, scheduler, request handler). No-op if startup
     hasn't captured the loop yet."""
-    if _main_loop is None:
+    loop = _main_loop
+    if loop is None or loop.is_closed():
         return
     payload = f"event: {event}\ndata: {json.dumps(data)}\n\n"
     with _subscribers_lock:
@@ -73,4 +89,9 @@ def broadcast_threadsafe(event: str, data: dict) -> None:
             except asyncio.QueueFull:
                 pass
 
-    _main_loop.call_soon_threadsafe(_put_all)
+    try:
+        loop.call_soon_threadsafe(_put_all)
+    except RuntimeError:
+        # Lifespan teardown can close the loop after the check above.
+        if not loop.is_closed():
+            raise
