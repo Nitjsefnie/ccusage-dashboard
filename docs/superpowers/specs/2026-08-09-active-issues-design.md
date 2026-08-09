@@ -2,8 +2,11 @@
 
 ## Scope
 
-Resolve every issue open on `Nitjsefnie/claudit` as of 2026-08-09: #10 and
-#12–#16. Read the complete issue bodies and comment histories before design.
+Resolve issues #12–#16 open on `Nitjsefnie/claudit` as of 2026-08-09. Issue
+#10 was included in the initial inventory, then explicitly deferred by the
+owner during implementation; it remains open and receives no new work or
+closing reference in this batch. Read the complete issue bodies and comment
+histories before design.
 Issues #13 and #14 each have an owner comment replacing stale historical
 commit ranges; those ranges are background only and do not affect the current
 file-level diagnosis.
@@ -21,8 +24,8 @@ Do not turn adjacent cleanup or speculative improvements into scope.
 
 - #10 is already implemented across parser, storage, API, and UI by commits
   `60437d6`, `993f736`, `fcb85a8`, and `3d1db46`. Its focused parser tests and
-  dashboard API test pass on current `master`; it remains open because no
-  commit closed it.
+  dashboard API test pass on current `master`, but the owner deferred any
+  additional work and closure.
 - #12 reproduces with one undated and one timezone-aware record:
   `_build_ctx_turns` compares naive `datetime.min` with an aware timestamp and
   raises `TypeError`.
@@ -115,7 +118,7 @@ case, Cache TTL's secondary picker, and the no-backend synthetic fallback.
 The result must keep bars and axis captions at the actual aggregation width;
 no API or cache-key change is required.
 
-### #16 and closure of #10 — line churn rollup
+### #16 — line churn rollup
 
 Extend `tool_rollup` with non-null `lines_added` and `lines_deleted` bigint
 sums. Put the columns in both `CREATE TABLE IF NOT EXISTS` and idempotent
@@ -139,8 +142,7 @@ filter excludes those rows, matching the live inner-join semantics.
 Update the API regression to rebuild derived state after inserting tool calls,
 then verify totals and project/model filtering through the rollup path. Add a
 source-selection regression that pins live behavior below one hour and rollup
-behavior at or above one hour. The related implementation commit closes both
-#16 and the already-delivered #10.
+behavior at or above one hour. The implementation commit closes #16 only.
 
 ## Error handling and migrations
 

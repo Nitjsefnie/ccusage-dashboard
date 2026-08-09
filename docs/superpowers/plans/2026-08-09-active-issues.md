@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Resolve open issues #10 and #12–#16 with regression coverage, CI-clean commits, and one final push to the default branch.
+**Goal:** Resolve open issues #12–#16 with regression coverage, CI-clean commits, and one final push to the default branch; leave owner-deferred #10 open.
 
 **Architecture:** Keep each fix within its owning subsystem: parser ordering, SSE lifecycle, cookie issuance, frontend bin selection, and ingest-time churn aggregation. Extract only the two contracts whose duplication caused defects—cookie attributes and bin-width selection—and preserve live-query fallbacks below rollup grain.
 
@@ -438,7 +438,7 @@ git commit -m "fix(charts): respect backend aggregation width" \
   -m "Co-authored-by: GPT-5.6 Sol <noreply@openai.com>"
 ```
 
-### Task 5: Roll up line churn and close delivered churn feature (#10, #16)
+### Task 5: Roll up line churn (#16)
 
 **Files:**
 - Modify: `backend/schema.sql`
@@ -554,12 +554,11 @@ Run: `.venv/bin/python -m pytest tests/test_api.py tests/test_ingest.py -q`
 
 Expected: all API and ingest tests pass.
 
-- [ ] **Step 7: Commit the fix and close both issues**
+- [ ] **Step 7: Commit the fix and close #16**
 
 ```bash
 git add backend/api_dashboard.py backend/ingest.py backend/schema.sql tests/test_api.py
 git commit -m "perf(dashboard): serve line churn from rollup" \
-  -m "Closes #10" \
   -m "Closes #16" \
   -m "Co-authored-by: GPT-5.6 Sol <noreply@openai.com>"
 ```
@@ -635,5 +634,6 @@ gh issue list --state open --limit 100
 git status --short --branch
 ```
 
-Expected: #10 and #12–#16 are no longer open, the worktree is clean, and local
-`master` matches `origin/master`.
+Expected: #12–#16 are no longer open except for any separately filed bug,
+owner-deferred #10 remains open, the worktree is clean, and local `master`
+matches `origin/master`.
