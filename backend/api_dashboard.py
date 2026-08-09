@@ -59,7 +59,7 @@ def _rollup_source(use_rollup: bool, roll_proj: str, roll_model: str) -> str:
 
 
 def _churn_source(project: str | None, model: str | None,
-                  since: datetime, use_rollup: bool) -> tuple[str, list, str]:
+                  since: datetime, use_rollup: bool) -> dict[str, Any]:
     """The FROM+WHERE fragment (and its args) for the line-churn query.
 
     Churn lives on tool calls, so hourly-or-coarser buckets use tool_rollup
@@ -75,12 +75,16 @@ def _churn_source(project: str | None, model: str | None,
             args.append(project)
         if model:
             args.append(f"%{model}%")
-        return f"""
-            FROM tool_rollup tu
-            WHERE tu.hour >= date_trunc('hour', %s::timestamptz)
-              {proj_filter} {model_filter}
-              AND (tu.lines_added > 0 OR tu.lines_deleted > 0)
-        """, args, "tu.hour"
+        return {
+            "sql": f"""
+                FROM tool_rollup tu
+                WHERE tu.hour >= date_trunc('hour', %s::timestamptz)
+                  {proj_filter} {model_filter}
+                  AND (tu.lines_added > 0 OR tu.lines_deleted > 0)
+            """,
+            "args": args,
+            "ts": "tu.hour",
+        }
 
     proj_filter = "AND f.project_id = %s" if project else ""
     model_join = ""
@@ -93,13 +97,17 @@ def _churn_source(project: str | None, model: str | None,
                       "AND r.line_num = tu.line_num")
         model_filter = "AND r.model LIKE %s"
         args.append(f"%{model}%")
-    return f"""
-        FROM tool_uses tu
-        JOIN files f ON f.file_key = tu.file_key
-        {model_join}
-        WHERE tu.ts >= %s {proj_filter} {model_filter}
-          AND (tu.lines_added > 0 OR tu.lines_deleted > 0)
-    """, args, "tu.ts"
+    return {
+        "sql": f"""
+            FROM tool_uses tu
+            JOIN files f ON f.file_key = tu.file_key
+            {model_join}
+            WHERE tu.ts >= %s {proj_filter} {model_filter}
+              AND (tu.lines_added > 0 OR tu.lines_deleted > 0)
+        """,
+        "args": args,
+        "ts": "tu.ts",
+    }
 
 
 def _dashboard_sources(project: str | None, model: str | None,
@@ -136,26 +144,23 @@ def _dashboard_sources(project: str | None, model: str | None,
 
     roll_proj = "AND u.project_id = %s" if project else ""
     roll_model = "AND u.model LIKE %s" if model else ""
-    use_rollup = bucket_s >= 3600
-    roll_src = _rollup_source(use_rollup, roll_proj, roll_model)
+    roll_src = _rollup_source(bucket_s >= 3600, roll_proj, roll_model)
     roll_args: list[Any] = [since]
     if project:
         roll_args.append(project)
     if model:
         roll_args.append(f"%{model}%")
 
-    churn_src, churn_args, churn_ts = _churn_source(
-        project, model, since, use_rollup
-    )
+    churn = _churn_source(project, model, since, bucket_s >= 3600)
 
     return {
         "canon_src": canon_src,
         "canon_args": canon_args,
         "roll_src": roll_src,
         "roll_args": roll_args,
-        "churn_src": churn_src,
-        "churn_args": churn_args,
-        "churn_ts": churn_ts,
+        "churn_src": churn["sql"],
+        "churn_args": churn["args"],
+        "churn_ts": churn["ts"],
         "proj_filter": proj_filter,
         "file_args": file_args,
     }
