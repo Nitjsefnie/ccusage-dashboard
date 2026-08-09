@@ -518,7 +518,8 @@ def rebuild_tool_rollup() -> int:
         cur = c.execute(
             """
             INSERT INTO tool_rollup (
-              hour, project_id, model, tool_name, n_total, n_rated, n_error
+              hour, project_id, model, tool_name, n_total, n_rated, n_error,
+              lines_added, lines_deleted
             )
             SELECT date_trunc('hour', tu.ts)              AS hour,
                    f.project_id,
@@ -530,7 +531,9 @@ def rebuild_tool_rollup() -> int:
                    )                                      AS n_rated,
                    COUNT(*) FILTER (
                      WHERE tu.is_error AND r.file_key IS NOT NULL
-                   )                                      AS n_error
+                   )                                      AS n_error,
+                   SUM(tu.lines_added)                     AS lines_added,
+                   SUM(tu.lines_deleted)                   AS lines_deleted
               FROM tool_uses tu
               JOIN files f    ON f.file_key = tu.file_key
               LEFT JOIN records r ON r.file_key = tu.file_key

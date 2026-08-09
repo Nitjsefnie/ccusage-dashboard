@@ -108,15 +108,15 @@ CREATE INDEX IF NOT EXISTS usage_rollup_hour_idx ON usage_rollup (hour);
 CREATE INDEX IF NOT EXISTS usage_rollup_project_idx ON usage_rollup (project_id, hour);
 
 -- Pre-aggregated tool calls, rebuilt at ingest alongside usage_rollup.
--- Serves /api/tool-usage and /api/tool-error-rate, which were the last
--- endpoints still scanning a raw table per request (tool_uses, ~79k rows,
--- joined to records for the model and to files for the project).
+-- Serves /api/tool-usage, /api/tool-error-rate, and the dashboard line-churn
+-- series without scanning raw tool_uses on hourly-or-coarser views.
 --
 -- The two endpoints count DIFFERENT populations, so both are stored:
 --   n_total  every tool_use in the group           -> /api/tool-usage
 --   n_rated  those with is_error NOT NULL AND a matching records row
 --            (tool_error_rate INNER JOINs records) -> denominator
 --   n_error  of those, the ones that errored       -> numerator
+--   lines_*  additive Edit/Write churn             -> /api/dashboard
 -- `model` is '' when no records row matched; tool_error_rate excludes
 -- those, which is what its inner join did.
 CREATE TABLE IF NOT EXISTS tool_rollup (
@@ -127,8 +127,14 @@ CREATE TABLE IF NOT EXISTS tool_rollup (
   n_total     BIGINT      NOT NULL DEFAULT 0,
   n_rated     BIGINT      NOT NULL DEFAULT 0,
   n_error     BIGINT      NOT NULL DEFAULT 0,
+  lines_added BIGINT      NOT NULL DEFAULT 0,
+  lines_deleted BIGINT    NOT NULL DEFAULT 0,
   PRIMARY KEY (hour, project_id, model, tool_name)
 );
+ALTER TABLE tool_rollup ADD COLUMN IF NOT EXISTS
+  lines_added BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE tool_rollup ADD COLUMN IF NOT EXISTS
+  lines_deleted BIGINT NOT NULL DEFAULT 0;
 CREATE INDEX IF NOT EXISTS tool_rollup_hour_idx ON tool_rollup (hour);
 CREATE INDEX IF NOT EXISTS tool_rollup_project_idx ON tool_rollup (project_id, hour);
 

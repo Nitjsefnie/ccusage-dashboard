@@ -59,20 +59,33 @@ def _rollup_source(use_rollup: bool, roll_proj: str, roll_model: str) -> str:
 
 
 def _churn_source(project: str | None, model: str | None,
-                  since: datetime) -> tuple[str, list]:
+                  since: datetime, use_rollup: bool) -> tuple[str, list, str]:
     """The FROM+WHERE fragment (and its args) for the line-churn query.
 
-    Line churn (issue #10) lives on tool_uses, not records, so it can
-    never come out of usage_rollup — it is a live pass like
-    response_sizes, bucketed on the tool call's own ts. The model
-    filter needs the records join (same shape as tool_error_rate's);
-    without a filter the join is skipped so calls on usage-less
-    assistant lines still count.
+    Churn lives on tool calls, so hourly-or-coarser buckets use tool_rollup
+    while sub-hour buckets retain the live tool_uses path. The live model
+    filter needs the records join; without it that join is skipped so calls
+    on usage-less assistant lines still count.
     """
+    if use_rollup:
+        proj_filter = "AND tu.project_id = %s" if project else ""
+        model_filter = "AND tu.model LIKE %s" if model else ""
+        args: list[Any] = [since]
+        if project:
+            args.append(project)
+        if model:
+            args.append(f"%{model}%")
+        return f"""
+            FROM tool_rollup tu
+            WHERE tu.hour >= date_trunc('hour', %s::timestamptz)
+              {proj_filter} {model_filter}
+              AND (tu.lines_added > 0 OR tu.lines_deleted > 0)
+        """, args, "tu.hour"
+
     proj_filter = "AND f.project_id = %s" if project else ""
     model_join = ""
     model_filter = ""
-    args: list[Any] = [since]
+    args = [since]
     if project:
         args.append(project)
     if model:
@@ -86,7 +99,7 @@ def _churn_source(project: str | None, model: str | None,
         {model_join}
         WHERE tu.ts >= %s {proj_filter} {model_filter}
           AND (tu.lines_added > 0 OR tu.lines_deleted > 0)
-    """, args
+    """, args, "tu.ts"
 
 
 def _dashboard_sources(project: str | None, model: str | None,
@@ -123,14 +136,17 @@ def _dashboard_sources(project: str | None, model: str | None,
 
     roll_proj = "AND u.project_id = %s" if project else ""
     roll_model = "AND u.model LIKE %s" if model else ""
-    roll_src = _rollup_source(bucket_s >= 3600, roll_proj, roll_model)
+    use_rollup = bucket_s >= 3600
+    roll_src = _rollup_source(use_rollup, roll_proj, roll_model)
     roll_args: list[Any] = [since]
     if project:
         roll_args.append(project)
     if model:
         roll_args.append(f"%{model}%")
 
-    churn_src, churn_args = _churn_source(project, model, since)
+    churn_src, churn_args, churn_ts = _churn_source(
+        project, model, since, use_rollup
+    )
 
     return {
         "canon_src": canon_src,
@@ -139,6 +155,7 @@ def _dashboard_sources(project: str | None, model: str | None,
         "roll_args": roll_args,
         "churn_src": churn_src,
         "churn_args": churn_args,
+        "churn_ts": churn_ts,
         "proj_filter": proj_filter,
         "file_args": file_args,
     }
@@ -193,7 +210,7 @@ def _dashboard_queries(c, ph: Phases, bucket_s: int, src: dict) -> dict:
     churn_rows = ph.execute(
         "churn", c, f"""
         SELECT to_timestamp(
-                 floor(EXTRACT(EPOCH FROM tu.ts) / {bucket_s}) * {bucket_s} + {bucket_s} / 2
+                 floor(EXTRACT(EPOCH FROM {src["churn_ts"]}) / {bucket_s}) * {bucket_s} + {bucket_s} / 2
                ) AS hour,
                SUM(tu.lines_added)   AS lines_added,
                SUM(tu.lines_deleted) AS lines_deleted
