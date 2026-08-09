@@ -15,7 +15,7 @@ helpers then project the walked events into records and ctx_turns.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from orjson import JSONDecodeError, loads
 
@@ -490,8 +490,14 @@ def _build_ctx_turns(records: list, user_text_lines: list) -> list:
     """Build ctx_turns by user-text boundary, mirroring
     parse_session.py:compute_context_growth lines 2680-2740."""
     boundary_lines = sorted(user_text_lines)
+    aware_min = datetime.min.replace(tzinfo=timezone.utc)
     sorted_recs = sorted(
-        records, key=lambda r: (r["ts"] or datetime.min, r["line_num"])
+        records,
+        key=lambda r: (
+            r["ts"] is not None,
+            r["ts"] if r["ts"] is not None else aware_min,
+            r["line_num"],
+        ),
     )
 
     turn_records: list[dict] = []

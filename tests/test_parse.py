@@ -233,6 +233,18 @@ def test_user_text_lines_drive_turn_boundaries():
     assert out["ctx_turns"][1]["delta"] == 100  # 200 - 100
 
 
+def test_mixed_dated_and_undated_records_sort_undated_first():
+    """An undated usage row sorts before aware timestamps without a
+    naive/aware comparison crash."""
+    out = parse.parse_file(
+        "k/sess-mixed/sess-mixed.jsonl", _read("mixed_timestamps.jsonl")
+    )
+    assert [(t["ts"], t["input"]) for t in out["ctx_turns"]] == [
+        ("", 10),
+        ("2026-05-07T10:00:02+00:00", 20),
+    ]
+
+
 def test_reply_latency_terminated_by_list_form_interrupt():
     """List-form interrupt content must terminate the reply-latency window,
     not be ignored. Regression: bogus ~1h latency outlier after interrupts."""
