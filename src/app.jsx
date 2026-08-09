@@ -705,19 +705,9 @@ function Dashboard({ synth, models, backendOn, activeProject, activeRange, dashN
     return { ...t, byModel: hasBackendByModel ? backendByModel : byModel };
   }, [events, backendByModel, hasBackendByModel]);
 
-  // Auto-pick bin size: at least 100 buckets, never coarser than 1 day.
-  // Pick the LARGEST nice-bin in [60s, 1d] that still produces ≥100 bins
-  // across the visible range; if even 60s overshoots, that's fine.
-  const span = range.end - range.start;
-  const MIN_BINS = 100;
-  const MAX_BIN_MS = 24 * 3600 * 1000; // 1 day
-  const niceBins = [60_000, 5*60_000, 15*60_000, 30*60_000, 3600_000, 6*3600_000, 12*3600_000, 24*3600_000];
-  let binMs = niceBins[0];
-  for (const b of niceBins) {
-    if (b > MAX_BIN_MS) break;
-    if (span / b < MIN_BINS) break;
-    binMs = b;
-  }
+  // Adaptive to the visible data, but never finer than the aggregation the
+  // backend already applied to each returned point.
+  const binMs = window.dashboardBinMs(range, bucketS);
 
   const costByModel = Object.entries(totals.byModel)
     .filter(([, v]) => v > 0)

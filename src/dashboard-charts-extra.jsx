@@ -72,28 +72,12 @@ function CacheTTLPanel({ events, range, binMs }) {
     return { start: dMin - pad, end: dMax + pad };
   }, [events, range.start, range.end]);
 
-  // Bucketing rule (matches backend _bucket_seconds + dashboard binMs):
-  // pick the LARGEST bin in [60s, 1d] that yields ≥100 bins. Never
-  // coarser than the dashboard-wide binMs.
-  const adaptiveBin = React.useMemo(() => {
-    const span = Math.max(1, dataRange.end - dataRange.start);
-    const stepMs = [
-      60_000,                // 1m
-      5 * 60_000,            // 5m
-      15 * 60_000,           // 15m
-      30 * 60_000,           // 30m
-      60 * 60_000,           // 1h
-      6 * 60 * 60_000,       // 6h
-      12 * 60 * 60_000,      // 12h
-      24 * 60 * 60_000,      // 1d
-    ];
-    let chosen = stepMs[0];
-    for (const s of stepMs) {
-      if (span / s < 100) break;
-      chosen = s;
-    }
-    return Math.min(chosen, binMs);
-  }, [dataRange.start, dataRange.end, binMs]);
+  // Cache TTL trims its visible range to non-zero cache data, but it still
+  // cannot choose bins finer than the dashboard/server aggregation floor.
+  const adaptiveBin = React.useMemo(
+    () => window.cacheTtlBinMs(dataRange, binMs),
+    [dataRange.start, dataRange.end, binMs]
+  );
 
   const useRange = dataRange;
   const useBin = adaptiveBin;
