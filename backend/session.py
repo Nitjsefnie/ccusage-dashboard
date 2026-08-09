@@ -31,6 +31,19 @@ GUEST_USER_ID = 0
 _GUEST_SECRET = secrets.token_urlsafe(32)
 
 
+def set_session_cookie(response: Response, token: str) -> None:
+    """Issue a session cookie with the application's complete flag contract."""
+    response.set_cookie(
+        SESSION_COOKIE_NAME,
+        token,
+        httponly=True,
+        secure=os.environ.get("COOKIE_SECURE", "1") == "1",
+        samesite="strict",
+        max_age=SESSION_COOKIE_MAX_AGE,
+        path="/",
+    )
+
+
 def parse_session_token(token: str):
     parts = token.split(".")
     if len(parts) != 4:

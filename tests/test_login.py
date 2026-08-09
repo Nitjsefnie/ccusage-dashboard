@@ -62,6 +62,15 @@ def test_login_page_is_html(app):
     assert "<form" in r.text and "user_id" in r.text
 
 
+def _assert_session_cookie_contract(response):
+    header = response.headers["set-cookie"].lower()
+    assert "httponly" in header
+    assert "samesite=strict" in header
+    assert f"max-age={session_mod.SESSION_COOKIE_MAX_AGE}" in header
+    assert "path=/" in header
+    assert "domain=" not in header
+
+
 def test_successful_login_sets_cookie(app, fake_user):
     client = TestClient(app)
     r = client.post(
@@ -71,6 +80,14 @@ def test_successful_login_sets_cookie(app, fake_user):
     )
     assert r.status_code in (302, 303)
     assert session_mod.SESSION_COOKIE_NAME in r.cookies
+    _assert_session_cookie_contract(r)
+
+
+def test_guest_login_sets_same_cookie_contract(app):
+    r = TestClient(app).post("/login/guest", follow_redirects=False)
+    assert r.status_code == 303
+    assert session_mod.SESSION_COOKIE_NAME in r.cookies
+    _assert_session_cookie_contract(r)
 
 
 def test_wrong_password_is_401(app, fake_user):

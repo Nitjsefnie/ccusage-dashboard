@@ -6,7 +6,6 @@ its own visualizer dark theme). Rate limiting: 5 failures per IP per
 """
 from __future__ import annotations
 
-import os
 import time
 
 from fastapi import APIRouter, Form, Request
@@ -148,14 +147,7 @@ async def login_post(
     session_mod.write_user_config(uid, config)
     token = session_mod.make_session_token(uid, secret)
     response = RedirectResponse("/", status_code=303)
-    response.set_cookie(
-        session_mod.SESSION_COOKIE_NAME, token,
-        httponly=True,
-        secure=os.environ.get("COOKIE_SECURE", "1") == "1",
-        samesite="strict",
-        max_age=session_mod.SESSION_COOKIE_MAX_AGE,
-        path="/",
-    )
+    session_mod.set_session_cookie(response, token)
     return response
 
 
@@ -174,12 +166,5 @@ async def login_guest(request: Request) -> Response:
     is regenerated."""
     token = session_mod.make_guest_session_token()
     response = RedirectResponse("/", status_code=303)
-    response.set_cookie(
-        session_mod.SESSION_COOKIE_NAME, token,
-        httponly=True,
-        secure=os.environ.get("COOKIE_SECURE", "1") == "1",
-        samesite="strict",
-        max_age=session_mod.SESSION_COOKIE_MAX_AGE,
-        path="/",
-    )
+    session_mod.set_session_cookie(response, token)
     return response

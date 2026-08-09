@@ -6,6 +6,7 @@ from unittest.mock import patch
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from starlette.requests import Request
+from starlette.responses import Response
 
 from backend import session
 
@@ -51,6 +52,23 @@ def test_get_or_create_session_secret_persists():
     assert config[session.WEB_SESSION_SECRET_KEY] == s1
     s2 = session.get_or_create_session_secret(config)
     assert s2 == s1
+
+
+def test_set_session_cookie_owns_complete_flag_contract(monkeypatch):
+    """One helper owns every issuance flag, including absent Domain."""
+    monkeypatch.setenv("COOKIE_SECURE", "1")
+    response = Response()
+
+    session.set_session_cookie(response, "token")
+
+    header = response.headers["set-cookie"].lower()
+    assert "session=token" in header
+    assert "httponly" in header
+    assert "secure" in header
+    assert "samesite=strict" in header
+    assert f"max-age={session.SESSION_COOKIE_MAX_AGE}" in header
+    assert "path=/" in header
+    assert "domain=" not in header
 
 
 def test_check_origin_allows_safe_methods():
