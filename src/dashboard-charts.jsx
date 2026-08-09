@@ -224,6 +224,64 @@ function Tooltip({ tip }) {
   );
 }
 
+function boundedTimeIntervals(range, binMs) {
+  if (!Number.isFinite(range.start) || !Number.isFinite(range.end)
+      || range.end <= range.start || !Number.isFinite(binMs) || binMs <= 0) {
+    throw new TypeError('Invalid time-series range or bin width');
+  }
+  const bins = [];
+  for (let start = range.start; start < range.end; start += binMs) {
+    bins.push({ start, end: Math.min(start + binMs, range.end) });
+  }
+  return bins;
+}
+
+function buildTimeSeriesData(events, range, binMs, valueOf) {
+  const bins = [];
+  let eventIndex = 0;
+  for (const interval of boundedTimeIntervals(range, binMs)) {
+    let sum = 0;
+    let count = 0;
+    while (eventIndex < events.length && events[eventIndex].ts < interval.end) {
+      sum += valueOf(events[eventIndex]);
+      count++;
+      eventIndex++;
+    }
+    bins.push({ ...interval, sum, count });
+  }
+
+  const cumPts = [{ ts: range.start, v: 0, binIdx: -1 }];
+  let cumulativeIndex = 0;
+  let total = 0;
+  for (let binIndex = 0; binIndex < bins.length; binIndex++) {
+    const end = bins[binIndex].end;
+    while (cumulativeIndex < events.length && events[cumulativeIndex].ts < end) {
+      total += valueOf(events[cumulativeIndex]);
+      cumulativeIndex++;
+    }
+    cumPts.push({ ts: end, v: total, binIdx: binIndex });
+  }
+  return { bins, cumPts, total };
+}
+
+function timeX(ts, range, padL, plotW) {
+  return padL + ((ts - range.start) / (range.end - range.start)) * plotW;
+}
+
+function timeBarRect(bin, range, padL, plotW) {
+  const x = timeX(bin.start, range, padL, plotW);
+  const endX = timeX(bin.end, range, padL, plotW);
+  return { x, width: Math.max(0, (endX - x) * 0.9) };
+}
+
+function timeBinIndexAtX(bins, range, padL, plotW, x) {
+  if (!bins.length || x < padL || x > padL + plotW) return -1;
+  const ts = range.start + ((x - padL) / plotW) * (range.end - range.start);
+  return bins.findIndex((bin, index) =>
+    ts >= bin.start && (ts < bin.end
+      || (index === bins.length - 1 && ts === bin.end)));
+}
+
 // --- Time-series panel ---
 function TimeSeriesPanel({ title, events, valueKey, color, isCurrency, range, binMs }) {
   const ref = React.useRef(null);
@@ -273,40 +331,16 @@ function TimeSeriesPanel({ title, events, valueKey, color, isCurrency, range, bi
   const plotW = Math.max(10, w - padL - padR);
   const plotH = Math.max(10, h - padT - padB);
 
-  const bins = [];
-  let bStart = range.start;
-  let i = 0;
-  while (bStart < range.end) {
-    const bEnd = bStart + binMs;
-    let sum = 0;
-    let count = 0;
-    while (i < events.length && events[i].ts < bEnd) {
-      sum += events[i][valueKey] || 0;
-      count++;
-      i++;
-    }
-    bins.push({ start: bStart, end: bEnd, sum, count });
-    bStart = bEnd;
-  }
+  const { bins, cumPts, total } = buildTimeSeriesData(
+    events, range, binMs, event => event[valueKey] || 0);
 
   const maxBin = Math.max(1, ...bins.map(b => b.sum));
   // Cumulative line — start anchored at (range.start, 0) so the line
   // visually originates at the left edge of the plot, not at the end
   // of the first bin (the previous behavior left a leading gap).
-  const cumPts = [{ ts: range.start, v: 0, binIdx: -1 }];
-  let ci = 0, runEv = 0;
-  for (let k = 0; k < bins.length; k++) {
-    const upTo = bins[k].end;
-    while (ci < events.length && events[ci].ts < upTo) {
-      runEv += events[ci][valueKey] || 0;
-      ci++;
-    }
-    cumPts.push({ ts: upTo, v: runEv, binIdx: k });
-  }
-  const total = runEv;
   const maxCum = Math.max(1, total);
 
-  const xScale = ts => padL + ((ts - range.start) / (range.end - range.start)) * plotW;
+  const xScale = ts => timeX(ts, range, padL, plotW);
   const yBar = v => padT + plotH - (v / maxBin) * plotH;
   const yCum = v => padT + plotH - (v / maxCum) * plotH;
 
@@ -324,28 +358,20 @@ function TimeSeriesPanel({ title, events, valueKey, color, isCurrency, range, bi
   const yTicksL = niceTicks(maxBin);
   const yTicksR = niceTicks(maxCum);
 
-  const barW = Math.max(1, (plotW / bins.length) * 0.9);
-
-  // Mouse tracking — find nearest bin
+  // Mouse tracking — select the bounded interval under the pointer.
   function onMouseMove(e) {
     const rect = ref.current.getBoundingClientRect();
     const mx = e.clientX - rect.left;
     const my = e.clientY - rect.top;
-    // The last bin starts at (or past) the plot's right edge whenever the
-    // range isn't an exact multiple of binMs, so its bar body sits in the
-    // right padding. Without widening the band by one bar, that bar has a
-    // 0px-wide hover zone and simply cannot be inspected.
-    if (mx < padL || mx > w - padR + barW || my < padT || my > padT + plotH) {
+    if (my < padT || my > padT + plotH) {
       setTip(null);
       return;
     }
-    // Snap to the nearest bar centre instead of flooring the time fraction.
-    // Flooring hands the final (usually partial) bin a sliver of a zone
-    // while every other bin gets a full pitch.
-    const pitch = plotW * binMs / Math.max(1, range.end - range.start);
-    let idx = Math.round((mx - padL - barW / 2) / pitch);
-    if (idx < 0) idx = 0;
-    if (idx >= bins.length) idx = bins.length - 1;
+    const idx = timeBinIndexAtX(bins, range, padL, plotW, mx);
+    if (idx < 0) {
+      setTip(null);
+      return;
+    }
     const b = bins[idx];
     const cum = cumPts[idx + 1];  // +1 to skip the leading (range.start, 0) anchor
     setTip({
@@ -370,16 +396,17 @@ function TimeSeriesPanel({ title, events, valueKey, color, isCurrency, range, bi
     onMouseLeave={() => setTip(null)}>
       <svg data-panel={title} width={w} height={h} style={{ display: 'block' }}>
         {yTicksL.map((v, idx) => (
-          <line key={'g'+idx} x1={padL} x2={w - padR}
+          <line data-plot-boundary="" key={'g'+idx} x1={padL} x2={w - padR}
             y1={yBar(v)} y2={yBar(v)}
             stroke={TH.grid} strokeOpacity="0.3" strokeWidth="1" />
         ))}
         {bins.map((b, idx) => {
-          const x = xScale(b.start);
+          const { x, width } = timeBarRect(b, range, padL, plotW);
           const y = yBar(b.sum);
           const isHover = tip && tip.idx === idx;
           return (
-            <rect key={idx} x={x} y={y} width={barW} height={Math.max(0, padT + plotH - y)}
+            <rect data-time-bar="" key={idx} x={x} y={y} width={width}
+              height={Math.max(0, padT + plotH - y)}
               fill={color} fillOpacity={isHover ? 0.85 : 0.3} />
           );
         })}
@@ -390,7 +417,8 @@ function TimeSeriesPanel({ title, events, valueKey, color, isCurrency, range, bi
         } fill={color} fillOpacity="0.04" />
         <polyline points={cumPts.map(p => `${xScale(p.ts)},${yCum(p.v)}`).join(' ')}
           stroke="#fff" strokeOpacity="0.15" strokeWidth="4" fill="none" />
-        <polyline points={cumPts.map(p => `${xScale(p.ts)},${yCum(p.v)}`).join(' ')}
+        <polyline data-cumulative-line=""
+          points={cumPts.map(p => `${xScale(p.ts)},${yCum(p.v)}`).join(' ')}
           stroke={color} strokeWidth="2" fill="none" />
 
         {/* Hover crosshair */}
@@ -405,9 +433,7 @@ function TimeSeriesPanel({ title, events, valueKey, color, isCurrency, range, bi
             {humanFmt(v, isCurrency)}
           </text>
         ))}
-        {/* Start-anchored so labels grow rightward, AWAY from the plot: the
-            final bar is drawn past the plot edge into the padding, so a
-            right-anchored label grows left straight through it. The gutter
+        {/* Start-anchored so labels grow rightward into the gutter. The gutter
             (padR wide) has to fit the widest label plus the rotated
             "cumulative" title at x 849; padR is sized for that. */}
         {yTicksR.map((v, idx) => (
