@@ -332,11 +332,22 @@ def test_non_edit_tool_has_no_churn():
     assert tu["lines_deleted"] == 0
 
 
-def test_dated_rate_prices_each_record_at_its_own_timestamp():
-    # Sonnet 5 introductory pricing runs through 2026-08-31 UTC; a record
-    # on either side of the cutover must be priced by when it was spent,
-    # not by when the file is parsed.
+def test_dated_rate_prices_each_record_at_its_own_timestamp(synthetic_dated_rate):
+    # A record on either side of a dated cutover must be priced by when it
+    # was spent, not by when the file is parsed. Driven through conftest's
+    # synthetic window: the live DATED_RATES table is empty (Sonnet 5's
+    # launch price became its standard price), so nothing real straddles a
+    # cutover, but ingest must still honour per-record timestamps.
+    w = synthetic_dated_rate
     out = parse.parse_file("k/sess-d/sess-d.jsonl", _read("dated_rate_sonnet5.jsonl"))
-    intro, listed = out["records"][0], out["records"][1]
-    assert intro["cost_usd"] == pytest.approx(2.00)
-    assert listed["cost_usd"] == pytest.approx(3.00)
+    before, after = out["records"][0], out["records"][1]
+    assert before["cost_usd"] == pytest.approx(w.before["fresh"])
+    assert after["cost_usd"] == pytest.approx(w.after["fresh"])
+
+
+def test_sonnet_5_is_priced_flat_at_its_standard_rate():
+    # Same fixture, live rate table: both records price at 2.00/MTok.
+    out = parse.parse_file("k/sess-d/sess-d.jsonl", _read("dated_rate_sonnet5.jsonl"))
+    assert [r["cost_usd"] for r in out["records"]] == [
+        pytest.approx(2.00), pytest.approx(2.00),
+    ]

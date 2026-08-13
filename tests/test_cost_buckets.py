@@ -28,31 +28,40 @@ def test_buckets_sum_to_total_within_a_single_epoch():
     assert sum(m["cost_buckets"].values()) == pytest.approx(m["cost_total"])
 
 
-def test_buckets_sum_to_total_across_a_dated_rate_cutover():
-    # 1M input tokens before the sonnet-5 cutover ($2.00) and 1M after
-    # ($3.00). Stored cost_total is authoritative at $5.00 total.
+def test_buckets_sum_to_total_across_a_dated_rate_cutover(synthetic_dated_rate):
+    # 1M input tokens in the promotional window ($9.00) and 1M after it
+    # ($2.00). Stored cost_total is authoritative at $11.00 total.
+    w = synthetic_dated_rate
     rows = [
-        _row("claude-sonnet-5", 0, fresh=1_000_000, cost=2.00),
-        _row("claude-sonnet-5", 1, fresh=1_000_000, cost=3.00),
+        _row(w.model, 0, fresh=1_000_000, cost=9.00),
+        _row(w.model, 1, fresh=1_000_000, cost=2.00),
     ]
     out = fold_per_model(rows)
     assert len(out) == 1, "epochs must fold into one row per model"
     m = out[0]
     assert m["fresh"] == 2_000_000
     assert m["turns"] == 2
-    assert m["cost_total"] == pytest.approx(5.00)
-    assert sum(m["cost_buckets"].values()) == pytest.approx(5.00)
-    assert m["cost_buckets"]["fresh"] == pytest.approx(5.00)
+    assert m["cost_total"] == pytest.approx(11.00)
+    assert sum(m["cost_buckets"].values()) == pytest.approx(11.00)
+    assert m["cost_buckets"]["fresh"] == pytest.approx(11.00)
 
 
-def test_epoch_index_selects_the_rate_in_force_for_that_window():
-    intro = epoch_ts(0)
-    listed = epoch_ts(1)
-    assert pricing.rate_for("claude-sonnet-5", intro)["fresh"] == 2.00
-    assert pricing.rate_for("claude-sonnet-5", listed)["fresh"] == 3.00
+def test_epoch_index_selects_the_rate_in_force_for_that_window(synthetic_dated_rate):
+    w = synthetic_dated_rate
+    assert pricing.rate_for(w.model, epoch_ts(0))["fresh"] == w.before["fresh"]
+    assert pricing.rate_for(w.model, epoch_ts(1))["fresh"] == w.after["fresh"]
 
 
-def test_epoch_sql_expression_has_one_case_per_boundary():
+def test_epoch_sql_expression_has_one_case_per_boundary(synthetic_dated_rate):
     expr, params = rate_epoch_sql("ts")
-    assert len(params) == len(pricing.RATE_EPOCHS)
-    assert expr.count("CASE") == len(pricing.RATE_EPOCHS)
+    # Boundaries are BOUND, never interpolated into the SQL string.
+    assert params == [synthetic_dated_rate.cutover]
+    assert expr.count("CASE") == 1
+
+
+def test_epoch_sql_collapses_to_a_constant_when_no_rates_are_dated():
+    # The live table is empty today: every row must land in epoch 0, with
+    # no parameters bound and no CASE emitted.
+    expr, params = rate_epoch_sql("ts")
+    assert (expr, params) == ("0", [])
+    assert epoch_ts(0) is None, "no epochs => price at list, not a window"

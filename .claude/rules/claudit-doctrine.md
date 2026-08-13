@@ -178,11 +178,18 @@ re-inserting on the next ingest leaves the table byte-identical.
 ## Rates are a function of (model, timestamp) (SV-DATED-RATES)
 
 `pricing.rate_for(model, ts)` — a model may carry dated overrides in
-`DATED_RATES` (e.g. Claude Sonnet 5's introductory 2/10 through
-2026-08-31 UTC, list 3/15 from 2026-09-01). Cost must be computed against
-the timestamp of the request being priced, never the time of rendering.
-`parse.py` passes each record's own `ts`; omitting `ts` yields LIST price
-(conservative — never silently applies a discount).
+`DATED_RATES`, a list of `(end_exclusive_utc, rates)` windows per exact
+model key. Cost must be computed against the timestamp of the request
+being priced, never the time of rendering. `parse.py` passes each
+record's own `ts`; omitting `ts` yields LIST price (conservative — never
+silently applies a discount).
+
+`DATED_RATES` is currently EMPTY and `RATE_EPOCHS` is `[]` — no live model
+prices differently by date. The machinery stays regardless: the rule is
+about the shape of pricing, not about whether a promotion happens to be
+running. Tests drive it through the `synthetic_dated_rate` fixture in
+`tests/conftest.py` rather than a live entry, so the path cannot rot while
+the table is empty.
 
 Any read path that RE-DERIVES rates from summed tokens must group by
 `pricing.RATE_EPOCHS` (`api.rate_epoch_sql` / `api.fold_per_model`), or

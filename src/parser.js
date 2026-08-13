@@ -303,7 +303,7 @@ window.modelRates = {
   'claude-opus-4-5':   { fresh: 5,    c5: 6.25,  c1h: 10,   read: 0.5,  out: 25 },
   'claude-opus-4-1':   { fresh: 15,   c5: 18.75, c1h: 30,   read: 1.5,  out: 75 },
   'claude-opus-4':     { fresh: 15,   c5: 18.75, c1h: 30,   read: 1.5,  out: 75 },
-  'claude-sonnet-5':   { fresh: 3,    c5: 3.75,  c1h: 6,    read: 0.3,  out: 15 },
+  'claude-sonnet-5':   { fresh: 2,    c5: 2.5,   c1h: 4,    read: 0.2,  out: 10 },
   'claude-sonnet-4-6': { fresh: 3,    c5: 3.75,  c1h: 6,    read: 0.3,  out: 15 },
   'claude-sonnet-4-5': { fresh: 3,    c5: 3.75,  c1h: 6,    read: 0.3,  out: 15 },
   'claude-sonnet-4':   { fresh: 3,    c5: 3.75,  c1h: 6,    read: 0.3,  out: 15 },
@@ -314,15 +314,12 @@ window.modelRates = {
   'claude-3-opus-':    { fresh: 15,   c5: 18.75, c1h: 30,   read: 1.5,  out: 75 },
   'claude-3-haiku-':   { fresh: 0.25, c5: 0.30,  c1h: 0.50, read: 0.03, out: 1.25 },
 };
-// Dated overrides, per exact key. Mirrors pricing.DATED_RATES.
-// Claude Sonnet 5 launched at an introductory 2/10; list price takes
-// effect 2026-09-01 UTC (month is 0-based in Date.UTC).
-window.datedRates = {
-  'claude-sonnet-5': [
-    { endExclusive: Date.UTC(2026, 8, 1), rates: { fresh: 2, c5: 2.5, c1h: 4, read: 0.2, out: 10 } },
-  ],
-};
-window.rateEpochs = [Date.UTC(2026, 8, 1)];
+// Dated overrides, per exact key. Mirrors pricing.DATED_RATES, which is
+// currently empty: Sonnet 5's 2/10 launch price became the standard price
+// and the 2026-09-01 rise to 3/15 was cancelled, so it needs no window.
+// Windows go here (month is 0-based in Date.UTC) for the next promotion.
+window.datedRates = {};
+window.rateEpochs = [];
 
 // Family fallbacks for unrecognised Claude models — current-generation
 // list rates for the tier, never a dated promotion.

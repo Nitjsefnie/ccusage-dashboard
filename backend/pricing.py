@@ -48,7 +48,7 @@ MODEL_RATES = {
     "claude-opus-4-5":   {"fresh": 5.00,  "create_5m": 6.25,  "create_1h": 10.00, "read": 0.50, "output": 25.00},
     "claude-opus-4-1":   {"fresh": 15.00, "create_5m": 18.75, "create_1h": 30.00, "read": 1.50, "output": 75.00},
     "claude-opus-4":     {"fresh": 15.00, "create_5m": 18.75, "create_1h": 30.00, "read": 1.50, "output": 75.00},
-    "claude-sonnet-5":   {"fresh": 3.00,  "create_5m": 3.75,  "create_1h": 6.00,  "read": 0.30, "output": 15.00},
+    "claude-sonnet-5":   {"fresh": 2.00,  "create_5m": 2.50,  "create_1h": 4.00,  "read": 0.20, "output": 10.00},
     "claude-sonnet-4-6": {"fresh": 3.00,  "create_5m": 3.75,  "create_1h": 6.00,  "read": 0.30, "output": 15.00},
     "claude-sonnet-4-5": {"fresh": 3.00,  "create_5m": 3.75,  "create_1h": 6.00,  "read": 0.30, "output": 15.00},
     "claude-sonnet-4":   {"fresh": 3.00,  "create_5m": 3.75,  "create_1h": 6.00,  "read": 0.30, "output": 15.00},
@@ -63,29 +63,18 @@ MODEL_RATES = {
 DEFAULT_RATES = MODEL_RATES["claude-opus-4-7"]
 
 
-def _scaled(fresh: float, output: float) -> dict:
-    """Cache tiers derive from the input rate: 5m 1.25x, 1h 2x, read 0.1x."""
-    return {
-        "fresh": fresh,
-        "create_5m": round(fresh * 1.25, 6),
-        "create_1h": round(fresh * 2.00, 6),
-        "read": round(fresh * 0.10, 6),
-        "output": output,
-    }
-
-
 # Dated overrides, per exact key: (end_exclusive_utc, rates). Applied only
 # when a timestamp is supplied and only on an EXACT key match — a tier
-# fallback never inherits another model's promotional price.
+# fallback never inherits another model's promotional price. Write a window's
+# rates in full, same shape as MODEL_RATES (5m = 1.25x input, 1h = 2x,
+# read = 0.1x).
 #
-# Claude Sonnet 5 launched at an introductory 2.00/10.00; list price
-# 3.00/15.00 takes effect 2026-09-01 UTC (intro runs through 2026-08-31
-# inclusive).
-DATED_RATES: dict[str, list[tuple[datetime, dict]]] = {
-    "claude-sonnet-5": [
-        (datetime(2026, 9, 1, tzinfo=UTC), _scaled(2.00, 10.00)),
-    ],
-}
+# Currently EMPTY: Claude Sonnet 5's 2.00/10.00 launch price was introductory
+# through 2026-08-31, but Anthropic made it the standard price and cancelled
+# the 2026-09-01 rise to 3.00/15.00 — so Sonnet 5 is a flat 2.00/10.00 in
+# MODEL_RATES above and needs no window. The mechanism stays: the next dated
+# promotion adds a window here, and read paths already group by RATE_EPOCHS.
+DATED_RATES: dict[str, list[tuple[datetime, dict]]] = {}
 
 # Sorted boundaries where any rate changes. Read-time aggregation that
 # re-derives rates from summed tokens must group by these, or its

@@ -81,57 +81,91 @@ def test_split_cache_charges_each_bucket_separately():
     assert cost == 9.75
 
 
-# --- dated rates: Claude Sonnet 5 introductory pricing ---------------------
-# List price is 3.00/15.00; an introductory 2.00/10.00 applies through
-# 2026-08-31 (UTC, inclusive). Cache tiers scale off input: 5m = 1.25x,
-# 1h = 2x, read = 0.1x.
+# --- Claude Sonnet 5: flat pricing, no dated window ------------------------
+# The 2.00/10.00 launch price was announced as introductory through
+# 2026-08-31, but Anthropic made it the standard price and cancelled the
+# 2026-09-01 rise to 3.00/15.00. There is no cutover to price around.
 
 UTC = timezone.utc
 
 
-def test_sonnet_5_uses_intro_rates_during_intro_window():
-    r = pricing.rate_for("claude-sonnet-5", ts=datetime(2026, 7, 21, tzinfo=UTC))
-    assert r == {
+def test_sonnet_5_rates_are_flat_2_10():
+    want = {
         "fresh": 2.00, "create_5m": 2.50, "create_1h": 4.00,
         "read": 0.20, "output": 10.00,
     }
+    assert pricing.rate_for("claude-sonnet-5") == want
+    # Same on both sides of the cancelled cutover, and with no timestamp.
+    assert pricing.rate_for("claude-sonnet-5", ts=datetime(2026, 7, 21, tzinfo=UTC)) == want
+    assert pricing.rate_for("claude-sonnet-5", ts=datetime(2026, 9, 1, tzinfo=UTC)) == want
+    assert pricing.rate_for("claude-sonnet-5", ts=datetime(2027, 1, 1, tzinfo=UTC)) == want
 
 
-def test_sonnet_5_uses_list_rates_after_intro_window():
-    r = pricing.rate_for("claude-sonnet-5", ts=datetime(2026, 9, 1, tzinfo=UTC))
-    assert r == {
-        "fresh": 3.00, "create_5m": 3.75, "create_1h": 6.00,
-        "read": 0.30, "output": 15.00,
-    }
+def _sonnet_5_cost_per_mtok_input(ts=None) -> float:
+    return pricing.compute_cost(
+        "claude-sonnet-5", fresh=1_000_000, output=0, eph5=0, eph1h=0,
+        unsplit_create=0, read=0, ts=ts,
+    )
 
 
-def test_sonnet_5_intro_window_boundary_is_inclusive_through_aug_31():
-    last = pricing.rate_for("claude-sonnet-5", ts=datetime(2026, 8, 31, 23, 59, 59, tzinfo=UTC))
-    first = pricing.rate_for("claude-sonnet-5", ts=datetime(2026, 9, 1, 0, 0, 0, tzinfo=UTC))
-    assert last["fresh"] == 2.00
-    assert first["fresh"] == 3.00
+def test_compute_cost_for_sonnet_5_is_timestamp_independent():
+    assert _sonnet_5_cost_per_mtok_input() == 2.00
+    assert _sonnet_5_cost_per_mtok_input(datetime(2026, 7, 21, tzinfo=UTC)) == 2.00
+    assert _sonnet_5_cost_per_mtok_input(datetime(2026, 9, 1, tzinfo=UTC)) == 2.00
 
 
-def test_sonnet_5_without_ts_uses_list_price():
-    # No timestamp => conservative default (list), never the discount.
-    assert pricing.rate_for("claude-sonnet-5")["fresh"] == 3.00
+def test_no_model_currently_carries_a_dated_window():
+    # Guards against a stale promotion outliving its announcement.
+    assert pricing.DATED_RATES == {}
+    assert pricing.RATE_EPOCHS == []
 
 
-def test_dated_rates_do_not_affect_other_models():
+# --- dated-rate machinery (exercised via a synthetic window) ---------------
+# SV-DATED-RATES outlives any individual promotion, so these drive the code
+# path through conftest's synthetic_dated_rate rather than a live entry.
+
+
+def test_dated_window_applies_before_its_cutover(synthetic_dated_rate):
+    w = synthetic_dated_rate
+    assert pricing.rate_for(w.model, ts=datetime(2026, 7, 21, tzinfo=UTC)) == w.before
+
+
+def test_list_rates_apply_from_the_cutover(synthetic_dated_rate):
+    w = synthetic_dated_rate
+    assert pricing.rate_for(w.model, ts=w.cutover) == w.after
+
+
+def test_dated_window_boundary_is_exclusive_at_the_cutover(synthetic_dated_rate):
+    w = synthetic_dated_rate
+    last = pricing.rate_for(w.model, ts=datetime(2026, 8, 31, 23, 59, 59, tzinfo=UTC))
+    assert last == w.before
+    assert pricing.rate_for(w.model, ts=datetime(2026, 9, 1, 0, 0, 0, tzinfo=UTC)) == w.after
+
+
+def test_omitting_ts_yields_list_price_never_the_discount(synthetic_dated_rate):
+    # Conservative: an unknown timestamp must never silently apply a promo.
+    assert pricing.rate_for(synthetic_dated_rate.model) == synthetic_dated_rate.after
+
+
+def test_dated_window_does_not_leak_to_other_models(synthetic_dated_rate):
+    assert synthetic_dated_rate.model not in ("claude-opus-4-8", "claude-fable-5",
+                                              "claude-haiku-4-5")
     for m in ("claude-opus-4-8", "claude-fable-5", "claude-haiku-4-5"):
         during = pricing.rate_for(m, ts=datetime(2026, 7, 21, tzinfo=UTC))
         after = pricing.rate_for(m, ts=datetime(2026, 9, 1, tzinfo=UTC))
         assert during == after == pricing.rate_for(m)
 
 
-def test_compute_cost_honours_ts_for_sonnet_5():
-    kw = {"fresh": 1_000_000, "output": 0, "eph5": 0, "eph1h": 0, "unsplit_create": 0, "read": 0}
-    assert pricing.compute_cost("claude-sonnet-5", ts=datetime(2026, 7, 21, tzinfo=UTC), **kw) == 2.00
-    assert pricing.compute_cost("claude-sonnet-5", ts=datetime(2026, 9, 1, tzinfo=UTC), **kw) == 3.00
+def test_tier_fallback_never_inherits_a_dated_promotion(synthetic_dated_rate):
+    # An unrecognised sonnet falls back to Sonnet 5's LIST rates, not its
+    # promotional ones, even inside the window.
+    r = pricing.resolve("claude-sonnet-9", ts=datetime(2026, 7, 21, tzinfo=UTC))
+    assert r.kind == "tier"
+    assert r.rates == synthetic_dated_rate.after
 
 
-def test_rate_epochs_are_exposed_sorted_for_read_time_grouping():
-    assert pricing.RATE_EPOCHS == [datetime(2026, 9, 1, tzinfo=UTC)]
+def test_rate_epochs_are_exposed_sorted_for_read_time_grouping(synthetic_dated_rate):
+    assert pricing.RATE_EPOCHS == [synthetic_dated_rate.cutover]
 
 
 # --- resolution robustness -------------------------------------------------
@@ -167,7 +201,8 @@ def test_resolve_reports_exact_match():
 def test_resolve_reports_tier_fallback_for_unknown_claude_model():
     res = pricing.resolve("claude-sonnet-6")
     assert res.kind == "tier"
-    assert res.rates["fresh"] == 3.00
+    # Current-generation Sonnet rates, whatever they are today.
+    assert res.rates == pricing.MODEL_RATES["claude-sonnet-5"]
 
 
 def test_resolve_reports_default_for_wholly_unknown_model():

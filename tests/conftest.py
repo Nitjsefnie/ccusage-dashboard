@@ -37,6 +37,40 @@ os.environ.setdefault("COOKIE_SECURE", "0")
 os.environ["CLAUDIT_WARM_CACHE"] = "0"
 
 
+@pytest.fixture
+def synthetic_dated_rate(monkeypatch):
+    """Install a made-up dated-rate window for the duration of one test.
+
+    pricing.DATED_RATES is empty in production right now (Sonnet 5's launch
+    price became its standard price), but SV-DATED-RATES requires the
+    machinery to keep working for the next promotion. Tests that exercise
+    it install their own window here rather than depending on a live one —
+    otherwise the code path is untested until the day a promotion lands.
+
+    The rates are deliberately unlike any real price so a test asserting
+    against them can never be mistaken for a pricing fact.
+    """
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+
+    from backend import pricing
+
+    cutover = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    before = {
+        "fresh": 9.00, "create_5m": 11.25, "create_1h": 18.00,
+        "read": 0.90, "output": 45.00,
+    }
+    monkeypatch.setattr(pricing, "DATED_RATES", {"claude-sonnet-5": [(cutover, before)]})
+    monkeypatch.setattr(pricing, "RATE_EPOCHS", [cutover])
+
+    return SimpleNamespace(
+        model="claude-sonnet-5",
+        cutover=cutover,
+        before=before,
+        after=pricing.MODEL_RATES["claude-sonnet-5"],
+    )
+
+
 @pytest.fixture(autouse=True)
 def _reset_response_cache():
     # response_cache is a process-global. Two tests with different fixtures
