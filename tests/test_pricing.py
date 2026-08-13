@@ -116,8 +116,8 @@ def test_compute_cost_for_sonnet_5_is_timestamp_independent():
 
 def test_no_model_currently_carries_a_dated_window():
     # Guards against a stale promotion outliving its announcement.
-    assert pricing.DATED_RATES == {}
-    assert pricing.RATE_EPOCHS == []
+    assert not pricing.DATED_RATES, pricing.DATED_RATES
+    assert not pricing.RATE_EPOCHS, pricing.RATE_EPOCHS
 
 
 # --- dated-rate machinery (exercised via a synthetic window) ---------------

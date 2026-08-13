@@ -245,8 +245,24 @@ group is done. (`concurrency: cancel-in-progress` limits the damage by
 cancelling superseded runs on the same ref, but the right fix is not
 generating them.)
 
-Run `python3 -m pytest tests/ -q` locally before pushing; CI is the
-backstop, not the first check.
+**There are FOUR workflows, not one.** `tests.yml` is the one people
+remember; `lint.yml` (pylint + pycodestyle), `types.yml` (pyright) and
+`eslint.yml` are equally red-or-green on every push, and a green pytest
+says nothing about the other three. Run all of them locally before
+pushing — CI is the backstop, not the first check:
+
+```bash
+python3 -m pytest tests/ -q                        # tests.yml
+git ls-files '*.py' | xargs pylint                 # lint.yml, gate 1
+git ls-files '*.py' | xargs pycodestyle            # lint.yml, gate 2
+pyright                                            # types.yml
+npx --no-install eslint 'src/**/*.js' 'src/**/*.jsx'  # eslint.yml
+```
+
+Toolchain and pinned versions: `requirements-dev.txt`. Configs are
+`.pylintrc`, `setup.cfg`, `pyrightconfig.json`, `.eslintrc.json` — style
+opinions (line length) are deliberately off, so what pylint does flag is
+a real finding, not formatting taste.
 
 ## Development conventions
 

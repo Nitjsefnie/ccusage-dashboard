@@ -4,15 +4,18 @@
 # db.load_dotenv(".env") at import time, and .env pins DATABASE_URL_VIZ at
 # the live production `claudit` database. Since db.load_dotenv only ever
 # os.environ.setdefault()s (never overwrites), the first setdefault to run
-# for this key wins the race for the whole test process. backend.cache is
-# safe to import above it: it is stdlib-only and never touches the env.
+# for this key wins the race for the whole test process. backend.cache and
+# backend.pricing are safe to import above it: both are stdlib-only and
+# never touch the env.
 import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-from backend import cache
+from backend import cache, pricing
 
 os.environ.setdefault("DATABASE_URL_VIZ", "postgresql:///claudit_test")
 
@@ -50,11 +53,6 @@ def synthetic_dated_rate(monkeypatch):
     The rates are deliberately unlike any real price so a test asserting
     against them can never be mistaken for a pricing fact.
     """
-    from datetime import datetime, timezone
-    from types import SimpleNamespace
-
-    from backend import pricing
-
     cutover = datetime(2026, 9, 1, tzinfo=timezone.utc)
     before = {
         "fresh": 9.00, "create_5m": 11.25, "create_1h": 18.00,

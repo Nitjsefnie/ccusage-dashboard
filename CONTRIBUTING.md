@@ -92,6 +92,19 @@ python3 -m pytest tests/ -q             # full suite
 python3 -m pytest tests/test_pricing.py -v
 ```
 
+CI runs four separate workflows on every push — tests, lint, types and
+eslint — so a green suite is only a quarter of the gate. Run the other
+three before you push:
+
+```bash
+git ls-files '*.py' | xargs pylint
+git ls-files '*.py' | xargs pycodestyle
+pyright
+npx --no-install eslint 'src/**/*.js' 'src/**/*.jsx'
+```
+
+`pip install -r requirements-dev.txt` gets the pinned toolchain.
+
 The suite creates and drops its own `claudit_test*` databases, so it needs
 a Postgres your user can `createdb` on. It does not touch your real data
 and never contacts R2.
@@ -127,7 +140,11 @@ Both must change together.
   on `window.`. No transpile step beyond in-browser Babel.
 - **Naming** — `snake_case` in Python, `camelCase` in JS, singular SQL
   table names.
-- There is no linter or formatter config. Match the surrounding file.
+- Lint config lives in `.pylintrc`, `setup.cfg`, `pyrightconfig.json`
+  and `.eslintrc.json`, and CI enforces all four. Formatting opinions
+  (line length in particular) are switched off on purpose — match the
+  surrounding file for style, and treat anything the linters do flag
+  as a real finding.
 
 ## Pull requests
 
