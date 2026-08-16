@@ -44,6 +44,7 @@ def viz_pool() -> ConnectionPool:
             # never exercised; it would now be the bottleneck.
             min_size=2, max_size=20, timeout=10,
             kwargs={"autocommit": False},
+            check=ConnectionPool.check_connection,
         )
     return _VIZ
 
@@ -68,6 +69,7 @@ def auth_pool() -> ConnectionPool:
             os.environ["DATABASE_URL_AUTH"],
             min_size=1, max_size=4, timeout=10,
             kwargs={"autocommit": True},
+            check=ConnectionPool.check_connection,
         )
     return _AUTH
 
