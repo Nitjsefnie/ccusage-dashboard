@@ -6,6 +6,8 @@ what is DIRECTLY ENUMERABLE from the command text counts — no execution,
 no guessing. A shape we cannot count exactly contributes 0/0 rather than
 an estimate.
 """
+import warnings
+
 from backend.bash_churn import bash_churn
 
 
@@ -225,3 +227,18 @@ def test_python_replace_through_a_loop_variable_is_not_counted():
            "p.write_text(s)\n"
            "PY\n")
     assert bash_churn(cmd) == (0, 0)
+
+
+def test_parsing_a_body_with_a_bad_escape_emits_no_warning():
+    """Transcript scripts are arbitrary third-party text — `\\$` in a
+    shell-ish literal is legal enough to run and warned about by the
+    compiler. Ingest parses ~200k of them, so a leaked SyntaxWarning is
+    thousands of journald lines per run, from files nobody will edit."""
+    cmd = ("python3 - <<'PY'\n"
+           "import pathlib\n"
+           "pathlib.Path('f').write_text('cost: \\$5')\n"
+           "PY\n")
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        bash_churn(cmd)
+    assert [str(w.message) for w in caught] == []

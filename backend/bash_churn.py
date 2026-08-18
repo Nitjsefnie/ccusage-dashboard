@@ -30,6 +30,7 @@ from __future__ import annotations
 import ast
 import re
 import shlex
+import warnings
 from collections import Counter
 
 # Commands longer than this are pathological (a base64 blob, a giant
@@ -190,52 +191,66 @@ def _opens_for_writing(node: ast.Call) -> bool:
     return any(m and any(ch in m for ch in "wax") for m in modes)
 
 
-def _python_churn(src: str) -> tuple[int, int]:
-    """Churn enumerable from a python script's own source.
-
-    Two questions, in order. Does this script write a file at all? If
-    not it is a reader — a `.replace()` on the way to stdout changes
-    nothing on disk. If it does, every LITERAL replacement it performs
-    is a countable edit; a replacement built from variables is only
-    knowable by running it, so it counts 0.
-    """
-    try:
-        tree = ast.parse(src)
-    except (SyntaxError, ValueError, MemoryError, RecursionError):
-        return 0, 0
-
-    calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call)]
-    writes = False
+def _script_writes_a_file(calls: list[ast.Call]) -> bool:
+    """Does this script put bytes on disk at all? A reader that
+    `.replace()`s on its way to stdout changes nothing."""
     for node in calls:
         func = node.func
         if isinstance(func, ast.Attribute) and func.attr in _WRITE_ATTRS:
             if not (func.attr == "write" and _is_std_stream_write(func)):
-                writes = True
-        elif _opens_for_writing(node):
-            writes = True
-    if not writes:
+                return True
+        if _opens_for_writing(node):
+            return True
+    return False
+
+
+def _call_churn(node: ast.Call, consts: dict[str, str]) -> tuple[int, int]:
+    """Churn from ONE call, counted only when its strings are known
+    from the text: a literal, or a name bound once to a literal."""
+    func = node.func
+    if not isinstance(func, ast.Attribute):
+        return 0, 0
+    is_re_sub = (func.attr == "sub" and isinstance(func.value, ast.Name)
+                 and func.value.id == "re")
+    if (func.attr == "replace" or is_re_sub) and len(node.args) >= 2:
+        old = _resolve_str(node.args[0], consts)
+        new = _resolve_str(node.args[1], consts)
+        if old is None or new is None:
+            return 0, 0
+        return count_lines(new), count_lines(old)
+    if func.attr in ("write_text", "write") and node.args:
+        if func.attr == "write" and _is_std_stream_write(func):
+            return 0, 0
+        literal = _resolve_str(node.args[0], consts)
+        if literal is not None:
+            return count_lines(literal), 0
+    return 0, 0
+
+
+def _python_churn(src: str) -> tuple[int, int]:
+    """Churn enumerable from a python script's own source."""
+    try:
+        # Transcript scripts are arbitrary third-party text: compiling
+        # them raises SyntaxWarning for things like a stray `\$`, and
+        # ingest compiles hundreds of thousands of them. Left alone
+        # that is thousands of journald lines per run about files
+        # nobody is going to fix.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            tree = ast.parse(src)
+    except (SyntaxError, ValueError, MemoryError, RecursionError):
+        return 0, 0
+
+    calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call)]
+    if not _script_writes_a_file(calls):
         return 0, 0
 
     consts = _const_bindings(tree)
     added = deleted = 0
     for node in calls:
-        func = node.func
-        if not isinstance(func, ast.Attribute):
-            continue
-        is_re_sub = (func.attr == "sub" and isinstance(func.value, ast.Name)
-                     and func.value.id == "re")
-        if (func.attr == "replace" or is_re_sub) and len(node.args) >= 2:
-            old = _resolve_str(node.args[0], consts)
-            new = _resolve_str(node.args[1], consts)
-            if old is not None and new is not None:
-                deleted += count_lines(old)
-                added += count_lines(new)
-        elif func.attr in ("write_text", "write") and node.args:
-            if func.attr == "write" and _is_std_stream_write(func):
-                continue
-            literal = _resolve_str(node.args[0], consts)
-            if literal is not None:
-                added += count_lines(literal)
+        a, d = _call_churn(node, consts)
+        added += a
+        deleted += d
     return added, deleted
 
 
