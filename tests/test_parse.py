@@ -322,7 +322,8 @@ def test_errored_edit_contributes_zero_churn():
 
 
 def test_non_edit_tool_has_no_churn():
-    """Tools outside the edit/write set always report 0/0."""
+    """A tool call with nothing enumerable in it reports 0/0 — `ls`
+    writes no lines, and no other tool name carries a payload we count."""
     out = parse.parse_file(
         "k/sess-ok/sess-ok.jsonl", _read("tool_success.jsonl")
     )
@@ -351,3 +352,16 @@ def test_sonnet_5_is_priced_flat_at_its_standard_rate():
     assert [r["cost_usd"] for r in out["records"]] == [
         pytest.approx(2.00), pytest.approx(2.00),
     ]
+
+
+def test_bash_heredoc_call_yields_added_counts():
+    """A heredoc redirected into a file is a write like any other: the
+    body's 3 lines are additions, and nothing is known to be deleted."""
+    out = parse.parse_file(
+        "k/sess-bash/sess-bash.jsonl", _read("bash_churn.jsonl")
+    )
+    tu = out["tool_uses"][0]
+    assert tu["tool_name"] == "Bash"
+    assert tu["is_error"] is False
+    assert tu["lines_added"] == 3
+    assert tu["lines_deleted"] == 0

@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from orjson import JSONDecodeError, loads
 
 from backend import pricing
+from backend.bash_churn import bash_churn
 
 
 _INSTRUMENTATION_USER_PREFIXES = (
@@ -129,8 +130,13 @@ def _tool_churn(name: str, tool_input: dict) -> tuple[int, int]:
     separate POSITIVE series per issue #10 — deletions are NOT
     encoded as negative additions.
 
-    Only Edit and Write occur in the corpus (no MultiEdit /
-    NotebookEdit rows at all), so those are the only names handled.
+    Edit, Write and Bash are the names handled (no MultiEdit /
+    NotebookEdit rows exist in the corpus at all). Bash carries the
+    bulk of it: under bypass permissions the model edits through the
+    shell, so `backend.bash_churn` recovers what the command text
+    enumerates directly — heredoc bodies written to a file, inline
+    patch hunks, literal python replacements — and 0 for everything
+    that would need the command to be RUN to know.
     Known approximations: an Edit with replace_all=true is counted
     once (the call does not say how many occurrences exist), and a
     Write overwriting an existing file counts its old content as 0
@@ -146,6 +152,8 @@ def _tool_churn(name: str, tool_input: dict) -> tuple[int, int]:
             _line_count(str(tool_input.get("content", "") or "")),
             0,
         )
+    if name == "Bash":
+        return bash_churn(str(tool_input.get("command", "") or ""))
     return 0, 0
 
 
