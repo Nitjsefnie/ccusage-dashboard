@@ -259,11 +259,19 @@ pushing — CI is the backstop, not the first check:
 
 ```bash
 python3 -m pytest tests/ -q                        # tests.yml
-git ls-files '*.py' | xargs pylint                 # lint.yml, gate 1
-git ls-files '*.py' | xargs pycodestyle            # lint.yml, gate 2
+git ls-files -co --exclude-standard '*.py' | xargs pylint       # lint.yml, gate 1
+git ls-files -co --exclude-standard '*.py' | xargs pycodestyle  # lint.yml, gate 2
 pyright                                            # types.yml
 npx --no-install eslint 'src/**/*.js' 'src/**/*.jsx'  # eslint.yml
 ```
+
+**`-co --exclude-standard`, not a bare `git ls-files`.** CI lints the
+committed tree, so the workflow's own `git ls-files '*.py'` is right
+*there*. Locally it is a trap: a brand-new module is untracked until
+you stage it, `git ls-files` never lists it, and pylint reports a
+clean run over every file except the one you just wrote. `-c`
+(cached) plus `-o` (other) covers both, and `--exclude-standard`
+keeps `.gitignore`d files out.
 
 Toolchain and pinned versions: `requirements-dev.txt`. Configs are
 `.pylintrc`, `setup.cfg`, `pyrightconfig.json`, `.eslintrc.json` — style
