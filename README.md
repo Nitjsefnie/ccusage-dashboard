@@ -77,6 +77,14 @@ with multi-user auth, R2 ingest, and live updates.
   Czech local time (`Europe/Prague`, DST-aware via Postgres
   `AT TIME ZONE`), with requests / output-tokens / cost metric toggle
   and a per-panel model filter, plus Σ margin totals per weekday and per hour.
+- **Lines Added / Deleted** — per-call line churn read off the
+  tool arguments. Edit and Write are the obvious sources; under
+  bypass permissions most editing goes through Bash instead, so
+  heredoc bodies written to a file, inline `git apply`/`patch`
+  hunks, and python read/replace/write one-liners are counted
+  too. Only what the command text enumerates directly counts —
+  a shape that would have to be executed to measure contributes
+  nothing rather than an estimate.
 - **Cross-file uuid dedup** at query time so sub-agent JSONLs roll
   into their parent session without double-counting.
 - **Rate-limit hit** detection (Claude Code's `out of extra usage`
