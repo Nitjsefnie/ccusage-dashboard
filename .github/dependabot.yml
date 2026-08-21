@@ -1,0 +1,63 @@
+# Every dependency in this repo is pinned to an exact version, deliberately:
+# a tool or library release must never turn CI red on an unchanged commit.
+# The cost of that choice is that pins go stale silently, and a stale pin is
+# how a fixed CVE stays exploitable. Dependabot pays that cost back — it is
+# the counterpart to audit.yml, which detects the problem but cannot fix it.
+#
+# Note the interaction with the repo's CI policy: PRs are not built until an
+# approving review lands (see tests.yml), so a Dependabot PR sits unbuilt
+# until a human looks at it. That is the existing policy working as intended,
+# not an extra cost of enabling this — an unreviewed bump is exactly the kind
+# of change that should not get a runner.
+#
+# There is no npm entry: the frontend has no package.json on purpose (see
+# eslint.yml), so eslint's pins live inside that workflow and Dependabot
+# cannot see them. Bump them by hand when the github-actions PRs land.
+
+version: 2
+updates:
+  # Root: requirements-dev.txt (lint/type toolchain) and
+  # requirements-test.txt (coverage toolchain).
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: wednesday
+      time: "04:30"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+    labels:
+      - dependencies
+
+  # backend/requirements.txt — the runtime and test dependencies the
+  # deployed service actually installs.
+  - package-ecosystem: pip
+    directory: "/backend"
+    schedule:
+      interval: weekly
+      day: wednesday
+      time: "04:30"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+    labels:
+      - dependencies
+
+  # The workflows themselves pin actions by major tag (actions/checkout@v4).
+  # A major-tag pin still moves, but only within a major — this catches the
+  # major bumps, which are the ones that need a human.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: wednesday
+      time: "04:30"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
+    labels:
+      - dependencies

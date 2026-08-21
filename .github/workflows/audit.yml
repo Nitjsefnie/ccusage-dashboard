@@ -1,0 +1,96 @@
+name: audit
+
+# Dependency vulnerability gate: pip-audit resolves each requirements file
+# to its full transitive tree and checks every resolved version against the
+# PyPI advisory database and OSV.
+#
+# Resolution is the point, not a detail. Nothing in this repo pins
+# `starlette` — it arrives underneath `fastapi` — and when this gate was
+# written that transitive pin carried nine advisories that no direct reading
+# of a requirements file would ever have shown.
+#
+# WHY THE CRON IS THE IMPORTANT TRIGGER. Every other gate in this repo
+# answers "did this commit break something", so push is the natural trigger.
+# This one answers "is a version we froze months ago still safe", and that
+# answer changes when a stranger publishes an advisory, with no commit here
+# to hang it on. A push-only audit would report clean forever on an
+# abandoned branch. The push trigger is the lesser half: it catches a bad
+# pin at the moment it is introduced, while the diff is on screen.
+#
+# This gate FAILS the build rather than filing an advisory, which is the
+# same stance as lint and types: a red gate that a human must look at beats
+# a notification that accumulates unread. When a fix genuinely is not
+# available yet, add the advisory to --ignore-vuln below WITH a comment
+# saying why and what would clear it — never silence the whole gate.
+
+on:
+  push:
+    paths-ignore:
+      - '**/*.md'
+      - 'PRESENTATION.txt'
+      - 'docs/**'
+      - 'examples/**'
+      - '.claude/**'
+      - 'LICENSE'
+      - 'NOTICE'
+      - '.gitignore'
+  pull_request_review:
+    types: [submitted]
+  schedule:
+    # Daily, not weekly. An advisory is actionable the day it lands, and
+    # this job costs about a minute of a runner. 04:12 UTC, off the hour.
+    - cron: '12 4 * * *'
+  workflow_dispatch:
+
+# Least privilege: every job here only reads the tree. Without an
+# explicit block the job inherits the repository default, which can be
+# read/write for the whole token.
+permissions:
+  contents: read
+
+concurrency:
+  group: audit-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pip-audit:
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'push' ||
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch' ||
+      github.event.review.state == 'approved'
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          # Nothing in this workflow pushes. Leaving the job token in
+          # .git/config lets any later step — or anything a dependency
+          # pulls in — reuse it.
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install pip-audit
+        run: |
+          python -m pip install --upgrade pip
+          pip install pip-audit==2.10.1
+
+      - name: Audit dependencies
+        # All three requirements files in one invocation so a package
+        # constrained by two of them is resolved once, consistently — the
+        # same way an install would see it.
+        #
+        # No --ignore-vuln entries at present. Each one added here must
+        # carry a comment naming the advisory, why it is not fixable, and
+        # what would let it be removed.
+        run: |
+          pip-audit \
+            --progress-spinner off \
+            --requirement backend/requirements.txt \
+            --requirement requirements-dev.txt \
+            --requirement requirements-test.txt
