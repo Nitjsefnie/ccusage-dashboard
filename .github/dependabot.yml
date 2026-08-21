@@ -46,9 +46,11 @@ updates:
     labels:
       - dependencies
 
-  # The workflows themselves pin actions by major tag (actions/checkout@v4).
-  # A major-tag pin still moves, but only within a major — this catches the
-  # major bumps, which are the ones that need a human.
+  # The workflows pin every action to a commit SHA with the version in a
+  # trailing comment. A SHA pin does not move at all — which is the point,
+  # since these jobs run with a repository token — and it is also why this
+  # entry is not optional: without Dependabot a SHA pin is simply frozen
+  # forever. It rewrites both the SHA and the comment.
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
