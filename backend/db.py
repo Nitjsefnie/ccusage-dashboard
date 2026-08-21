@@ -10,26 +10,33 @@ from __future__ import annotations
 
 import os
 from contextlib import contextmanager
-from typing import cast
+from typing import LiteralString, cast
 
-from psycopg.abc import Query
 from psycopg_pool import ConnectionPool
 
 _VIZ: ConnectionPool | None = None
 _AUTH: ConnectionPool | None = None
 
 
-def sql_text(query: str) -> Query:
+def sql_text(query: str) -> LiteralString:
     """Mark a programmatically assembled query string as executable.
 
-    psycopg 3.2 types Cursor.execute() as taking a LiteralString, so a
-    static checker flags every runtime-built SQL string. The queries
-    passed through here are assembled exclusively from our own fragments
-    — branch-selected WHERE clauses, integer bucket widths — and user
-    input only ever reaches the DB as a %s parameter, so the
-    literal-only guarantee the type wants is upheld by construction.
+    psycopg types Cursor.execute() as taking a LiteralString, so a static
+    checker flags every runtime-built SQL string. The queries passed
+    through here are assembled exclusively from our own fragments —
+    branch-selected WHERE clauses, integer bucket widths — and user input
+    only ever reaches the DB as a %s parameter, so the literal-only
+    guarantee the type wants is upheld by construction.
+
+    The return type is typing.LiteralString and NOT psycopg.abc.Query,
+    which is what it used to be. psycopg 3.3 split that alias: execute()
+    now takes QueryNoTemplate, because Query gained
+    string.templatelib.Template for 3.14 t-strings, and a value typed as
+    the whole union matches neither overload. LiteralString is a member of
+    both aliases and belongs to the standard library, so this no longer
+    tracks psycopg's type-alias churn at all.
     """
-    return cast(Query, query)
+    return cast(LiteralString, query)
 
 
 def viz_pool() -> ConnectionPool:
