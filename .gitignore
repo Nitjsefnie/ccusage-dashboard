@@ -1,42 +1,131 @@
-# scratch / build artefacts
-node_modules/
-dist/
-build/
-.cache/
-*.log
-*.pid
+# Deny-by-default. `*` ignores everything; each rule below names back exactly
+# what claudit ships. An unlisted file is invisible to git and can never be
+# committed by accident — which is the point, because this working tree also
+# holds .env, .secrecy-literals, a .venv, scratch analysis and generated
+# artefacts that must never reach the remote.
+#
+# The mechanic, because the pattern fails silently without it: git does not
+# look inside a directory it has already ignored. So every kept directory is
+# re-opened (`!dir/`), its contents denied again (`dir/*`), and its files are
+# named back by a glob SCOPED to that directory. That scoping is the point —
+# it is what stops a `!*.py` from reaching into `__pycache__/` or `.venv/`.
+#
+# Adding a file whose type is not already named back for its directory means
+# adding a rule here. `git status` will NOT tell you the file is missing; it
+# simply never appears. `git check-ignore -v <path>` names the rule hiding it.
 
-# python venv (auxiliary plot scripts)
-.venv/
-__pycache__/
-*.pyc
+*
 
-# fixtures: keep README + small samples; ignore anything big
-fixtures/large/
-fixtures/*.zip
-fixtures/*.jsonl
-!fixtures/sample-*.jsonl
+# ---- repository root ------------------------------------------------------
+!/.eslintrc.json
+!/.gitignore
+!/.pylintrc
+!/AGENTS.md
+!/CLAUDE.md
+!/CONTRIBUTING.md
+!/LICENSE
+!/NOTICE
+!/PRESENTATION.txt
+!/README.md
+!/VERSION
+!/pyrightconfig.json
+!/requirements-dev.txt
+!/setup.cfg
 
-# editor
-.vscode/
-.idea/
-*.swp
-.DS_Store
+# ---- .claude/ — local doctrine (SV-* rules) -------------------------------
+!/.claude/
+/.claude/*
+!/.claude/rules/
+/.claude/rules/*
+!/.claude/rules/*.md
 
-# secrets — never commit
-.env
-.env.local
-.env.*.local
-!.env.example
-secrets/
-*.token
+# ---- .github/ — CI workflows and dependabot -------------------------------
+!/.github/
+/.github/*
+!/.github/dependabot.yml
+!/.github/workflows/
+/.github/workflows/*
+!/.github/workflows/*.yml
 
-# Backend artifacts
-backend/__pycache__/
-__pycache__/
-.pytest_cache/
-*.pyc
+# ---- backend/ — FastAPI app ------------------------------------------------
+# `!/backend/*.py` is deliberately unanchored-free (no `**`): it matches only
+# files directly in backend/, so backend/__pycache__/ stays denied by
+# `/backend/*` and git never descends into it.
+!/backend/
+/backend/*
+!/backend/*.py
+!/backend/.env.example
+!/backend/requirements.txt
+!/backend/schema.sql
 
-# never commit: the secrecy-check literal list
-.secrecy-literals
-.env.bak-*
+# ---- docs/ — design docs and specs -----------------------------------------
+!/docs/
+/docs/*
+!/docs/*.html
+!/docs/*.md
+!/docs/*.txt
+!/docs/superpowers/
+/docs/superpowers/*
+!/docs/superpowers/plans/
+/docs/superpowers/plans/*
+!/docs/superpowers/plans/*.html
+!/docs/superpowers/plans/*.md
+!/docs/superpowers/specs/
+/docs/superpowers/specs/*
+!/docs/superpowers/specs/*.html
+!/docs/superpowers/specs/*.md
+
+# ---- examples/ — sample systemd unit ---------------------------------------
+!/examples/
+/examples/*
+!/examples/*.service
+
+# ---- fixtures/ — small parser + end-to-end samples -------------------------
+!/fixtures/
+/fixtures/*
+!/fixtures/*.md
+!/fixtures/parser/
+/fixtures/parser/*
+!/fixtures/parser/*.jsonl
+# r2_mini is a MIRROR of an R2 bucket — its shape is
+# claude/<project>/<session>/... and a new fixture session adds directories at
+# arbitrary depth, so descendants are re-opened recursively instead of being
+# enumerated. The name-back list stays SCOPED to this subtree, so only the two
+# file types the mirror actually ships can get through.
+!/fixtures/r2_mini/
+/fixtures/r2_mini/**
+!/fixtures/r2_mini/**/
+!/fixtures/r2_mini/**/*.jsonl
+!/fixtures/r2_mini/**/*.txt
+
+# ---- public/ — static assets served at / -----------------------------------
+!/public/
+/public/*
+!/public/*.css
+!/public/*.html
+
+# ---- scripts/ — repo tooling (canonical analyst scripts are NOT vendored) --
+!/scripts/
+/scripts/*
+!/scripts/*.sh
+!/scripts/pre-push
+!/scripts/ci/
+/scripts/ci/*
+!/scripts/ci/*.py
+!/scripts/plots/
+/scripts/plots/*
+!/scripts/plots/*.py
+
+# ---- src/ — React JSX modules served at /src/* -----------------------------
+!/src/
+/src/*
+!/src/*.js
+!/src/*.jsx
+!/src/views/
+/src/views/*
+!/src/views/*.jsx
+
+# ---- tests/ — pytest suite -------------------------------------------------
+!/tests/
+/tests/*
+!/tests/*.py
