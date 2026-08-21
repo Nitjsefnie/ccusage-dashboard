@@ -251,19 +251,41 @@ group is done. (`concurrency: cancel-in-progress` limits the damage by
 cancelling superseded runs on the same ref, but the right fix is not
 generating them.)
 
-**There are FOUR workflows, not one.** `tests.yml` is the one people
-remember; `lint.yml` (pylint + pycodestyle), `types.yml` (pyright) and
-`eslint.yml` are equally red-or-green on every push, and a green pytest
-says nothing about the other three. Run all of them locally before
-pushing — CI is the backstop, not the first check:
+**There are TEN workflows, not one.** `tests.yml` is the one people
+remember, and a green pytest says nothing about the other nine. Six run
+locally — run them before pushing, because CI is the backstop, not the
+first check:
 
 ```bash
-python3 -m pytest tests/ -q                        # tests.yml
+python3 -m pytest tests/ -q --cov=backend          # tests.yml (+ coverage)
 git ls-files -co --exclude-standard '*.py' | xargs pylint       # lint.yml, gate 1
 git ls-files -co --exclude-standard '*.py' | xargs pycodestyle  # lint.yml, gate 2
 pyright                                            # types.yml
 npx --no-install eslint 'src/**/*.js' 'src/**/*.jsx'  # eslint.yml
+python3 scripts/ci/smoke.py                        # smoke.yml
+pip-audit -r backend/requirements.txt -r requirements-dev.txt \
+          -r requirements-test.txt                 # audit.yml
+actionlint .github/workflows/*.yml && \
+  zizmor .github/workflows/                        # actionlint.yml
 ```
+
+The four that only make sense on GitHub:
+
+| Workflow | Question it answers | Trigger |
+| --- | --- | --- |
+| `codeql.yml` | Is there a security defect in the Python or JS? Results go to the Security tab, never the build. | push + weekly cron. The cron is NOT redundant: a query published today would otherwise only ever run against files touched after it shipped. Deliberately skips `pull_request_review`, because `analyze` files SARIF against the *event's* SHA while our checkout takes the PR head — two different commits. |
+| `audit.yml` | Are the frozen pins still free of advisories? Resolves the full transitive tree, which is the point — nothing here pins `starlette`. | push + **daily** cron. The cron is the important half: this answer changes with no commit to hang it on. |
+| `speed.yml` | Did the tests that exist in both this commit and the last release get >30% slower? | push. Runs BOTH builds on the same runner, interleaved, min-of-rounds. Skips green while no release exists. |
+| `release.yml` | — | push to `master` touching `VERSION`. Waits for every other check on that SHA, then tags `v<VERSION>`. |
+
+**Coverage is a ratchet at 82%**, in `tests.yml`, checked by a step of its
+own so "tests failed" and "coverage dropped" stay distinguishable. Raise
+the floor as coverage climbs; never lower it to turn a build green.
+
+**Release = edit `VERSION`.** One bare semver line at the repo root, no
+leading `v`. `release.yml` reacts to it; nothing bumps it automatically,
+because deciding patch-vs-minor is a judgement about what changed.
+`backend/constants.VERSION` reads it and `/health` reports it.
 
 **`-co --exclude-standard`, not a bare `git ls-files`.** CI lints the
 committed tree, so the workflow's own `git ls-files '*.py'` is right
@@ -273,10 +295,25 @@ clean run over every file except the one you just wrote. `-c`
 (cached) plus `-o` (other) covers both, and `--exclude-standard`
 keeps `.gitignore`d files out.
 
-Toolchain and pinned versions: `requirements-dev.txt`. Configs are
-`.pylintrc`, `setup.cfg`, `pyrightconfig.json`, `.eslintrc.json` — style
-opinions (line length) are deliberately off, so what pylint does flag is
-a real finding, not formatting taste.
+Toolchain and pinned versions: `requirements-dev.txt` (lint/type) and
+`requirements-test.txt` (coverage). Configs are `.pylintrc`, `setup.cfg`,
+`pyrightconfig.json`, `.eslintrc.json` — style opinions (line length) are
+deliberately off, so what pylint does flag is a real finding, not
+formatting taste.
+
+**Actions are hash-pinned**, with the version in a trailing comment. Do
+not "tidy" one back to `@v4`: a tag is a moving pointer, and these jobs
+hold a repository token. Dependabot keeps the hashes current. Every
+workflow also sets `permissions:` explicitly and passes
+`persist-credentials: false` to checkout — `zizmor` enforces all three,
+and a suppression belongs at the offending line with a justification (see
+`eslint.yml`), never as a raised `--min-severity`.
+
+**`.gitignore` is deny-by-default**: `*` first, then each shipped path
+named back. A new file of an unlisted type is invisible to git and will
+NOT appear in `git status` — `git check-ignore -v <path>` names the rule
+hiding it, and the fix is a name-back rule in the file's own directory
+block. Never "fix" it by loosening the leading `*`.
 
 ## Development conventions
 

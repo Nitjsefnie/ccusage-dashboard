@@ -92,18 +92,40 @@ python3 -m pytest tests/ -q             # full suite
 python3 -m pytest tests/test_pricing.py -v
 ```
 
-CI runs four separate workflows on every push — tests, lint, types and
-eslint — so a green suite is only a quarter of the gate. Run the other
-three before you push:
+CI runs **ten** separate workflows, so a green suite is a small fraction
+of the gate. These five you can and should run locally before pushing:
 
 ```bash
-git ls-files '*.py' | xargs pylint
-git ls-files '*.py' | xargs pycodestyle
-pyright
-npx --no-install eslint 'src/**/*.js' 'src/**/*.jsx'
+python3 -m pytest tests/ -q --cov=backend            # tests (+ coverage)
+git ls-files -co --exclude-standard '*.py' | xargs pylint      # lint, gate 1
+git ls-files -co --exclude-standard '*.py' | xargs pycodestyle # lint, gate 2
+pyright                                                        # types
+npx --no-install eslint 'src/**/*.js' 'src/**/*.jsx'           # eslint
+python3 scripts/ci/smoke.py                                    # smoke
 ```
 
-`pip install -r requirements-dev.txt` gets the pinned toolchain.
+Use `-co --exclude-standard`, not a bare `git ls-files`. CI lints the
+committed tree so its own plain `git ls-files` is right *there*; locally
+it is a trap, because a brand-new module is untracked until you stage it
+and pylint will report a clean run over every file except the one you
+just wrote.
+
+`pip install -r requirements-dev.txt -r requirements-test.txt` gets the
+pinned toolchain. Coverage is gated at 82% — a ratchet set under the
+current number, not a target.
+
+The remaining four need GitHub and run on their own:
+
+| Workflow | What it does |
+| --- | --- |
+| `codeql` | Security analysis for Python and JS; findings go to the Security tab, not the build. Also runs weekly, because new queries only ever see code that changed after they shipped. |
+| `audit` | `pip-audit` over every requirements file, resolving the full transitive tree. Runs daily — an advisory lands without a commit here to hang it on. |
+| `actionlint` | `actionlint` + `zizmor` over the workflow files themselves. A broken workflow does not go red, it silently stops running. |
+| `speed` | Runs the last release's suite and yours on the same runner, interleaved, and fails if the tests present in both got more than 30% slower. |
+| `release` | Cuts a tagged release when `VERSION` changes on `master`, after every other check on that commit has passed. |
+
+If you are changing dependencies, run `pip-audit -r backend/requirements.txt
+-r requirements-dev.txt -r requirements-test.txt` too.
 
 The suite creates and drops its own `claudit_test*` databases, so it needs
 a Postgres your user can `createdb` on. It does not touch your real data

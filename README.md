@@ -190,8 +190,10 @@ restart).
 - `src/` — React JSX modules. Served at `/src/*` with mtime-based
   cache-bust.
 - `scripts/` — `plots/ccusage_plot_db.py`, our DB-backed usage-plotting
-  script (queries the claudit Postgres `records` table). Canonical analyst
-  scripts are not vendored here; invoke them by absolute path under
+  script (queries the claudit Postgres `records` table), and `ci/`, the
+  CI entry points that are too big to live inside a workflow's `run:`
+  block (`smoke.py`, `compare_durations.py`). Canonical analyst scripts
+  are not vendored here; invoke them by absolute path under
   `~/.claude/scripts/`.
 - `tests/` — pytest suite (parser fixtures, ingest, API).
 - `fixtures/` — small JSONL + zip samples for parser tests.
@@ -202,6 +204,17 @@ restart).
 Issues and PRs welcome — including agent-authored ones. See
 [`CONTRIBUTING.md`](CONTRIBUTING.md) for setup, the test suite, and the
 invariants most likely to trip a patch.
+
+Ten CI workflows run against every push: `tests` (pytest plus a coverage
+ratchet), `lint`, `types`, `eslint`, `smoke` (boots the real server
+against the fixture mirror), `codeql`, `audit` (`pip-audit`, daily),
+`actionlint` (lints the workflows themselves), `speed` (benchmarks this
+commit against the last release *on the same runner*), and `release`.
+Most of them run locally too — `CONTRIBUTING.md` lists the commands.
+
+Releases are cut by editing the root `VERSION` file: `release.yml` waits
+for every other check on that commit, then tags `v<VERSION>`. The running
+build reports its version at `/health`.
 
 ## License
 
