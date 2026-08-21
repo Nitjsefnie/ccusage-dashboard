@@ -1,11 +1,20 @@
-fastapi==0.115.4
-uvicorn[standard]==0.32.0
-psycopg[pool,binary]==3.2.3
-boto3==1.35.36
-orjson==3.10.7
-apscheduler==3.10.4
-cachetools==5.5.0
-python-multipart==0.0.12
-pytest==8.3.3
-pytest-asyncio==0.24.0
-httpx==0.27.2
+# Exact pins: a library release must never turn CI red on an unchanged
+# commit. audit.yml watches these for advisories and .github/dependabot.yml
+# opens the bumps, which is what keeps "pinned" from meaning "abandoned".
+#
+# starlette is NOT pinned here on purpose — it arrives underneath fastapi,
+# and pinning it separately is how the two end up in conflict. fastapi
+# 0.141.1 resolves starlette 1.6.0.
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
+psycopg[pool,binary]==3.3.4
+boto3==1.43.77
+orjson==3.12.0
+apscheduler==3.11.3
+# Not imported anywhere; FastAPI needs it to parse the login form
+# (backend/login.py uses Form()). Removing it breaks POST /login at
+# runtime, not at import.
+python-multipart==0.0.32
+pytest==9.1.1
+pytest-asyncio==1.4.0
+httpx==0.28.1
