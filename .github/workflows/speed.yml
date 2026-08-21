@@ -94,10 +94,28 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
+        # `gh api` on a 404 prints its JSON error body to STDOUT and exits
+        # nonzero. The first version of this step ended in `|| true`, which
+        # discarded the exit code and assigned that blob to $tag — so the
+        # "no release yet" guard saw a non-empty string, fell through, and
+        # handed actions/checkout a refspec made of JSON. Hence both belts
+        # below: branch on the EXIT CODE, then validate the SHAPE, so no
+        # payload can ever reach a git command as a ref.
         run: |
-          tag="$(gh api -H "Cache-Control: no-cache" \
-                 "repos/$REPO/releases/latest" --jq '.tag_name' 2>/dev/null || true)"
-          if [ -z "$tag" ] || [ "$tag" = "null" ]; then
+          tag=""
+          if out="$(gh api -H "Cache-Control: no-cache" \
+                    "repos/$REPO/releases/latest" --jq '.tag_name' 2>/dev/null)"; then
+            tag="$out"
+          fi
+          case "$tag" in
+            null) tag="" ;;
+            *[!A-Za-z0-9._-]*)
+              echo "Unexpected payload where a tag was expected; treating" >&2
+              echo "as 'no baseline' rather than passing it to git." >&2
+              tag=""
+              ;;
+          esac
+          if [ -z "$tag" ]; then
             echo "tag=" >> "$GITHUB_OUTPUT"
             echo "No release exists yet, so there is no baseline to compare"
             echo "against. This becomes a real gate once release.yml cuts one."
