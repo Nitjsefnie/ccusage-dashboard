@@ -1,0 +1,96 @@
+name: codeql
+
+# Static security analysis (advanced setup, not the repo-settings "default
+# setup" — the config lives here so it is reviewable in a diff like every
+# other gate). Free on this public repository; findings land in the
+# Security tab rather than turning the build red, so a new query shipping
+# upstream cannot block an unrelated push.
+#
+# TRIGGER DIFFERS FROM THE OTHER WORKFLOWS ON PURPOSE. The rest of the
+# suite builds on `pull_request_review` once an approving review lands.
+# CodeQL does not, because `analyze` uploads its SARIF against the ref and
+# SHA of the *event*, while our checkout step deliberately takes
+# `pull_request.head.sha`. On a review event those two are different
+# commits, so the alerts would be filed against a tree that was never the
+# one analysed. `push` fires on every branch in this repo, which already
+# covers the head of any same-repo PR, so nothing is actually lost.
+#
+# The weekly cron is not redundant with push: CodeQL's query packs are
+# updated continuously, and a new query only ever runs against code that
+# has changed since it shipped. Without the cron, a rule published today
+# would never be applied to a file last touched last year.
+
+on:
+  push:
+    # Same deny-list as tests.yml — an allow-list would silently stop
+    # scanning a new top-level code directory.
+    paths-ignore:
+      - '**/*.md'
+      - 'PRESENTATION.txt'
+      - 'docs/**'
+      - 'examples/**'
+      - '.claude/**'
+      - 'LICENSE'
+      - 'NOTICE'
+      - '.gitignore'
+  schedule:
+    # Wednesday 03:47 UTC. Off the hour and off Monday deliberately: the
+    # top of the hour is when every cron on GitHub fires at once and jobs
+    # queue for a long time.
+    - cron: '47 3 * * 3'
+  workflow_dispatch:
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+
+    permissions:
+      # Writing the analysis results is the whole point; everything else
+      # stays read-only.
+      security-events: write
+      actions: read
+      contents: read
+
+    strategy:
+      # One language failing should not hide the other language's results.
+      fail-fast: false
+      matrix:
+        include:
+          - language: python
+            build-mode: none
+          - language: javascript-typescript
+            build-mode: none
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # No `ref:` here, unlike the other workflows: CodeQL must analyse
+          # exactly the commit it will file alerts against, which is the
+          # event's own SHA.
+          persist-credentials: false
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@f3712979fa5f215279b101dd0a2e3bdfb4353324 # v3.37.7
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          # `security-extended` over the default `security` pack: this app
+          # handles auth, cookies, SQL and a path-traversal-sensitive R2
+          # file mode, and the extra precision-medium queries are exactly
+          # the ones that cover those.
+          queries: security-extended
+          config: |
+            paths-ignore:
+              - fixtures
+              - docs
+              - node_modules
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@f3712979fa5f215279b101dd0a2e3bdfb4353324 # v3.37.7
+        with:
+          category: /language:${{ matrix.language }}
