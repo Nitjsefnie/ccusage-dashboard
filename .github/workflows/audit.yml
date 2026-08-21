@@ -88,9 +88,39 @@ jobs:
         # No --ignore-vuln entries at present. Each one added here must
         # carry a comment naming the advisory, why it is not fixable, and
         # what would let it be removed.
+        #
+        # THE RETRY IS NARROW ON PURPOSE. pip-audit resolves against PyPI
+        # and the advisory database over the network, and a reset
+        # connection produces the same exit status as a real finding. A
+        # blanket `retry 3` would therefore re-run a genuine vulnerability
+        # three times before reporting it, and — worse — a gate that goes
+        # red for reasons unrelated to its subject is one people learn to
+        # ignore. So this retries ONLY when the output carries a transport
+        # error, and reports anything else immediately and verbatim.
         run: |
-          pip-audit \
-            --progress-spinner off \
-            --requirement backend/requirements.txt \
-            --requirement requirements-dev.txt \
-            --requirement requirements-test.txt
+          for attempt in 1 2 3; do
+            if pip-audit \
+                 --progress-spinner off \
+                 --requirement backend/requirements.txt \
+                 --requirement requirements-dev.txt \
+                 --requirement requirements-test.txt \
+                 > audit.out 2>&1; then
+              cat audit.out
+              exit 0
+            fi
+
+            if grep -qiE 'connection (aborted|reset|error)|read timed out|temporary failure in name resolution' audit.out; then
+              echo "attempt $attempt: transport failure talking to PyPI, retrying"
+              tail -n 5 audit.out
+              sleep $(( attempt * 15 ))
+              continue
+            fi
+
+            echo "pip-audit reported findings:" >&2
+            cat audit.out >&2
+            exit 1
+          done
+
+          echo "pip-audit could not reach PyPI after 3 attempts:" >&2
+          cat audit.out >&2
+          exit 1
