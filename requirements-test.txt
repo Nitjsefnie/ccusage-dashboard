@@ -1,0 +1,14 @@
+# Test-only toolchain, pinned so a tool release cannot turn CI red on an
+# unchanged commit (same reason as requirements-dev.txt).
+#
+# pytest, pytest-asyncio and httpx are NOT here: they are already pinned in
+# backend/requirements.txt, which tests.yml installs first. Duplicating a
+# pin in two files is how the two drift.
+#
+# `coverage` is named explicitly rather than left to pytest-cov's
+# dependency resolution, because the workflow shells out to `coverage
+# report --format=markdown` and `--fail-under` directly — the gate is a
+# step of its own so a coverage failure is distinguishable from a test
+# failure, and the summary still renders when the gate is red.
+coverage==7.13.2
+pytest-cov==7.0.0

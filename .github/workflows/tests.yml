@@ -23,6 +23,12 @@ on:
   pull_request_review:
     types: [submitted]
 
+# Least privilege: every job here only reads the tree. Without an
+# explicit block the job inherits the repository default, which can be
+# read/write for the whole token.
+permissions:
+  contents: read
+
 concurrency:
   # A push that supersedes an in-flight run for the same ref cancels it —
   # nothing is learned from CI for a commit that is already history.
@@ -64,13 +70,17 @@ jobs:
       PGPASSWORD: postgres
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           # pull_request_review checks out the BASE ref by default, which
           # would test the wrong code — take the PR head explicitly.
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          # Nothing in this workflow pushes. Leaving the job token in
+          # .git/config lets any later step — or anything a dependency
+          # pulls in — reuse it.
+          persist-credentials: false
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.13"
           cache: pip
@@ -85,18 +95,54 @@ jobs:
           sudo apt-get install -y -qq postgresql-client-16
 
       - name: Install dependencies
+        # backend/requirements.txt already pins pytest, pytest-asyncio and
+        # httpx; requirements-test.txt adds only the coverage toolchain, so
+        # neither pin exists in two places.
         run: |
           python -m pip install --upgrade pip
-          pip install -r backend/requirements.txt
-          pip install pytest pytest-asyncio httpx
+          pip install -r backend/requirements.txt -r requirements-test.txt
 
       - name: Wait for postgres
         run: |
-          for i in $(seq 1 30); do
+          for _ in $(seq 1 30); do
             pg_isready -q && exit 0
             sleep 1
           done
           echo "postgres never became ready"; exit 1
 
       - name: Run tests
-        run: python -m pytest tests/ -q --tb=short -ra
+        id: pytest
+        # No --cov-fail-under here: the gate is its own step below so that
+        # "tests failed" and "coverage dropped" are distinguishable at a
+        # glance, and so the summary still renders when the gate is red.
+        run: python -m pytest tests/ -q --tb=short -ra --cov=backend --cov-report=term
+
+      - name: Coverage summary
+        # Renders whether or not the gate below passes — a coverage
+        # regression is only actionable if you can see WHICH file lost
+        # lines, and re-reading a scrolled CI log to find that is exactly
+        # the friction that gets a gate disabled.
+        if: ${{ !cancelled() && steps.pytest.conclusion != 'skipped' }}
+        run: |
+          {
+            echo '### Coverage'
+            echo
+            python -m coverage report --format=markdown --precision=1
+          } >> "$GITHUB_STEP_SUMMARY"
+          python -m coverage xml -o coverage.xml
+
+      - name: Upload coverage.xml
+        if: ${{ !cancelled() && steps.pytest.conclusion != 'skipped' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage-xml
+          path: coverage.xml
+          if-no-files-found: error
+
+      - name: Coverage gate
+        if: ${{ !cancelled() && steps.pytest.conclusion != 'skipped' }}
+        # A RATCHET, not a target. 82 sits just under the 84% measured when
+        # this landed, so ordinary churn stays green and a real regression
+        # goes red. Raise the floor by hand as coverage climbs — never
+        # lower it to make a red build green.
+        run: python -m coverage report --fail-under=82 --precision=1

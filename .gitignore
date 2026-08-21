@@ -30,6 +30,7 @@
 !/VERSION
 !/pyrightconfig.json
 !/requirements-dev.txt
+!/requirements-test.txt
 !/setup.cfg
 
 # ---- .claude/ — local doctrine (SV-* rules) -------------------------------
