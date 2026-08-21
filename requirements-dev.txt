@@ -7,7 +7,7 @@ autopep8==2.3.2
 isort==8.0.1
 pycodestyle==2.14.0
 pylint==4.0.6
-pyright==1.1.408
+pyright==1.1.411
 # Runtime dep of scripts/plots/*.py, needed in the lint/type environment so
 # pylint/pyright can resolve the imports of checked-in code (same reason the
 # types workflow installs backend/requirements.txt). Not needed by the server.
