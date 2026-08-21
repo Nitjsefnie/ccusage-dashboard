@@ -1,0 +1,234 @@
+name: speed
+
+# Did the test suite get slower since the last release?
+#
+# THE MEASUREMENT ONLY MEANS ANYTHING BECAUSE BOTH BUILDS RUN HERE. A
+# GitHub runner's speed varies by roughly a factor of two between jobs, so
+# a duration recorded in one job compared against a duration recorded in
+# another measures the runners, not the code. This job checks out the last
+# release AND this commit, runs both on the same machine, and reports the
+# ratio. That is what makes a 30% budget a real threshold rather than a
+# coin flip.
+#
+# Rounds are INTERLEAVED — base, head, base, head — and each test's
+# duration is the minimum across its rounds. Interleaving keeps a warming
+# page cache or a noisy neighbour from landing entirely on one side; the
+# minimum estimates the floor, which is the quantity that actually changes
+# when code gets slower.
+#
+# Each side installs ITS OWN pinned dependencies. A release that got
+# slower because a bumped library got slower is a real regression, and
+# holding dependencies fixed across the comparison would hide exactly that.
+#
+# The comparison itself — intersect on test node id, so adding or removing
+# tests cannot move the number — lives in scripts/ci/compare_durations.py,
+# which has its own tests. Its module docstring explains why total wall
+# time is the wrong metric.
+#
+# CALIBRATION, so the 30% budget is not a guess. Two runs of IDENTICAL
+# code, back to back on one machine, moved the shared-test total by 1.7%
+# while individual tests moved by up to 370%. That is the whole argument
+# for this shape: gate on the total (noise ~2%, budget 30%, comfortable
+# margin) and treat any single test's number as unreliable.
+#
+# Until the first release exists there is nothing to compare against, and
+# this job says so and exits green rather than failing.
+
+on:
+  push:
+    paths-ignore:
+      - '**/*.md'
+      - 'PRESENTATION.txt'
+      - 'docs/**'
+      - 'examples/**'
+      - '.claude/**'
+      - 'LICENSE'
+      - 'NOTICE'
+      - '.gitignore'
+  pull_request_review:
+    types: [submitted]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: speed-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  speed:
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'push' ||
+      github.event_name == 'workflow_dispatch' ||
+      github.event.review.state == 'approved'
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      # Fractional slowdown that fails the job.
+      MAX_REGRESSION: "0.30"
+      ROUNDS: "2"
+
+    steps:
+      - name: Find the baseline release
+        id: baseline
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          tag="$(gh api -H "Cache-Control: no-cache" \
+                 "repos/$REPO/releases/latest" --jq '.tag_name' 2>/dev/null || true)"
+          if [ -z "$tag" ] || [ "$tag" = "null" ]; then
+            echo "tag=" >> "$GITHUB_OUTPUT"
+            echo "No release exists yet, so there is no baseline to compare"
+            echo "against. This becomes a real gate once release.yml cuts one."
+            {
+              echo "### Test speed"
+              echo
+              echo "Skipped: no release exists yet to use as a baseline."
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "tag=$tag" >> "$GITHUB_OUTPUT"
+            echo "Baseline: $tag"
+          fi
+
+      - name: Check out this commit
+        if: steps.baseline.outputs.tag != ''
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          path: head
+          persist-credentials: false
+
+      - name: Check out the baseline release
+        if: steps.baseline.outputs.tag != ''
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ steps.baseline.outputs.tag }}
+          path: base
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        if: steps.baseline.outputs.tag != ''
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install postgresql-client
+        if: steps.baseline.outputs.tag != ''
+        run: |
+          sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          curl -fsSL --retry 3 https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/pgdg.gpg
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client-16
+
+      - name: Build one virtualenv per side
+        if: steps.baseline.outputs.tag != ''
+        # Separate environments because the two sides pin different
+        # versions, and a shared one would silently benchmark whichever
+        # resolved last against both trees.
+        run: |
+          for side in base head; do
+            python -m venv "venv-$side"
+            "venv-$side/bin/python" -m pip install --quiet --upgrade pip
+            "venv-$side/bin/python" -m pip install --quiet \
+              -r "$side/backend/requirements.txt"
+          done
+          echo "base pins:"; "venv-base/bin/python" -m pip freeze | head -20
+          echo "head pins:"; "venv-head/bin/python" -m pip freeze | head -20
+
+      - name: Wait for postgres
+        if: steps.baseline.outputs.tag != ''
+        run: |
+          for _ in $(seq 1 30); do
+            pg_isready -q && exit 0
+            sleep 1
+          done
+          echo "postgres never became ready"; exit 1
+
+      - name: Run both suites, interleaved
+        if: steps.baseline.outputs.tag != ''
+        # A failing test does NOT fail this job: tests.yml owns that
+        # verdict, and here a non-passing testcase is simply excluded from
+        # the comparison (see compare_durations.py). What this step must
+        # guarantee is that four usable reports exist, so it checks for
+        # them explicitly rather than trusting an exit code it deliberately
+        # ignores.
+        #
+        # Sequential, never parallel: the fixtures createdb/dropdb by a
+        # fixed name, so two suites at once would tear down each other's
+        # databases — and two suites sharing a runner would not be a speed
+        # measurement anyway.
+        run: |
+          mkdir -p reports
+          for round in $(seq 1 "$ROUNDS"); do
+            for side in base head; do
+              echo "::group::$side round $round"
+              ( cd "$side" && "$GITHUB_WORKSPACE/venv-$side/bin/python" -m pytest \
+                  tests/ -q -p no:cacheprovider --tb=no \
+                  --junitxml="$GITHUB_WORKSPACE/reports/$side-$round.xml" ) \
+                && echo "$side round $round: all passed" \
+                || echo "$side round $round: some tests did not pass (excluded)"
+              echo "::endgroup::"
+            done
+          done
+
+          missing=0
+          for round in $(seq 1 "$ROUNDS"); do
+            for side in base head; do
+              f="reports/$side-$round.xml"
+              if [ ! -s "$f" ]; then
+                echo "MISSING or empty: $f" >&2
+                missing=1
+              fi
+            done
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "A suite produced no JUnit report — it did not run at all," >&2
+            echo "which is a setup failure, not a speed result." >&2
+            exit 1
+          fi
+          ls -la reports/
+
+      - name: Compare
+        if: steps.baseline.outputs.tag != ''
+        env:
+          BASE_TAG: ${{ steps.baseline.outputs.tag }}
+        # The comparator comes from the HEAD checkout, so an improvement to
+        # the comparison itself takes effect on the commit that makes it
+        # rather than one release later.
+        run: |
+          # shellcheck disable=SC2046
+          python3 head/scripts/ci/compare_durations.py \
+            --base $(ls reports/base-*.xml) \
+            --head $(ls reports/head-*.xml) \
+            --max-regression "$MAX_REGRESSION" \
+            --base-label "$BASE_TAG" \
+            --summary-file "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload JUnit reports
+        if: ${{ !cancelled() && steps.baseline.outputs.tag != '' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: speed-junit-reports
+          path: reports/
+          if-no-files-found: warn
