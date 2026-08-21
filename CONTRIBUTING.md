@@ -114,6 +114,14 @@ just wrote.
 pinned toolchain. Coverage is gated at 82% — a ratchet set under the
 current number, not a target.
 
+Run these against an environment with the **pinned** runtime deps
+installed too (`pip install -r backend/requirements.txt`). `pyright`
+resolves third-party types from the installed packages, so a stale local
+psycopg makes it disagree with CI — that is how a psycopg 3.3 typing
+change once passed locally and turned `types` red on the push. If you
+keep a separate venv, point pyright at it: `pyright --pythonpath
+/path/to/venv/bin/python`.
+
 The remaining four need GitHub and run on their own:
 
 | Workflow | What it does |

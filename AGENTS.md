@@ -269,6 +269,19 @@ actionlint .github/workflows/*.yml && \
   zizmor .github/workflows/                        # actionlint.yml
 ```
 
+**Run them in an environment with the PINNED deps installed**, not
+whatever your interpreter happens to have. `pyright` resolves third-party
+types from the installed packages, so a stale local psycopg makes it
+disagree with CI — which is exactly how a psycopg 3.3 typing change got
+through a locally-green `pyright` and turned `types` red on the push:
+
+```bash
+python3 -m venv .venv && . .venv/bin/activate
+pip install -r backend/requirements.txt -r requirements-dev.txt -r requirements-test.txt
+# or point pyright at an existing one:
+pyright --pythonpath /path/to/venv/bin/python
+```
+
 The four that only make sense on GitHub:
 
 | Workflow | Question it answers | Trigger |
