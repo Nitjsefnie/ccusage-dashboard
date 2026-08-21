@@ -11,4 +11,4 @@
 # step of its own so a coverage failure is distinguishable from a test
 # failure, and the summary still renders when the gate is red.
 coverage==7.13.2
-pytest-cov==7.0.0
+pytest-cov==7.1.0
