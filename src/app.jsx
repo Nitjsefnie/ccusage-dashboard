@@ -718,6 +718,9 @@ function Dashboard({ synth, models, backendOn, activeProject, activeRange, dashN
     .filter(([, v]) => v > 0)
     .sort((a, b) => b[1] - a[1])
     .map(([label, value]) => ({ label, value }));
+  // Share of the charted total, not of `totals.cost`: the rows above drop
+  // zero-cost models, so summing them is what makes the labels add to 100%.
+  const costByModelTotal = costByModel.reduce((a, r) => a + r.value, 0);
 
   // One colour for every bar: this is a magnitude comparison, identity is
   // carried by the row label, so NO fixedColors and the same palette
@@ -788,7 +791,7 @@ function Dashboard({ synth, models, backendOn, activeProject, activeRange, dashN
           title="Cost by Model"
           rows={costByModel}
           fixedColors={window.modelColors}
-          fmt={r => window.humanCurrency(r.value)} />
+          fmt={r => `${window.humanCurrency(r.value)} (${costByModelTotal > 0 ? (r.value / costByModelTotal * 100).toFixed(1) : '0.0'}%)`} />
         <TokenBreakdownPanel events={events} />
       </div>
 

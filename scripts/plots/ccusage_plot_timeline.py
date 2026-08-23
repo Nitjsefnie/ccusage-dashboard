@@ -272,11 +272,13 @@ def _plot_cost_by_model(ax_summary, events):
     bars = ax_summary.barh(
         list(range(len(models))), costs, color=c, alpha=0.85, height=0.5, zorder=3
     )
+    total_cost = sum(costs)
     for rect, m in zip(bars, models):
+        pct = stats[m][0] / total_cost * 100 if total_cost > 0 else 0.0
         ax_summary.text(
             rect.get_width() + max(costs) * 0.02,
             rect.get_y() + rect.get_height() / 2,
-            f"${stats[m][0]:.2f} ({stats[m][1]} calls)",
+            f"${stats[m][0]:.2f} ({pct:.1f}%, {stats[m][1]} calls)",
             va="center",
             ha="left",
             fontsize=10,
