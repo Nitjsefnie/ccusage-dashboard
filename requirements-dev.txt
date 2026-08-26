@@ -2,7 +2,7 @@
 # tool release cannot turn CI red on an unchanged commit.
 # Test-runner deps (pytest, pytest-asyncio, httpx) are already pinned in
 # backend/requirements.txt.
-autoflake==2.3.3
+autoflake==2.4.0
 autopep8==2.3.2
 isort==8.0.1
 pycodestyle==2.14.0
