@@ -44,6 +44,10 @@ CASES = [
     ("claude-sonnet-5", "2026-09-01T00:00:00Z"),
     ("claude-sonnet-5", None),
     ("claude-opus-4-8", "2026-07-21T10:00:00Z"),
+    ("glm-5.3-flash", None),
+    ("glm-5.3-flash", "2026-09-09T15:59:59Z"),
+    ("glm-5.3-flash", "2026-09-09T16:00:00Z"),
+    ("GLM-5.3-Flash[1m]", None),
 ]
 
 _KEYMAP = {"fresh": "fresh", "c5": "create_5m", "c1h": "create_1h",

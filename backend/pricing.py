@@ -40,6 +40,9 @@ UTC = timezone.utc
 
 # List prices. Order: most-specific first.
 MODEL_RATES = {
+    # GLM (Z.ai): cache WRITES are free and reads are 0.2x input, so the
+    # Anthropic 1.25x/2x/0.1x relations do not hold; explicit numbers.
+    "glm-5-3-flash":     {"fresh": 0.15, "create_5m": 0.00,  "create_1h": 0.00,  "read": 0.03,  "output": 0.50},
     "claude-fable-5":    {"fresh": 10.00, "create_5m": 12.50, "create_1h": 20.00, "read": 1.00, "output": 50.00},
     "claude-opus-5":     {"fresh": 5.00,  "create_5m": 6.25,  "create_1h": 10.00, "read": 0.50, "output": 25.00},
     "claude-opus-4-8":   {"fresh": 5.00,  "create_5m": 6.25,  "create_1h": 10.00, "read": 0.50, "output": 25.00},
@@ -66,15 +69,20 @@ DEFAULT_RATES = MODEL_RATES["claude-opus-4-7"]
 # Dated overrides, per exact key: (end_exclusive_utc, rates). Applied only
 # when a timestamp is supplied and only on an EXACT key match — a tier
 # fallback never inherits another model's promotional price. Write a window's
-# rates in full, same shape as MODEL_RATES (5m = 1.25x input, 1h = 2x,
-# read = 0.1x).
+# rates in full, same shape as MODEL_RATES (for Anthropic models 5m = 1.25x
+# input, 1h = 2x, read = 0.1x; GLM carries its own explicit numbers).
 #
-# Currently EMPTY: Claude Sonnet 5's 2.00/10.00 launch price was introductory
-# through 2026-08-31, but Anthropic made it the standard price and cancelled
-# the 2026-09-01 rise to 3.00/15.00 — so Sonnet 5 is a flat 2.00/10.00 in
-# MODEL_RATES above and needs no window. The mechanism stays: the next dated
-# promotion adds a window here, and read paths already group by RATE_EPOCHS.
-DATED_RATES: dict[str, list[tuple[datetime, dict]]] = {}
+# GLM-5.3-Flash launch promotion: 50% off list through 2026-09-09 24:00
+# UTC+8 (= 16:00 UTC). List price applies from the cutover on with no code
+# change; once the end has passed the window is dead weight and the
+# staleness test in test_pricing.py prompts dropping it — stored costs are
+# already final, so removing an expired window is safe.
+_GLM_FLASH_PROMO = {"fresh": 0.075, "create_5m": 0.00, "create_1h": 0.00, "read": 0.015, "output": 0.25}
+DATED_RATES: dict[str, list[tuple[datetime, dict]]] = {
+    "glm-5-3-flash": [
+        (datetime(2026, 9, 9, 16, 0, tzinfo=UTC), _GLM_FLASH_PROMO),
+    ],
+}
 
 # Sorted boundaries where any rate changes. Read-time aggregation that
 # re-derives rates from summed tokens must group by these, or its

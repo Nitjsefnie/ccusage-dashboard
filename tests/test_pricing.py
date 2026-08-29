@@ -2,7 +2,7 @@
 Mirrors parse_session.py:1148-1166 — the canonical table at the time of
 the spec freeze. If the canonical bumps, bump PARSER_VERSION here.
 """
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from backend import pricing
 
@@ -114,10 +114,21 @@ def test_compute_cost_for_sonnet_5_is_timestamp_independent():
     assert _sonnet_5_cost_per_mtok_input(datetime(2026, 9, 1, tzinfo=UTC)) == 2.00
 
 
-def test_no_model_currently_carries_a_dated_window():
-    # Guards against a stale promotion outliving its announcement.
-    assert not pricing.DATED_RATES, pricing.DATED_RATES
-    assert not pricing.RATE_EPOCHS, pricing.RATE_EPOCHS
+def test_dated_windows_have_not_expired():
+    # A window whose end has passed changes no price any more — it is dead
+    # weight and prompts this failure so it gets dropped. Removing an
+    # expired window is safe: stored costs are already final.
+    now = datetime.now(tz=UTC)
+    stale = [
+        (key, end)
+        for key, windows in pricing.DATED_RATES.items()
+        for end, _ in windows
+        if end <= now
+    ]
+    assert not stale, f"expired promotion window(s) — drop them: {stale}"
+    assert pricing.RATE_EPOCHS == sorted(
+        {end for w in pricing.DATED_RATES.values() for end, _ in w}
+    )
 
 
 # --- dated-rate machinery (exercised via a synthetic window) ---------------
@@ -213,3 +224,52 @@ def test_fast_variants_are_not_silently_billed_at_standard_rates():
     # Fast mode is premium-priced and we have no published rate for it;
     # resolve must flag it rather than pass it off as an exact match.
     assert pricing.resolve("claude-opus-4-8-fast").kind != "exact"
+
+
+# --- GLM-5.3-Flash (Z.ai) ---------------------------------------------------
+# The only non-Anthropic model in the table: cache WRITES are free and
+# reads are 0.2x input, so the 1.25x/2x/0.1x Anthropic relations do not
+# hold. Launch promotion is 50% off list through 2026-09-09 16:00 UTC.
+
+GLM_CUTOVER = datetime(2026, 9, 9, 16, 0, tzinfo=UTC)
+GLM_LIST = {"fresh": 0.15, "create_5m": 0.00, "create_1h": 0.00,
+            "read": 0.03, "output": 0.50}
+GLM_PROMO = {"fresh": 0.075, "create_5m": 0.00, "create_1h": 0.00,
+             "read": 0.015, "output": 0.25}
+
+
+def test_glm_flash_resolves_exact_despite_dots_and_suffixes():
+    r = pricing.resolve("glm-5.3-flash")
+    assert (r.kind, r.key) == ("exact", "glm-5-3-flash")
+    assert pricing.resolve("GLM-5.3-Flash[1m]").kind == "exact"
+    assert pricing.rate_for("glm-5.3-flash") == GLM_LIST
+
+
+def test_glm_flash_promo_window_ends_exclusive_at_utc8_midnight():
+    just_before = GLM_CUTOVER - timedelta(seconds=1)
+    assert pricing.rate_for("glm-5.3-flash", ts=just_before) == GLM_PROMO
+    assert pricing.rate_for("glm-5.3-flash", ts=GLM_CUTOVER) == GLM_LIST
+    assert pricing.rate_for(
+        "glm-5.3-flash", ts=datetime(2027, 1, 1, tzinfo=UTC)) == GLM_LIST
+
+
+def test_glm_flash_cache_writes_cost_nothing():
+    # 1M each of 5m writes, 1h writes and unsplit legacy writes: all free.
+    cost = pricing.compute_cost(
+        "glm-5.3-flash",
+        fresh=0, output=0,
+        eph5=1_000_000, eph1h=1_000_000, unsplit_create=1_000_000, read=0,
+        ts=GLM_CUTOVER - timedelta(seconds=1),
+    )
+    assert cost == 0.0
+
+
+def test_glm_flash_compute_cost_promo_known_vector():
+    cost = pricing.compute_cost(
+        "glm-5.3-flash",
+        fresh=2_000_000, output=1_000_000,
+        eph5=0, eph1h=0, unsplit_create=0, read=4_000_000,
+        ts=GLM_CUTOVER - timedelta(seconds=1),
+    )
+    # 2M input @ 0.075 + 1M output @ 0.25 + 4M cached reads @ 0.015
+    assert abs(cost - (2 * 0.075 + 0.25 + 4 * 0.015)) < 1e-9

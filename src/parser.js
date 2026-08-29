@@ -295,6 +295,9 @@ window.parseTranscript = function parseTranscript(text, opts) {
 // Inspector (computeSessionStats below) and the Token Breakdown panel
 // (app.jsx) read these via window.modelRates / window.rateForModel.
 window.modelRates = {
+  // GLM (Z.ai): cache WRITES are free and reads are 0.2x input, so the
+  // Anthropic 1.25x/2x/0.1x relations do not hold; explicit numbers.
+  'glm-5-3-flash':     { fresh: 0.15, c5: 0,     c1h: 0,     read: 0.03,  out: 0.5 },
   'claude-fable-5':    { fresh: 10,   c5: 12.5,  c1h: 20,   read: 1,    out: 50 },
   'claude-opus-5':     { fresh: 5,    c5: 6.25,  c1h: 10,   read: 0.5,  out: 25 },
   'claude-opus-4-8':   { fresh: 5,    c5: 6.25,  c1h: 10,   read: 0.5,  out: 25 },
@@ -314,12 +317,16 @@ window.modelRates = {
   'claude-3-opus-':    { fresh: 15,   c5: 18.75, c1h: 30,   read: 1.5,  out: 75 },
   'claude-3-haiku-':   { fresh: 0.25, c5: 0.30,  c1h: 0.50, read: 0.03, out: 1.25 },
 };
-// Dated overrides, per exact key. Mirrors pricing.DATED_RATES, which is
-// currently empty: Sonnet 5's 2/10 launch price became the standard price
-// and the 2026-09-01 rise to 3/15 was cancelled, so it needs no window.
-// Windows go here (month is 0-based in Date.UTC) for the next promotion.
-window.datedRates = {};
-window.rateEpochs = [];
+// Dated overrides, per exact key. Mirrors pricing.DATED_RATES.
+// GLM-5.3-Flash launch promotion: 50% off list through 2026-09-09 24:00
+// UTC+8 (= 16:00 UTC); month is 0-based in Date.UTC.
+window.datedRates = {
+  'glm-5-3-flash': [
+    { endExclusive: Date.UTC(2026, 8, 9, 16, 0, 0),
+      rates: { fresh: 0.075, c5: 0, c1h: 0, read: 0.015, out: 0.25 } },
+  ],
+};
+window.rateEpochs = [Date.UTC(2026, 8, 9, 16, 0, 0)];
 
 // Family fallbacks for unrecognised Claude models — current-generation
 // list rates for the tier, never a dated promotion.

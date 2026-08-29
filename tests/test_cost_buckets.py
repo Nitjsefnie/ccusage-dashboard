@@ -3,7 +3,7 @@ per rate epoch. With dated rates, re-deriving one rate for a range that
 straddles a cutover makes the buckets disagree with the authoritative
 SUM(cost_usd) they claim to decompose.
 """
-from datetime import timezone
+from datetime import datetime, timezone
 
 import pytest
 
@@ -59,9 +59,20 @@ def test_epoch_sql_expression_has_one_case_per_boundary(synthetic_dated_rate):
     assert expr.count("CASE") == 1
 
 
-def test_epoch_sql_collapses_to_a_constant_when_no_rates_are_dated():
-    # The live table is empty today: every row must land in epoch 0, with
-    # no parameters bound and no CASE emitted.
+def test_epoch_sql_collapses_to_a_constant_when_no_rates_are_dated(monkeypatch):
+    # Patched empty table (the live table now carries the GLM-5.3-Flash
+    # promotion): every row must land in epoch 0, with no parameters bound
+    # and no CASE emitted.
+    monkeypatch.setattr(pricing, "DATED_RATES", {})
+    monkeypatch.setattr(pricing, "RATE_EPOCHS", [])
     expr, params = rate_epoch_sql("ts")
     assert (expr, params) == ("0", [])
     assert epoch_ts(0) is None, "no epochs => price at list, not a window"
+
+
+def test_epoch_sql_binds_the_live_glm_promo_boundary():
+    # The one live window: the GLM-5.3-Flash launch promotion cutover is
+    # bound as a parameter, one CASE per boundary.
+    expr, params = rate_epoch_sql("ts")
+    assert params == [datetime(2026, 9, 9, 16, 0, tzinfo=UTC)]
+    assert expr.count("CASE") == 1
