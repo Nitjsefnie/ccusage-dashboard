@@ -43,7 +43,12 @@ MODEL_RATES = {
     # GLM (Z.ai): cache WRITES are free and reads are 0.2x input, so the
     # Anthropic 1.25x/2x/0.1x relations do not hold; explicit numbers.
     "glm-5-3-flash":     {"fresh": 0.15, "create_5m": 0.00,  "create_1h": 0.00,  "read": 0.03,  "output": 0.50},
+    # Fable 5.1 / Mythos 5.1 price cache HITS at 0.025x base input, not the
+    # 0.1x every other model uses — reads are 0.25, a quarter of Fable 5's.
+    "claude-fable-5-1":  {"fresh": 10.00, "create_5m": 12.50, "create_1h": 20.00, "read": 0.25, "output": 50.00},
+    "claude-mythos-5-1": {"fresh": 10.00, "create_5m": 12.50, "create_1h": 20.00, "read": 0.25, "output": 50.00},
     "claude-fable-5":    {"fresh": 10.00, "create_5m": 12.50, "create_1h": 20.00, "read": 1.00, "output": 50.00},
+    "claude-mythos-5":   {"fresh": 10.00, "create_5m": 12.50, "create_1h": 20.00, "read": 1.00, "output": 50.00},
     "claude-opus-5":     {"fresh": 5.00,  "create_5m": 6.25,  "create_1h": 10.00, "read": 0.50, "output": 25.00},
     "claude-opus-4-8":   {"fresh": 5.00,  "create_5m": 6.25,  "create_1h": 10.00, "read": 0.50, "output": 25.00},
     "claude-opus-4-7":   {"fresh": 5.00,  "create_5m": 6.25,  "create_1h": 10.00, "read": 0.50, "output": 25.00},
@@ -94,7 +99,7 @@ RATE_EPOCHS: list[datetime] = sorted(
 # Family fallbacks for unrecognised Claude models — current-generation
 # rates for the tier, at LIST price (never a dated promotion).
 _TIER_FALLBACKS: tuple[tuple[re.Pattern, dict], ...] = (
-    (re.compile(r"fable|mythos"), MODEL_RATES["claude-fable-5"]),
+    (re.compile(r"fable|mythos"), MODEL_RATES["claude-fable-5-1"]),
     (re.compile(r"opus"), MODEL_RATES["claude-opus-4-8"]),
     (re.compile(r"sonnet"), MODEL_RATES["claude-sonnet-5"]),
     (re.compile(r"haiku"), MODEL_RATES["claude-haiku-4-5"]),

@@ -26,6 +26,11 @@ pytestmark = pytest.mark.skipif(
 # (model id, ISO timestamp or None)
 CASES = [
     ("claude-opus-4-8", None),
+    ("claude-fable-5-1", None),
+    ("claude-fable-5-1[1m]", None),
+    ("claude-mythos-5-1", None),
+    ("claude-mythos-5", None),
+    ("claude-fable-9", None),
     ("claude-fable-5", None),
     ("claude-fable-5[1m]", None),
     ("claude-haiku-4-5-20251001", None),

@@ -32,7 +32,8 @@ const COL = {
 };
 
 const MODEL_COLORS = {
-  'fable-5':     'oklch(0.78 0.17 330)',  // magenta — top tier
+  'fable-5-1':   'oklch(0.84 0.12 318)',  // light orchid — current top tier
+  'fable-5':     'oklch(0.78 0.17 330)',  // magenta
   'opus-5':      'oklch(0.72 0.18 350)',  // deep rose — current Opus
   'opus-4-8':    'oklch(0.70 0.17 5)',    // rose
   'opus-4-7':    'oklch(0.72 0.16 25)',   // coral

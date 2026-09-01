@@ -298,7 +298,12 @@ window.modelRates = {
   // GLM (Z.ai): cache WRITES are free and reads are 0.2x input, so the
   // Anthropic 1.25x/2x/0.1x relations do not hold; explicit numbers.
   'glm-5-3-flash':     { fresh: 0.15, c5: 0,     c1h: 0,     read: 0.03,  out: 0.5 },
+  // Fable 5.1 / Mythos 5.1 price cache HITS at 0.025x base input, not the
+  // 0.1x every other model uses — reads are 0.25, a quarter of Fable 5's.
+  'claude-fable-5-1':  { fresh: 10,   c5: 12.5,  c1h: 20,   read: 0.25, out: 50 },
+  'claude-mythos-5-1': { fresh: 10,   c5: 12.5,  c1h: 20,   read: 0.25, out: 50 },
   'claude-fable-5':    { fresh: 10,   c5: 12.5,  c1h: 20,   read: 1,    out: 50 },
+  'claude-mythos-5':   { fresh: 10,   c5: 12.5,  c1h: 20,   read: 1,    out: 50 },
   'claude-opus-5':     { fresh: 5,    c5: 6.25,  c1h: 10,   read: 0.5,  out: 25 },
   'claude-opus-4-8':   { fresh: 5,    c5: 6.25,  c1h: 10,   read: 0.5,  out: 25 },
   'claude-opus-4-7':   { fresh: 5,    c5: 6.25,  c1h: 10,   read: 0.5,  out: 25 },
@@ -331,7 +336,7 @@ window.rateEpochs = [Date.UTC(2026, 8, 9, 16, 0, 0)];
 // Family fallbacks for unrecognised Claude models — current-generation
 // list rates for the tier, never a dated promotion.
 const _TIER_FALLBACKS = [
-  [/fable|mythos/, 'claude-fable-5'],
+  [/fable|mythos/, 'claude-fable-5-1'],
   [/opus/, 'claude-opus-4-8'],
   [/sonnet/, 'claude-sonnet-5'],
   [/haiku/, 'claude-haiku-4-5'],

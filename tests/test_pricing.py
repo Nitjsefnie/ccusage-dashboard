@@ -27,6 +27,31 @@ def test_fable_5_rates_are_double_opus_4x():
     assert pricing.rate_for("claude-fable-5[1m]") == f
 
 
+def test_fable_5_1_cache_reads_are_a_quarter_of_fable_5():
+    """Fable 5.1 / Mythos 5.1 price cache hits at 0.025x base input, not 0.1x."""
+    f51 = pricing.rate_for("claude-fable-5-1")
+    assert f51 == {
+        "fresh": 10.00, "create_5m": 12.50, "create_1h": 20.00,
+        "read": 0.25, "output": 50.00,
+    }
+    assert f51["read"] == f51["fresh"] * 0.025
+    assert pricing.rate_for("claude-mythos-5-1") == f51
+    assert pricing.rate_for("claude-fable-5-1[1m]") == f51
+
+
+def test_fable_5_1_does_not_misroute_to_fable_5():
+    """The 0.1x read rate of Fable 5 would be a silent 4x overcount on 5.1."""
+    assert pricing.resolve("claude-fable-5-1").kind == "exact"
+    assert pricing.rate_for("claude-fable-5")["read"] == 1.00
+    assert pricing.rate_for("claude-mythos-5")["read"] == 1.00
+
+
+def test_unknown_fable_falls_back_to_current_generation():
+    r = pricing.resolve("claude-fable-9")
+    assert r.kind == "tier"
+    assert r.rates is pricing.MODEL_RATES["claude-fable-5-1"]
+
+
 def test_opus_4_8_does_not_misroute_to_legacy_opus_4():
     r = pricing.rate_for("claude-opus-4-8")
     assert r["fresh"] == 5.00 and r["output"] == 25.00

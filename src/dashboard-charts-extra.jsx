@@ -356,6 +356,7 @@ function CacheTTLPanel({ events, range, binMs }) {
 
 const CTX_TURN_CAP = Infinity;
 const MODEL_CAPS = {
+  'fable-5-1':  1_000_000,
   'fable-5':    1_000_000,
   'opus-4-8':   1_000_000,
   'opus-4-7':   1_000_000,
