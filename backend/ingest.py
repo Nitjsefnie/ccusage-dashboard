@@ -294,7 +294,10 @@ def _close_run(run_id: int, finished: datetime, listed: int, reparsed: int,
 
 def _rebuild_derived_state() -> None:
     """Canonical flags, then the rollups that read them."""
-    # Order matters: the rollup reads is_canonical.
+    # Order matters: suppression removes rows the canonical pass would
+    # otherwise rank, and the rollups read is_canonical.
+    _set_progress(phase="suppressed")
+    purge_suppressed()
     _set_progress(phase="canonical")
     recompute_canonical()
     _set_progress(phase="usage_rollup")
@@ -450,6 +453,58 @@ def failure_summary(failed: list[tuple[str, str]]) -> str | None:
         shown += f", ... (+{len(keys) - FAILURE_KEYS_IN_SUMMARY} more)"
     noun = "object" if len(keys) == 1 else "objects"
     return f"{len(keys)} {noun} failed after retries: {shown}"
+
+
+def purge_suppressed() -> int:
+    """Delete `records` for models listed in `suppressed_models`.
+
+    Claude Code writes every session under one tree no matter which
+    endpoint served it, so resuming a session on the other lane
+    interleaves that provider's assistant entries into a transcript this
+    deploy's bucket already owns. Those rows are real usage but not ours,
+    and pricing them against our rate table invents a cost.
+
+    Suppression is a DELETE rather than a read-time filter because every
+    read path and every rollup already reads `records` as the truth; one
+    deletion keeps them all consistent without fifteen extra predicates
+    that a new endpoint could forget. `tool_uses` for the same lines go
+    too, otherwise the tool panels keep counting calls whose model row is
+    gone (they LEFT JOIN records, so the calls would resurface as an
+    unlabelled model).
+
+    Patterns are matched with ILIKE, so 'glm-%' covers a family and a bare
+    model id still matches exactly. Runs before the canonical pass on
+    EVERY ingest, not only when files changed, so adding a pattern takes
+    effect on the next run. Removing one brings the rows back only on a
+    reparse (bump PARSER_VERSION). Returns the number of records deleted.
+    """
+    with db.viz_conn() as c:
+        row = c.execute("SELECT EXISTS (SELECT 1 FROM suppressed_models)"
+                        ).fetchone()
+        if not row or not row[0]:
+            return 0
+        c.execute(
+            """
+            DELETE FROM tool_uses tu
+             USING records r
+             WHERE tu.file_key = r.file_key
+               AND tu.line_num = r.line_num
+               AND EXISTS (SELECT 1 FROM suppressed_models s
+                            WHERE r.model ILIKE s.pattern)
+            """
+        )
+        cur = c.execute(
+            """
+            DELETE FROM records r
+             WHERE EXISTS (SELECT 1 FROM suppressed_models s
+                            WHERE r.model ILIKE s.pattern)
+            """
+        )
+        deleted = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+        c.commit()
+    if deleted:
+        log.info("purge_suppressed: %d records dropped", deleted)
+    return deleted
 
 
 def recompute_canonical() -> int:

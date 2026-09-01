@@ -229,3 +229,32 @@ CREATE TABLE IF NOT EXISTS ingest_runs (
   deleted         INT,
   error           TEXT
 );
+
+-- 2026-09-01: models whose records must not count toward any panel.
+--
+-- Claude Code writes every session under ~/.claude/projects/ regardless
+-- of which endpoint served it, so resuming a session on the other lane
+-- (Anthropic vs the z.ai GLM endpoint) interleaves that provider's
+-- assistant entries into a transcript the archiver has already filed
+-- under this deploy's bucket. The rows are real usage, just not OUR
+-- usage: pricing them against the Anthropic table invents a cost.
+--
+-- Rows are patterns matched with `model ILIKE pattern`, so one
+-- 'glm-%' covers a whole family and a bare model id still matches
+-- exactly. Ships EMPTY on purpose -- this same codebase is deployed
+-- over the zai bucket as glmmeter, where 'glm-%' would suppress
+-- everything. Populate per deploy:
+--
+--   INSERT INTO suppressed_models (pattern, note)
+--        VALUES ('glm-%', 'z.ai lane; see glmmeter');
+--
+-- Enforced by ingest.purge_suppressed(), which runs before the
+-- canonical pass on every ingest: matching `records` and their
+-- `tool_uses` are deleted, so every read path and rollup excludes
+-- them without a filter of its own. Removing a pattern brings the
+-- rows back only on a reparse (bump PARSER_VERSION).
+CREATE TABLE IF NOT EXISTS suppressed_models (
+  pattern   TEXT PRIMARY KEY,
+  note      TEXT,
+  added_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);

@@ -135,6 +135,33 @@ Changing the winner rule means changing BOTH `recompute_canonical()`
 and `src/parser.js`/`parse_session.py` semantics in lockstep
 (SV-PARSER-SPEC).
 
+## Foreign models are purged, not filtered (SV-SUPPRESSED-MODELS)
+
+`suppressed_models(pattern, note, added_at)` lists models whose records
+must not count. `ingest.purge_suppressed()` runs FIRST in
+`_rebuild_derived_state()` — before the canonical pass — and DELETEs
+matching `records` plus the `tool_uses` on the same lines.
+
+Suppression is a delete, not a read-time predicate, because every read
+path and every rollup already treats `records` as the truth; one deletion
+keeps them consistent without ~15 extra filters a new endpoint could
+forget. The `tool_uses` half is not optional: `tool_rollup` LEFT JOINs
+`records` for the model, so a call whose record is gone reappears under a
+NULL model.
+
+Patterns are matched `model ILIKE pattern`, so `glm-%` covers a family
+and a bare model id still matches exactly. The table ships EMPTY and must
+stay that way in `schema.sql`: the same codebase is deployed over the
+`zai` bucket as glmmeter, where `glm-%` would suppress everything.
+Populate per deploy.
+
+Why it exists: Claude Code writes every session under one tree whichever
+endpoint served it, so resuming a session on the other lane interleaves
+that provider's assistant entries into a transcript this bucket already
+owns — real usage, but not ours, and priced against our table it invents
+a cost. Removing a pattern brings the rows back only on a reparse (bump
+`PARSER_VERSION`).
+
 ## Aggregates are precomputed at ingest (SV-ROLLUP)
 
 `usage_rollup` holds pre-summed usage at grain

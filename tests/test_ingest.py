@@ -662,3 +662,103 @@ def test_ingest_runs_again_once_the_lock_is_free(fresh_db, mini_r2_env):
     ingest.run_ingest(trigger="manual")
     again = ingest.run_ingest(trigger="manual")
     assert again.get("skipped") is not True, again
+
+
+def _suppress(pattern: str) -> None:
+    """Add one suppression pattern, the way an operator would."""
+    with db.viz_conn() as c:
+        c.execute("INSERT INTO suppressed_models (pattern, note) "
+                  "VALUES (%s, 'test')", (pattern,))
+        c.commit()
+
+
+def test_suppressed_model_records_are_purged(fresh_db, mini_r2_env):
+    """A pattern added AFTER the rows landed takes effect on the next
+    ingest — no reparse, no PARSER_VERSION bump.
+
+    This is the leak it exists for: a session resumed on the other lane
+    interleaves that provider's assistant entries into a transcript this
+    bucket already owns, and pricing them against our table invents a cost.
+    """
+    ingest.run_ingest(trigger="manual")
+    with db.viz_conn() as c:
+        before = _scalar(
+            c, "SELECT COUNT(*) FROM records WHERE model = 'claude-opus-4-7'")
+        others = _scalar(
+            c, "SELECT COUNT(*) FROM records WHERE model <> 'claude-opus-4-7'")
+    assert before > 0 and others > 0, (
+        "fixture must carry both, or this proves nothing")
+
+    _suppress("claude-opus-%")
+    ingest.run_ingest(trigger="manual")
+
+    with db.viz_conn() as c:
+        assert _scalar(
+            c,
+            "SELECT COUNT(*) FROM records WHERE model = 'claude-opus-4-7'") == 0
+        assert _scalar(
+            c, "SELECT COUNT(*) FROM records WHERE model <> 'claude-opus-4-7'"
+        ) == others
+        # The rollups read `records`, so they inherit the purge.
+        assert _scalar(
+            c, "SELECT COUNT(*) FROM usage_rollup "
+               "WHERE model = 'claude-opus-4-7'") == 0
+
+
+def test_suppression_matches_a_bare_model_id_exactly(fresh_db, mini_r2_env):
+    """A pattern with no wildcard is still just an ILIKE — it must match
+    that one model and leave its siblings alone."""
+    ingest.run_ingest(trigger="manual")
+    _suppress("claude-opus-4-7")
+    ingest.run_ingest(trigger="manual")
+
+    with db.viz_conn() as c:
+        assert _scalar(
+            c,
+            "SELECT COUNT(*) FROM records WHERE model = 'claude-opus-4-7'") == 0
+        assert _scalar(
+            c, "SELECT COUNT(*) FROM records "
+               "WHERE model = 'claude-sonnet-4-5'") > 0
+
+
+def test_suppressed_tool_uses_go_with_their_records(fresh_db, mini_r2_env):
+    """tool_rollup LEFT JOINs records for the model, so a tool call left
+    behind by a purged record would resurface as an unlabelled model."""
+    ingest.run_ingest(trigger="manual")
+    with db.viz_conn() as c:
+        row = c.execute(
+            "SELECT file_key, line_num FROM records "
+            "WHERE model = 'claude-opus-4-7' ORDER BY file_key, line_num LIMIT 1"
+        ).fetchone()
+        assert row is not None
+        c.execute(
+            "INSERT INTO tool_uses (file_key, line_num, idx, tool_name) "
+            "VALUES (%s, %s, 0, 'Bash')", (row[0], row[1]))
+        c.commit()
+
+    _suppress("claude-opus-%")
+    ingest.run_ingest(trigger="manual")
+
+    with db.viz_conn() as c:
+        assert _scalar(
+            c, "SELECT COUNT(*) FROM tool_uses WHERE file_key = %s "
+               "AND line_num = %s", (row[0], row[1])) == 0
+
+
+def test_purge_suppressed_is_a_noop_with_an_empty_table(fresh_db, mini_r2_env):
+    """It runs on every ingest, so the empty case is the common one —
+    and this codebase also ships to a deploy that suppresses nothing."""
+    ingest.run_ingest(trigger="manual")
+    with db.viz_conn() as c:
+        before = _scalar(c, "SELECT COUNT(*) FROM records")
+    assert ingest.purge_suppressed() == 0
+    with db.viz_conn() as c:
+        assert _scalar(c, "SELECT COUNT(*) FROM records") == before
+
+
+def test_purge_suppressed_is_idempotent(fresh_db, mini_r2_env):
+    """Nothing left to delete on the second pass — it runs every ingest."""
+    ingest.run_ingest(trigger="manual")
+    _suppress("claude-opus-%")
+    assert ingest.purge_suppressed() > 0
+    assert ingest.purge_suppressed() == 0
