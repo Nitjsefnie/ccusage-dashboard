@@ -8,7 +8,7 @@
 fastapi==0.141.1
 uvicorn[standard]==0.52.4
 psycopg[pool,binary]==3.3.4
-boto3==1.43.77
+boto3==1.43.83
 orjson==3.12.0
 apscheduler==3.11.3
 # Not imported anywhere; FastAPI needs it to parse the login form
