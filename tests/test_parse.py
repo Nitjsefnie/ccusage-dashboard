@@ -282,6 +282,32 @@ def test_reply_latency_ignores_replayed_prompt():
     assert out["prompt_count"] == 2
 
 
+def test_reply_latency_terminated_by_synthetic_error_reply():
+    """A `<synthetic>` API-error assistant record (e.g. "Login expired")
+    is an assistant-side response: it TERMINATES the latency window even
+    though it carries no billable usage and so gets no `records` row.
+    Regression: the anchor survived until the session resumed hours later,
+    producing a bogus 2.5h reply-latency outlier."""
+    out = parse.parse_file(
+        "k/sess-synth/sess-synth.jsonl",
+        _read("synthetic_error_terminator.jsonl"),
+    )
+    assert len(out["records"]) == 1
+    assert out["records"][0]["reply_latency_s"] is None
+
+
+def test_reply_latency_terminated_by_rate_limit_reply():
+    """A rate-limit assistant record terminates the window for the same
+    reason: it is the assistant responding, just not with usage."""
+    out = parse.parse_file(
+        "k/sess-rlt/sess-rlt.jsonl",
+        _read("rate_limit_terminator.jsonl"),
+    )
+    assert len(out["records"]) == 1
+    assert out["records"][0]["reply_latency_s"] is None
+    assert len(out["rate_limit_hits"]) == 1
+
+
 def test_edit_call_yields_added_deleted_counts():
     """Edit churn comes from the CALL arguments (old_string/new_string),
     not the result text: 2-line old → 4-line new is deleted=2, added=4.

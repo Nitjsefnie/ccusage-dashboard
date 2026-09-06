@@ -292,6 +292,9 @@ class _LineWalk:
                 "ts": obj.get("timestamp", "") or "",
                 "content": joined[:500],
             })
+        # Still the assistant responding, so it terminates any open
+        # reply-latency window (see _consume_anchor).
+        self._consume_anchor(obj)
         return True
 
     def handle_user_line(self, obj: dict, msg: dict, line_num: int) -> None:
@@ -340,9 +343,15 @@ class _LineWalk:
 
     def handle_assistant_line(self, obj: dict, msg: dict,
                               line_num: int) -> None:
-        """One usage-bearing assistant record: metrics, Phase 1 merge,
+        """One assistant-role record: close the reply-latency window,
+        then (for usage-bearing records only) metrics, Phase 1 merge,
         tool calls."""
         usage = msg.get("usage")
+        # Terminate the reply-latency window FIRST, before any of the
+        # early returns below. Canonical semantics count every
+        # assistant-side content block as "the assistant has started
+        # responding", including records this table has no row for.
+        reply_latency_s = self._consume_anchor(obj)
         if not usage:
             return
         usage = _flatten_usage(usage)
@@ -367,7 +376,7 @@ class _LineWalk:
             "model": msg.get("model") or "(unknown)",
             "usage": dict(usage),
             "text_chars": text_chars,
-            "reply_latency_s": self._consume_anchor(obj),
+            "reply_latency_s": reply_latency_s,
         }
         if req_id and req_id in self.seen_request:
             existing = self.seen_request[req_id]
@@ -395,7 +404,16 @@ class _LineWalk:
         assistant message came from a prior, re-emitted state and
         isn't actually a reply to the visually-preceding user msg).
         Clamping to 0 would pollute the p0/p50 distribution; drop
-        the measurement instead."""
+        the measurement instead.
+
+        Called for EVERY assistant-role record, including the ones
+        that never become a `records` row (`<synthetic>` API-error
+        stubs, rate-limit records, records with no usage). Those are
+        still the assistant responding, so they must close the window
+        — otherwise the anchor survives a failed turn and the next
+        real reply, possibly hours later, is charged the whole gap.
+        Their own (tiny) measurement has no row to live on and is
+        discarded; canonical --reply-latency does report it."""
         reply_latency_s = None
         if self.last_user_ts is not None:
             assistant_dt = _to_dt(obj.get("timestamp", "") or "")
