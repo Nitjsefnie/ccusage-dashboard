@@ -54,9 +54,12 @@ def _safe_join(root: str, key: str) -> str:
 
 def _scan_root(root: str, bucket: str) -> str:
     """File-mode bucket root: <root>/<bucket> when it exists, else root."""
-    return os.path.join(root, bucket) if os.path.isdir(
+    path = os.path.join(root, bucket) if os.path.isdir(
         os.path.join(root, bucket)
     ) else root
+    # Prefix resolution also uses realpath: relpath needs the same coordinate
+    # system when the mirror root contains a symlink (e.g. macOS /var).
+    return os.path.realpath(path)
 
 
 def _list_keys_file(root: str, bucket: str, prefix: str) -> Iterator[R2Object]:

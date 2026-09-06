@@ -92,6 +92,19 @@ python3 -m pytest tests/ -q             # full suite
 python3 -m pytest tests/test_pricing.py -v
 ```
 
+For a run without PostgreSQL, use:
+
+```bash
+python3 -m pytest tests/ -m "not postgres" -q --strict-markers
+```
+
+CI runs this portable selection on Linux, macOS, and Windows with Python 3.13
+and 3.14. PostgreSQL fixture dependencies are classified centrally in
+`tests/conftest.py`, including tests that use them through another fixture.
+Register new database-creating fixtures in `POSTGRES_FIXTURES`. The Linux full
+suite still runs all tests against PostgreSQL 16 and retains the 82% coverage
+gate. Node is required for the JavaScript mirror/geometry tests in either suite.
+
 CI runs **ten** separate workflows, so a green suite is a small fraction
 of the gate. These five you can and should run locally before pushing:
 

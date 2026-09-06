@@ -230,6 +230,19 @@ journalctl -u claudit -f
 
 Schema migrations are idempotent — re-apply `backend/schema.sql` after any schema change. Bump `PARSER_VERSION` in `.env` whenever parser semantics or `pricing.py` rates change; every file reparses on the next ingest.
 
+## Portable tests and file-mode paths
+
+`tests/conftest.py` marks PostgreSQL-dependent tests from their resolved fixture
+names (including transitive dependencies). Add new database-creating fixtures to
+`POSTGRES_FIXTURES`; use `pytest -m "not postgres"` for the portable suite. Full
+`pytest tests/` still includes every integration test and owns the coverage gate.
+The portable CI matrix covers Linux, macOS, and Windows on Python 3.13 and 3.14,
+with Node installed so parser-mirror and geometry checks do not silently skip.
+
+File-mode R2 roots are canonicalized by `_scan_root` before both walking and
+prefix resolution. Keep keys bucket-relative even when a mirror root contains
+symlinks; mixing a resolved prefix with an unresolved root produces `../` keys.
+
 ## CI — batch your pushes
 
 `.github/workflows/tests.yml` runs the full suite on **every push that

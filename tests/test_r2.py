@@ -69,3 +69,17 @@ def test_path_traversal_blocked(mini_r2):
         r2.get_object("../etc/passwd")
     with pytest.raises(PermissionError):
         r2.get_object("proj-a/../../../etc/passwd")
+
+
+def test_list_keys_through_symlinked_root(mini_r2, tmp_path, monkeypatch):
+    """A canonicalized prefix must still produce bucket-relative object keys."""
+    alias = tmp_path / "mirror"
+    try:
+        alias.symlink_to(mini_r2.parent, target_is_directory=True)
+    except OSError:
+        pytest.skip("creating directory symlinks is not permitted on this host")
+    monkeypatch.setenv("R2_ENDPOINT", f"file://{alias}/")
+    all_keys = {obj.key for obj in r2.list_keys()}
+    prefixed_keys = {obj.key for obj in r2.list_keys(prefix="proj-a")}
+    assert prefixed_keys == {"proj-a/sess-1/sess-1.jsonl"}
+    assert prefixed_keys <= all_keys
