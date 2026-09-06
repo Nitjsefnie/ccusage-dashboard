@@ -7,6 +7,8 @@
 # for this key wins the race for the whole test process. backend.cache and
 # backend.pricing are safe to import above it: both are stdlib-only and
 # never touch the env.
+from __future__ import annotations
+
 import os
 import sys
 from datetime import datetime, timezone
@@ -76,3 +78,22 @@ def _reset_response_cache():
     cache.response_cache.clear()
     yield
     cache.response_cache.clear()
+
+
+# Include transitive fixture dependencies so a helper fixture cannot accidentally
+# move a PostgreSQL test into the portable CI job.
+POSTGRES_FIXTURES = frozenset({
+    "fresh_db", "app_with_data", "app_with_fresh_data", "app_with_rl_data",
+})
+
+
+def pytest_configure(config):
+    """Register the service requirement used by the portable CI selector."""
+    config.addinivalue_line("markers", "postgres: requires a local PostgreSQL server and CLI")
+
+
+def pytest_collection_modifyitems(items):
+    """Classify database-dependent tests without dropping them from full runs."""
+    for item in items:
+        if POSTGRES_FIXTURES.intersection(item.fixturenames):
+            item.add_marker(pytest.mark.postgres)
