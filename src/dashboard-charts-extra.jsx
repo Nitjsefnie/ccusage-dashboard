@@ -3002,9 +3002,18 @@ function ActivityHeatmapPanel({ models, project, range, nonce }) {
 // COL is keyed by SERIES NAME, not indexed — COL_X[0] is undefined, and
 // an SVG rect with fill=undefined renders BLACK while a path with
 // stroke=undefined renders nothing at all. Name the keys.
-const BAR_COLOR      = (COL_X && COL_X.costUSD) || 'oklch(0.85 0.14 90)';
-const OVERFLOW_COLOR = (COL_X && COL_X.cacheCreateTokens) || 'oklch(0.72 0.14 305)';
-const CUM_COLOR      = (COL_X && COL_X.totalTokens) || 'oklch(0.78 0.14 245)';
+//
+// TWO colours, not three. The overflow bucket was given its own hue,
+// which (a) double-encodes: it is the same measure as every other bar,
+// just the last one, and (b) failed CVD separation against the
+// cumulative line at ΔE 5.3 under deuteranopia — below even the 6-8
+// floor, so a red-green colourblind reader could not tell the line from
+// that bar. Dropping it takes the worst adjacent pair to ΔE 23.9
+// (protan) / 26.9 (normal). The overflow bucket is marked by its axis
+// label ("1000k+") instead, which is secondary encoding rather than
+// another hue.
+const BAR_COLOR = (COL_X && COL_X.costUSD) || 'oklch(0.85 0.14 90)';
+const CUM_COLOR = (COL_X && COL_X.totalTokens) || 'oklch(0.78 0.14 245)';
 
 function CostByContextPanel({ models, project, range, nonce }) {
   const ref = React.useRef(null);
@@ -3084,11 +3093,19 @@ function CostByContextPanel({ models, project, range, nonce }) {
   const yCost = c => padT + plotH - (c / maxCost) * plotH;
   const yShare = f => padT + plotH - f * plotH;
 
+  // Anchored to bucket EDGES, not centres. `cum` is the share of spend at
+  // or below a bucket's upper bound, so it is only fully accumulated once
+  // the whole bucket is behind you — plotting it at the centre states the
+  // value half a bucket early. Starting at (left edge of bar 0, 0) and
+  // stepping to each bucket's RIGHT edge is both correct and what makes
+  // the curve span the bars edge to edge instead of floating inside them.
   const cumPath = React.useMemo(() => {
     if (!bars.length) return '';
-    return bars
-      .map((b, i) => `${padL + i * bw + bw / 2},${yShare(b.cum)}`)
-      .join(' L ');
+    const pts = [`${padL},${yShare(0)}`];
+    for (let i = 0; i < bars.length; i++) {
+      pts.push(`${padL + (i + 1) * bw},${yShare(bars[i].cum)}`);
+    }
+    return pts.join(' L ');
   }, [bars, bw, plotW, plotH]);
 
   // The headline the panel exists to give: the share of spend above the
@@ -3112,7 +3129,7 @@ function CostByContextPanel({ models, project, range, nonce }) {
     setTip({
       x: mx, y: my,
       title: `${lo}–${hi} ctx tokens`,
-      accent: b.overflow ? OVERFLOW_COLOR : BAR_COLOR,
+      accent: BAR_COLOR,
       lines: [
         ['cost', `$${b.cost.toFixed(2)}`],
         ['share', meta.total_cost_usd
@@ -3141,6 +3158,23 @@ function CostByContextPanel({ models, project, range, nonce }) {
               ? ` · half of all spend sits above ${fmtTok(medianEdge)}`
               : ''}
           </div>
+        </div>
+        {/* Two encodings on one plot, so identity is never carried by
+            colour alone: a swatch and a line-key name each one. */}
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 12, fontFamily: 'monospace', fontSize: 11, color: TH_X.textDim }}>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+            <svg width={14} height={10} aria-hidden="true">
+              <rect x={0} y={0} width={14} height={10} rx={2} fill={BAR_COLOR} />
+            </svg>
+            cost
+          </span>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+            <svg width={18} height={10} aria-hidden="true">
+              <line x1={0} y1={5} x2={18} y2={5} stroke={CUM_COLOR}
+                    strokeWidth={2} strokeDasharray="4 3" />
+            </svg>
+            cumulative
+          </span>
         </div>
         <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontFamily: 'monospace', fontSize: 11, color: TH_X.textDim }}>
           <span>model:</span>
@@ -3183,14 +3217,25 @@ function CostByContextPanel({ models, project, range, nonce }) {
                 x={padL + i * bw + 1} y={yCost(b.cost)}
                 width={Math.max(1, bw - 2)}
                 height={Math.max(0, plotH + padT - yCost(b.cost))}
-                fill={b.overflow ? OVERFLOW_COLOR : BAR_COLOR}
+                fill={BAR_COLOR}
                 opacity={0.85} />
         ))}
 
         {cumPath && (
-          <path d={`M ${cumPath}`} fill="none"
-                stroke={CUM_COLOR} strokeWidth={2}
-                strokeDasharray="4 3" />
+          <g>
+            {/* Surface ring — same path, same dash pattern, drawn first
+                in the surface colour so each dash carries its own halo
+                where it crosses a bar. Without it the line disappears
+                into the gold: L 0.78 vs L 0.85 is no lightness delta,
+                and hue alone will not separate a 2px stroke from a
+                filled field. */}
+            <path d={`M ${cumPath}`} fill="none"
+                  stroke={TH_X.bgAxes} strokeWidth={6}
+                  strokeDasharray="4 3" strokeLinecap="round" />
+            <path d={`M ${cumPath}`} fill="none"
+                  stroke={CUM_COLOR} strokeWidth={2}
+                  strokeDasharray="4 3" strokeLinecap="round" />
+          </g>
         )}
 
         {bars.map((b, i) => (

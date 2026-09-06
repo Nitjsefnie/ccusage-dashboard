@@ -67,3 +67,23 @@ def test_dash_tooltip_is_passed_the_tip_prop_not_a_spread():
     assert uses, "no DashTooltip usages found - the guard would pass vacuously"
     bad = [u.strip() for u in uses if "tip={tip}" not in u]
     assert not bad, f"DashTooltip called without tip={{tip}}: {bad}"
+
+
+def test_cumulative_line_is_anchored_to_bucket_edges():
+    """A cumulative curve over bins reaches its value at the bin's UPPER
+    bound, so plotting it at the bin centre states it half a bucket early
+    — and leaves the line floating inside the bars instead of spanning
+    them. Pin the edge anchoring: start at the plot's left edge with a
+    zero, then step to each bucket's right edge.
+    """
+    src = _strip_line_comments(EXTRA.read_text(encoding="utf-8"))
+    m = re.search(r"const cumPath = React\.useMemo\(\(\) => \{(.*?)\}, \[",
+                  src, re.S)
+    assert m, "could not locate the cumPath builder"
+    body = m.group(1)
+    assert "bw / 2" not in body, (
+        "cumPath centre-anchors its points; a cumulative value belongs on "
+        "the bucket's right edge")
+    assert "(i + 1) * bw" in body, "cumPath must step to each bucket's right edge"
+    assert re.search(r"\$\{padL\},\$\{yShare\(0\)\}", body), (
+        "cumPath must start at the left edge of the first bar at zero")
