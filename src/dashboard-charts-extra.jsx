@@ -3002,27 +3002,20 @@ function ActivityHeatmapPanel({ models, project, range, nonce }) {
 // COL is keyed by SERIES NAME, not indexed — COL_X[0] is undefined, and
 // an SVG rect with fill=undefined renders BLACK while a path with
 // stroke=undefined renders nothing at all. Name the keys.
+// One colour for both marks, exactly as TimeSeriesPanel's Cost (USD)
+// does it (dashboard-charts.jsx:404-423): bars at fillOpacity 0.3 (0.85
+// on hover) and the cumulative line in the SAME hue, made legible by a
+// soft white halo underneath rather than by a second colour.
 //
-// TWO colours, not three. The overflow bucket was given its own hue,
-// which (a) double-encodes: it is the same measure as every other bar,
-// just the last one, and (b) failed CVD separation against the
-// cumulative line at ΔE 5.3 under deuteranopia — below even the 6-8
-// floor, so a red-green colourblind reader could not tell the line from
-// that bar. Dropping it takes the worst adjacent pair to ΔE 23.9
-// (protan) / 26.9 (normal). The overflow bucket is marked by its axis
-// label ("1000k+") instead, which is secondary encoding rather than
-// another hue.
+// That treatment dissolves the problem the earlier versions kept
+// failing at. A line in a contrasting hue has to beat the bars on
+// lightness AND stay visible on the dark surface, which nothing does
+// well; a same-hue line over a 0.3-opacity field, ringed in white at
+// 0.15, has no such conflict and is what the rest of the app already
+// looks like.
 const BAR_COLOR = (COL_X && COL_X.costUSD) || 'oklch(0.85 0.14 90)';
-// The cumulative line is a NEUTRAL bright stroke, not a peer series
-// hue, and the bars are dimmed to let it read. Measured, not eyeballed:
-// against gold bars at the old 0.85 opacity a blue line scored 1.07:1 —
-// the same luminance, which is why it vanished. Sweeping line colour x
-// bar opacity for the best WORST-CASE contrast (the line over a bar, and
-// a bar over the surface, are both constraints) puts white at 0.55 on
-// 4.25:1, versus 2.99:1 for the best blue. Separation is by lightness
-// rather than hue, so it holds under every CVD simulation for free.
-const CUM_COLOR = '#ffffff';
-const BAR_OPACITY = 0.55;
+const BAR_OPACITY = 0.3;
+const BAR_OPACITY_HOVER = 0.85;
 
 function CostByContextPanel({ models, project, range, nonce }) {
   const ref = React.useRef(null);
@@ -3127,16 +3120,22 @@ function CostByContextPanel({ models, project, range, nonce }) {
   const fmtTok = t => (t >= 1000 ? `${Math.round(t / 1000)}k` : String(t));
   const fmtUsd = v => (v >= 1000 ? `$${(v / 1000).toFixed(1)}k` : `$${v.toFixed(v < 10 ? 2 : 0)}`);
 
+  // On the CONTAINER, not the <svg>: that is the tooltip's offsetParent,
+  // so its coordinates need no second frame of reference — and it is
+  // where TimeSeriesPanel puts it. The vertical guard keeps the tooltip
+  // out of the header and the x-axis gutter.
   function onMove(e) {
-    const rect = e.currentTarget.getBoundingClientRect();
+    if (!ref.current) return;
+    const rect = ref.current.getBoundingClientRect();
     const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+    if (my < padT || my > padT + plotH) { setTip(null); return; }
     const i = Math.floor((mx - padL) / bw);
     if (i < 0 || i >= bars.length) { setTip(null); return; }
     const b = bars[i];
     const lo = fmtTok(b.edge);
     const hi = b.overflow ? '∞' : fmtTok(b.edge + meta.bucket_width);
     setTip({
-      x: mx, y: my,
+      x: mx, y: my, idx: i,
       title: `${lo}–${hi} ctx tokens`,
       accent: BAR_COLOR,
       lines: [
@@ -3155,7 +3154,9 @@ function CostByContextPanel({ models, project, range, nonce }) {
       background: TH_X.bgAxes, border: `1px solid ${TH_X.border}`,
       borderRadius: 4, padding: 0, position: 'relative',
       display: 'flex', flexDirection: 'column',
-    }}>
+    }}
+    onMouseMove={onMove}
+    onMouseLeave={() => setTip(null)}>
       <div style={{ padding: '10px 14px 4px', borderBottom: `1px solid ${TH_X.border}`, display: 'flex', alignItems: 'center', gap: 16 }}>
         <div style={{ flex: 1 }}>
           <div style={{ color: TH_X.text, fontFamily: 'monospace', fontWeight: 700, fontSize: 14 }}>
@@ -3167,24 +3168,6 @@ function CostByContextPanel({ models, project, range, nonce }) {
               ? ` · half of all spend sits above ${fmtTok(medianEdge)}`
               : ''}
           </div>
-        </div>
-        {/* Two encodings on one plot, so identity is never carried by
-            colour alone: a swatch and a line-key name each one. */}
-        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 12, fontFamily: 'monospace', fontSize: 11, color: TH_X.textDim }}>
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-            <svg width={14} height={10} aria-hidden="true">
-              <rect x={0} y={0} width={14} height={10} rx={2} fill={BAR_COLOR}
-                    opacity={BAR_OPACITY} />
-            </svg>
-            cost
-          </span>
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-            <svg width={18} height={10} aria-hidden="true">
-              <line x1={0} y1={5} x2={18} y2={5} stroke={CUM_COLOR}
-                    strokeWidth={2} strokeDasharray="4 3" />
-            </svg>
-            cumulative
-          </span>
         </div>
         <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontFamily: 'monospace', fontSize: 11, color: TH_X.textDim }}>
           <span>model:</span>
@@ -3206,7 +3189,7 @@ function CostByContextPanel({ models, project, range, nonce }) {
         </div>
       </div>
 
-      <svg width={w} height={h} onMouseMove={onMove} onMouseLeave={() => setTip(null)}>
+      <svg width={w} height={h} style={{ display: 'block' }}>
         {[0, 0.25, 0.5, 0.75, 1].map(f => (
           <g key={f}>
             <line x1={padL} x2={padL + plotW} y1={yCost(maxCost * f)} y2={yCost(maxCost * f)}
@@ -3228,13 +3211,28 @@ function CostByContextPanel({ models, project, range, nonce }) {
                 width={Math.max(1, bw - 2)}
                 height={Math.max(0, plotH + padT - yCost(b.cost))}
                 fill={BAR_COLOR}
-                opacity={BAR_OPACITY} />
+                fillOpacity={tip && tip.idx === i
+                  ? BAR_OPACITY_HOVER : BAR_OPACITY} />
         ))}
 
-        {cumPath && (
+        {cumPath && (<>
+          {/* Area under the cumulative curve, then the white halo, then
+              the line — the Cost (USD) stack, same opacities. */}
+          <path d={`M ${cumPath} L ${padL + bars.length * bw},${padT + plotH} L ${padL},${padT + plotH} Z`}
+                fill={BAR_COLOR} fillOpacity="0.04" stroke="none" />
           <path d={`M ${cumPath}`} fill="none"
-                stroke={CUM_COLOR} strokeWidth={2}
-                strokeDasharray="4 3" strokeLinecap="round" />
+                stroke="#fff" strokeOpacity="0.15" strokeWidth="4" />
+          <path data-cumulative-line="" d={`M ${cumPath}`} fill="none"
+                stroke={BAR_COLOR} strokeWidth="2" />
+        </>)}
+
+        {/* Hover crosshair, as on every other bucketed panel. */}
+        {tip && tip.idx != null && (
+          <line x1={padL + tip.idx * bw + bw / 2}
+                x2={padL + tip.idx * bw + bw / 2}
+                y1={padT} y2={padT + plotH}
+                stroke={BAR_COLOR} strokeOpacity="0.4"
+                strokeWidth="1" strokeDasharray="2,3" />
         )}
 
         {bars.map((b, i) => (
@@ -3246,6 +3244,31 @@ function CostByContextPanel({ models, project, range, nonce }) {
             </text>
           ) : null
         ))}
+
+        {/* Rotated captions naming each scale — how Cost (USD) labels a
+            left and a right axis without spending a legend on it. */}
+        <text x={17} y={padT + plotH / 2} fontSize="9" fill={TH_X.textDim}
+              textAnchor="middle" fontFamily="monospace"
+              transform={`rotate(-90 17 ${padT + plotH / 2})`}>cost</text>
+        <text x={w - 12} y={padT + plotH / 2} fontSize="9" fill={TH_X.textDim}
+              textAnchor="middle" fontFamily="monospace"
+              transform={`rotate(-90 ${w - 12} ${padT + plotH / 2})`}>cumulative</text>
+
+        {(() => {
+          const totalStr = `Total: ${fmtUsd(meta.total_cost_usd)}`;
+          const boxW = Math.ceil(totalStr.length * 6.6) + 16;
+          const boxX = padL + plotW - boxW - 6;
+          return (
+            <g>
+              <rect x={boxX} y={padT + 2} width={boxW} height={20} rx={4}
+                    fill={TH_X.bgAxes} stroke={BAR_COLOR} strokeOpacity="0.8" />
+              <text x={boxX + boxW / 2} y={padT + 16} fontSize="11" fontWeight="bold"
+                    fill={BAR_COLOR} textAnchor="middle" fontFamily="monospace">
+                {totalStr}
+              </text>
+            </g>
+          );
+        })()}
       </svg>
 
       {tip && <window.DashTooltip tip={tip} />}

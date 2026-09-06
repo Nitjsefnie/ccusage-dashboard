@@ -330,6 +330,32 @@ block. Never "fix" it by loosening the leading `*`.
 
 ## Development conventions
 
+- **Read what already exists before adding a panel, and base your style
+  on it.** Find the closest existing panel and copy its treatment rather
+  than inventing one. This is not a tidiness rule — the existing panels
+  encode solutions to problems that are not obvious until you have
+  already shipped the bug. Cost by Context is bars plus a cumulative
+  line, which `TimeSeriesPanel`'s **Cost (USD)**
+  (`src/dashboard-charts.jsx:404-423`) already is; skipping that read
+  cost four rounds of fixes for problems it had solved:
+  - bars are a dim FIELD (`fillOpacity` 0.3, 0.85 on hover), not a
+    bright one — a bright field leaves no room for a line over it, and
+    no line colour can win: bright enough to read on the bars is
+    invisible on the dark surface, and the reverse. Measured at 1.07:1
+    contrast, i.e. the same luminance;
+  - the cumulative line is the SAME hue as the bars, made legible by a
+    white halo (`stroke="#fff" strokeOpacity="0.15" strokeWidth="4"`)
+    drawn under it — not by a second colour, which also has to survive
+    a CVD check it will probably fail;
+  - hover lives on the container (the tooltip's `offsetParent`) and is
+    guarded to the plot area, so the tip never shows over the header;
+  - the two axes are named by rotated captions, not a legend.
+
+  `tests/test_panel_wiring.py` pins these against the reference, so a
+  copy that drifts fails rather than merely looking different. Its
+  guards are source-level on purpose: node cannot parse JSX and nothing
+  here renders React, so a panel can pass the whole suite and still draw
+  a black rectangle — which is exactly what shipped.
 - **Cost is always TTL-split**. `cache_creation` decomposes into `ephemeral_5m` (× 1.25 base) + `ephemeral_1h` (× 2 base). Tokens with no `ephemeral_*` split (legacy SDK) are charged at the 5m rate. Single-rate `cache_create` cost is banned.
 - **Cross-file uuid dedup is resolved at INGEST** into `records.is_canonical` (SV-CANONICAL-FLAG); read paths filter that boolean and must not reintroduce `DISTINCT ON (uuid)`. Per-file `requestId` max-merge also happens at ingest.
 - **Foreign-model records are purged at ingest**, not filtered at read time — `suppressed_models` holds `ILIKE` patterns and `ingest.purge_suppressed()` deletes matching `records` and their `tool_uses` before the canonical pass (SV-SUPPRESSED-MODELS). The table ships empty; populate it per deploy.

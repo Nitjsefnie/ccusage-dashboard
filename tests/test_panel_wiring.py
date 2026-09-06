@@ -15,7 +15,6 @@ looking at the screen, which is the failure mode these assertions close.
 """
 from __future__ import annotations
 
-import math
 import re
 from pathlib import Path
 
@@ -90,83 +89,73 @@ def test_cumulative_line_is_anchored_to_bucket_edges():
         "cumPath must start at the left edge of the first bar at zero")
 
 
-def _oklch_to_srgb(L_, C, H):
-    """OKLCH -> GAMMA-ENCODED sRGB, clipped.
+def _panel_src(name: str) -> str:
+    """Just ONE component's body.
 
-    Gamma-encoded on purpose: SVG/CSS `opacity` composites in that space,
-    so a bar drawn at 0.55 over the surface must be mixed there too.
-    Compositing in linear light instead reports this panel at 2.69:1
-    when the browser actually renders 4.32:1 — a colour-space slip that
-    silently makes the gate wrong in the strict direction.
-    """
-    h = math.radians(H)
-    a, b = C * math.cos(h), C * math.sin(h)
-    lc = (L_ + 0.3963377774 * a + 0.2158037573 * b) ** 3
-    mc = (L_ - 0.1055613458 * a - 0.0638541728 * b) ** 3
-    sc = (L_ - 0.0894841775 * a - 1.2914855480 * b) ** 3
-    rgb = (4.0767416621 * lc - 3.3077115913 * mc + 0.2309699292 * sc,
-           -1.2684380046 * lc + 2.6097574011 * mc - 0.3413193965 * sc,
-           -0.0041960863 * lc - 0.7034186147 * mc + 1.7076147010 * sc)
-
-    def encode(c):
-        c = min(1.0, max(0.0, c))
-        return 12.92 * c if c <= 0.0031308 else 1.055 * c ** (1 / 2.4) - 0.055
-    return tuple(encode(c) for c in rgb)
-
-
-def _hex_to_srgb(h):
-    h = h.lstrip("#")
-    if len(h) == 3:
-        h = "".join(c * 2 for c in h)
-    return tuple(int(h[i:i + 2], 16) / 255 for i in (0, 2, 4))
-
-
-def _relative_luminance(srgb):
-    """WCAG luminance: linearise HERE, after any compositing is done."""
-    lin = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
-           for c in srgb]
-    return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]
-
-
-def _contrast(a, b):
-    la, lb = _relative_luminance(a), _relative_luminance(b)
-    hi, lo = max(la, lb), min(la, lb)
-    return (hi + 0.05) / (lo + 0.05)
-
-
-def test_cumulative_line_stays_legible_over_the_bars():
-    """The line crosses the bars, so its contrast AGAINST A BAR is what
-    decides whether it can be seen — and that is a number, not a taste.
-
-    It shipped at 1.07:1: a blue line on gold bars, near-identical
-    luminance, invisible wherever the two met. Hue cannot rescue that;
-    only a lightness delta can. 3:1 is the floor for a non-text mark.
+    Searching the whole file is how a guard silently checks the wrong
+    panel: several of them define an `onMove`, and a bare regex takes
+    whichever appears first. Slice from the component to the next
+    top-level `function`/`window.` and search inside that.
     """
     src = _strip_line_comments(EXTRA.read_text(encoding="utf-8"))
-    cum = re.search(r"const CUM_COLOR = '(#[0-9a-fA-F]{3,6})'", src)
-    opacity = re.search(r"const BAR_OPACITY = ([\d.]+)", src)
-    assert cum and opacity, "could not read CUM_COLOR / BAR_OPACITY"
+    start = src.index(f"function {name}(")
+    nxt = re.search(r"^(?:function |window\.)", src[start + 1:], re.M)
+    end = start + 1 + nxt.start() if nxt else len(src)
+    return src[start:end]
 
-    css = (ROOT / "public" / "app.css").read_text(encoding="utf-8")
-    gold = re.search(r"--gold:\s*oklch\(([\d.]+) ([\d.]+) ([\d.]+)\)", css)
-    surface = re.search(r"--bg-card:\s*(#[0-9a-fA-F]{6})", css)
-    assert gold and surface, "could not read --gold / --bg-card from app.css"
 
-    bar_rgb = _oklch_to_srgb(*(float(g) for g in gold.groups()))
-    surf_rgb = _hex_to_srgb(surface.group(1))
-    alpha = float(opacity.group(1))
-    # Bars are drawn semi-transparent, so what the line actually crosses
-    # is the COMPOSITE, not the raw swatch.
-    composited = tuple(alpha * b + (1 - alpha) * s
-                       for b, s in zip(bar_rgb, surf_rgb))
-    line_rgb = _hex_to_srgb(cum.group(1))
+def test_cost_by_context_replicates_the_reference_mark_treatment():
+    """Cost by Context is the same shape as TimeSeriesPanel's Cost (USD)
+    -- cost bars with a cumulative line over them -- so it uses that
+    panel's treatment rather than a hand-rolled one.
 
-    over_bar = _contrast(line_rgb, composited)
-    bar_over_surface = _contrast(composited, surf_rgb)
-    assert over_bar >= 3.0, (
-        f"cumulative line vs bar is {over_bar:.2f}:1 — it will disappear "
-        f"where it crosses a bar")
-    # Dimming the bars to make room for the line must not push the bars
-    # themselves under the same floor; both constraints hold at once.
-    assert bar_over_surface >= 3.0, (
-        f"bars vs surface is {bar_over_surface:.2f}:1 — bars too dim")
+    The mechanism matters, not just the look. A cumulative line in a
+    CONTRASTING hue has to out-lighten the bars and stay visible on the
+    dark surface at the same time, and nothing does both: the first
+    attempt scored 1.07:1 against the bars and was invisible. The
+    reference solves it without a second colour -- a dim field (bars at
+    0.3, lifted to 0.85 on hover) under a same-hue line ringed in white
+    at 0.15 opacity. Pin all three; dropping the halo or brightening the
+    bars quietly reintroduces the original bug.
+    """
+    ref = _strip_line_comments(CHARTS.read_text(encoding="utf-8"))
+    src = _panel_src("CostByContextPanel")
+
+    # The reference's own values, so this tracks it instead of freezing a
+    # copy of numbers that may move.
+    assert 'stroke="#fff" strokeOpacity="0.15" strokeWidth="4"' in ref, (
+        "TimeSeriesPanel no longer haloes its cumulative line -- reread it "
+        "before changing the panel that copies it")
+    assert "fillOpacity={isHover ? 0.85 : 0.3}" in ref
+
+    # The opacity constants sit at module scope, above the component --
+    # uniquely named, so the whole file is the right place to read them.
+    whole = _strip_line_comments(EXTRA.read_text(encoding="utf-8"))
+    rest = re.search(r"const BAR_OPACITY = ([\d.]+)", whole)
+    hover = re.search(r"const BAR_OPACITY_HOVER = ([\d.]+)", whole)
+    assert rest and hover, "could not read the panel's bar opacities"
+    assert float(rest.group(1)) <= 0.35, (
+        f"bars at {rest.group(1)} are too bright a field for a same-hue "
+        f"line to read over")
+    assert float(hover.group(1)) > float(rest.group(1)), (
+        "hover must brighten the bar, as the reference does")
+
+    assert 'stroke="#fff" strokeOpacity="0.15" strokeWidth="4"' in src, (
+        "the cumulative line lost its white halo -- it is what makes a "
+        "same-hue line legible over the bars")
+    assert 'data-cumulative-line=""' in src
+
+
+def test_cost_by_context_hover_matches_the_reference():
+    """Hover is on the CONTAINER (the tooltip's offsetParent) and guarded
+    to the plot area, so the tip does not appear over the header or the
+    x-axis gutter -- both straight from TimeSeriesPanel."""
+    src = _panel_src("CostByContextPanel")
+    m = re.search(r"function onMove\(e\) \{(.*?)\n  \}", src, re.S)
+    assert m, "could not locate the panel's hover handler"
+    body = m.group(1)
+    assert "ref.current.getBoundingClientRect()" in body, (
+        "hover must measure against the container, not the <svg>")
+    assert "my < padT || my > padT + plotH" in body, (
+        "hover must be guarded to the plot area")
+    assert "onMouseMove={onMove}" in src and "onMouseLeave" in src
