@@ -3013,7 +3013,16 @@ function ActivityHeatmapPanel({ models, project, range, nonce }) {
 // label ("1000k+") instead, which is secondary encoding rather than
 // another hue.
 const BAR_COLOR = (COL_X && COL_X.costUSD) || 'oklch(0.85 0.14 90)';
-const CUM_COLOR = (COL_X && COL_X.totalTokens) || 'oklch(0.78 0.14 245)';
+// The cumulative line is a NEUTRAL bright stroke, not a peer series
+// hue, and the bars are dimmed to let it read. Measured, not eyeballed:
+// against gold bars at the old 0.85 opacity a blue line scored 1.07:1 —
+// the same luminance, which is why it vanished. Sweeping line colour x
+// bar opacity for the best WORST-CASE contrast (the line over a bar, and
+// a bar over the surface, are both constraints) puts white at 0.55 on
+// 4.25:1, versus 2.99:1 for the best blue. Separation is by lightness
+// rather than hue, so it holds under every CVD simulation for free.
+const CUM_COLOR = '#ffffff';
+const BAR_OPACITY = 0.55;
 
 function CostByContextPanel({ models, project, range, nonce }) {
   const ref = React.useRef(null);
@@ -3164,7 +3173,8 @@ function CostByContextPanel({ models, project, range, nonce }) {
         <div style={{ display: 'inline-flex', alignItems: 'center', gap: 12, fontFamily: 'monospace', fontSize: 11, color: TH_X.textDim }}>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
             <svg width={14} height={10} aria-hidden="true">
-              <rect x={0} y={0} width={14} height={10} rx={2} fill={BAR_COLOR} />
+              <rect x={0} y={0} width={14} height={10} rx={2} fill={BAR_COLOR}
+                    opacity={BAR_OPACITY} />
             </svg>
             cost
           </span>
@@ -3218,24 +3228,13 @@ function CostByContextPanel({ models, project, range, nonce }) {
                 width={Math.max(1, bw - 2)}
                 height={Math.max(0, plotH + padT - yCost(b.cost))}
                 fill={BAR_COLOR}
-                opacity={0.85} />
+                opacity={BAR_OPACITY} />
         ))}
 
         {cumPath && (
-          <g>
-            {/* Surface ring — same path, same dash pattern, drawn first
-                in the surface colour so each dash carries its own halo
-                where it crosses a bar. Without it the line disappears
-                into the gold: L 0.78 vs L 0.85 is no lightness delta,
-                and hue alone will not separate a 2px stroke from a
-                filled field. */}
-            <path d={`M ${cumPath}`} fill="none"
-                  stroke={TH_X.bgAxes} strokeWidth={6}
-                  strokeDasharray="4 3" strokeLinecap="round" />
-            <path d={`M ${cumPath}`} fill="none"
-                  stroke={CUM_COLOR} strokeWidth={2}
-                  strokeDasharray="4 3" strokeLinecap="round" />
-          </g>
+          <path d={`M ${cumPath}`} fill="none"
+                stroke={CUM_COLOR} strokeWidth={2}
+                strokeDasharray="4 3" strokeLinecap="round" />
         )}
 
         {bars.map((b, i) => (
