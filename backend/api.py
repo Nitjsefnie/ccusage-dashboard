@@ -39,7 +39,8 @@ from backend.api_dashboard import router as dashboard_router
 from backend.api_export import router as export_router
 from backend.api_sessions import router as sessions_router
 from backend.cache import cache_response
-from backend.constants import LATENCY_BUCKETS
+from backend.constants import (CTX_BUCKET_MAX, CTX_BUCKET_WIDTH,
+                               LATENCY_BUCKETS)
 
 router = APIRouter(prefix="/api")
 router.include_router(export_router)
@@ -551,6 +552,117 @@ async def event_stream(request: Request):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+def _cost_by_context_sql(rng: str, project: str | None,
+                         model: str | None) -> tuple[str, list]:
+    """(sql, args) for the cost-by-context-bucket query.
+
+    Reads `ctx_cost_rollup` (hour x project x model x ctx_bucket), whose
+    stored columns are pure sums and therefore compose across every one
+    of those dimensions -- so a project or model filter selects whole
+    rows and the rest simply sum.
+
+    The 24h view takes a live pass over `records` instead. Not for the
+    reason /api/dashboard gates (its display bucket goes finer than the
+    rollup's hour): this panel's x-axis is context, not time, so the
+    grain is never too coarse. Time enters only as the range EDGE, and
+    at hour resolution that edge can include or drop up to an hour of
+    records -- invisible over 30d, plainly wrong over 24h.
+    """
+    args: list[Any] = []
+    since = datetime.now(timezone.utc) - _parse_range(rng)
+    if rng == "1d":
+        bucket_expr = f"""
+            CASE WHEN r.fresh_tokens + r.cache_creation_tokens
+                      + r.cache_read_tokens >= {CTX_BUCKET_MAX}
+                 THEN {CTX_BUCKET_MAX}
+                 WHEN r.fresh_tokens + r.cache_creation_tokens
+                      + r.cache_read_tokens <= 0 THEN 0
+                 ELSE ((r.fresh_tokens + r.cache_creation_tokens
+                        + r.cache_read_tokens) / {CTX_BUCKET_WIDTH})
+                      * {CTX_BUCKET_WIDTH}
+            END"""
+        args.append(since)
+        tail = ""
+        if project:
+            tail += " AND f.project_id = %s"
+            args.append(project)
+        if model:
+            tail += " AND r.model LIKE %s"
+            args.append(f"%{model}%")
+        return (f"""
+            SELECT {bucket_expr} AS ctx_bucket,
+                   COUNT(*)      AS requests,
+                   SUM(r.cost_usd) AS cost_usd
+              FROM records r
+              JOIN files f ON f.file_key = r.file_key
+             WHERE r.is_canonical AND r.ts IS NOT NULL
+               AND r.ts >= %s {tail}
+             GROUP BY 1 ORDER BY 1
+            """, args)
+
+    args.append(since)
+    tail = ""
+    if project:
+        tail += " AND project_id = %s"
+        args.append(project)
+    if model:
+        tail += " AND model LIKE %s"
+        args.append(f"%{model}%")
+    return (f"""
+        SELECT ctx_bucket,
+               SUM(requests) AS requests,
+               SUM(cost_usd) AS cost_usd
+          FROM ctx_cost_rollup
+         WHERE hour >= date_trunc('hour', %s::timestamptz) {tail}
+         GROUP BY 1 ORDER BY 1
+        """, args)
+
+
+@router.get("/cost-by-context")
+@cache_response
+def cost_by_context(
+    rng: str = Query("30d", alias="range"),
+    project: str | None = Query(None),
+    model: str | None = Query(None),
+) -> dict:
+    """Cost distributed across per-call context size.
+
+    Bars are dollars spent at each 50k-wide context bucket; `cum_share`
+    is the running fraction of the range's total cost, which is what
+    answers "how much of my spend happens above N tokens of context".
+    The top bucket is open-ended (see constants.ctx_bucket).
+
+    Context per call is fresh + cache_creation + cache_read, i.e. what
+    the request was billed for reading.
+    """
+    sql, args = _cost_by_context_sql(rng, project, model)
+    with db.viz_conn() as c:
+        rows = c.execute(db.sql_text(sql), args).fetchall()
+
+    total = sum(float(cost or 0) for (_, _, cost) in rows)
+    buckets = []
+    running = 0.0
+    for (edge, n, cost) in rows:
+        running += float(cost or 0)
+        buckets.append({
+            "ctx_bucket": int(edge),
+            "requests": int(n or 0),
+            "cost_usd": float(cost or 0),
+            # Guard the empty range: no rows means no division, but a
+            # range whose rows all cost 0 would divide by zero here.
+            "cum_share": (running / total) if total else 0.0,
+        })
+    return {
+        "range": rng,
+        "project": project,
+        "model": model,
+        "bucket_width": CTX_BUCKET_WIDTH,
+        "bucket_max": CTX_BUCKET_MAX,
+        "total_cost_usd": total,
+        "buckets": buckets,
+    }
 
 
 @router.get("/models")

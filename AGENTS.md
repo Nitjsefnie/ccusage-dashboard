@@ -7,7 +7,7 @@
 
 **claudit** (Claude Code Usage Dashboard) is a self-hosted web application that visualises Claude Code session JSONL transcripts. It ingests transcripts from Cloudflare R2 (or a local `file://` mirror), parses them into Postgres, and serves dashboards and raw transcripts to a React frontend rendered via in-browser Babel (no npm/build step).
 
-The dashboard panels include: Session Burn Rate, Cost by Model, Token Breakdown, Prompt-Cache TTL Split, Per-Session Context Growth, Response Sizes, Tool Usage Ratio, Reply Latency, Tool Error Rate, Activity Heatmap, and Lines Added/Deleted (per-call churn from tool call arguments, stored on `tool_uses`) — Edit/Write plus the Bash shapes whose line counts are readable straight off the command text.
+The dashboard panels include: Session Burn Rate, Cost by Model, Token Breakdown, Prompt-Cache TTL Split, Per-Session Context Growth, Response Sizes, Tool Usage Ratio, Reply Latency, Tool Error Rate, Activity Heatmap, Cost by Context Size, and Lines Added/Deleted (per-call churn from tool call arguments, stored on `tool_uses`) — Edit/Write plus the Bash shapes whose line counts are readable straight off the command text.
 
 ## Technology stack
 

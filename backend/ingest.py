@@ -35,8 +35,8 @@ from backend.api_dashboard import dashboard
 # resolving after the split; _rebuild_derived_state below is their
 # only in-module caller.
 from backend.ingest_rollups import (  # noqa: F401  (re-export)
-    purge_suppressed, rebuild_latency_rollup, rebuild_rollup,
-    rebuild_tool_rollup, recompute_canonical,
+    purge_suppressed, rebuild_ctx_cost_rollup, rebuild_latency_rollup,
+    rebuild_rollup, rebuild_tool_rollup, recompute_canonical,
 )
 
 log = logging.getLogger("claudit.ingest")
@@ -312,6 +312,8 @@ def _rebuild_derived_state() -> None:
     rebuild_tool_rollup()
     _set_progress(phase="latency_rollup")
     rebuild_latency_rollup()
+    _set_progress(phase="ctx_cost_rollup")
+    rebuild_ctx_cost_rollup()
 
 
 def _walk_and_persist(parser_version: str,

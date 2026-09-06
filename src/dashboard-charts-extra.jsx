@@ -2995,6 +2995,214 @@ function ActivityHeatmapPanel({ models, project, range, nonce }) {
   );
 }
 
+// ──────────────────────────────────────────────────────────────────────
+// Cost by Context Size — where the money goes across the window
+// ──────────────────────────────────────────────────────────────────────
+
+function CostByContextPanel({ models, project, range, nonce }) {
+  const ref = React.useRef(null);
+  const [w, setW] = React.useState(1200);
+  const [tip, setTip] = React.useState(null);
+  const [data, setData] = React.useState([]);
+  const [meta, setMeta] = React.useState({ bucket_width: 50000, bucket_max: 1000000, total_cost_usd: 0 });
+  // Per-panel model filter, same convention as ToolUsagePanel: drill into
+  // one model without disturbing the other panels.
+  const [activeModel, setActiveModel] = React.useState('');
+
+  React.useEffect(() => {
+    if (!ref.current) return;
+    const ro = new ResizeObserver(es => setW(es[0].contentRect.width));
+    ro.observe(ref.current);
+    return () => ro.disconnect();
+  }, []);
+
+  React.useEffect(() => {
+    const q = (project ? `&project=${encodeURIComponent(project)}` : '')
+            + (activeModel ? `&model=${encodeURIComponent(activeModel)}` : '');
+    fetch(`/api/cost-by-context?range=${range || 'all'}${q}`, { credentials: 'same-origin' })
+      .then(r => r.json())
+      .then(b => {
+        setData(b.buckets || []);
+        setMeta({
+          bucket_width: b.bucket_width || 50000,
+          bucket_max: b.bucket_max || 1000000,
+          total_cost_usd: b.total_cost_usd || 0,
+        });
+      })
+      .catch(err => console.error('cost-by-context fetch failed', err));
+  }, [project, range, activeModel, nonce]);
+
+  const modelOpts = React.useMemo(() => {
+    const grouped = {};
+    for (const m of models || []) {
+      const key = window.shortModelName ? window.shortModelName(m.model) : m.model;
+      if (key === '<synthetic>' || key === 'synthetic') continue;
+      grouped[key] = (grouped[key] || 0) + (m.n || 0);
+    }
+    return Object.entries(grouped)
+      .sort((a, b) => b[1] - a[1])
+      .map(([k, n]) => ({ key: k, n }));
+  }, [models]);
+
+  // Every bucket from 0 to the overflow edge, so an empty bucket renders
+  // as a gap rather than silently closing the gap between its neighbours
+  // — the x-axis is a real number line, not a category list.
+  const bars = React.useMemo(() => {
+    const byEdge = new Map();
+    for (const b of data) byEdge.set(b.ctx_bucket, b);
+    const out = [];
+    let running = 0;
+    for (let e = 0; e <= meta.bucket_max; e += meta.bucket_width) {
+      const hit = byEdge.get(e);
+      running += hit ? hit.cost_usd : 0;
+      out.push({
+        edge: e,
+        cost: hit ? hit.cost_usd : 0,
+        requests: hit ? hit.requests : 0,
+        cum: meta.total_cost_usd ? running / meta.total_cost_usd : 0,
+        overflow: e === meta.bucket_max,
+      });
+    }
+    return out;
+  }, [data, meta]);
+
+  const maxCost = React.useMemo(
+    () => Math.max(1e-9, ...bars.map(b => b.cost)), [bars]);
+
+  const padL = 62, padR = 52, padT = 16, padB = 34;
+  const h = 320;
+  const plotW = Math.max(20, w - padL - padR);
+  const plotH = h - padT - padB;
+  const bw = plotW / Math.max(1, bars.length);
+  const yCost = c => padT + plotH - (c / maxCost) * plotH;
+  const yShare = f => padT + plotH - f * plotH;
+
+  const cumPath = React.useMemo(() => {
+    if (!bars.length) return '';
+    return bars
+      .map((b, i) => `${padL + i * bw + bw / 2},${yShare(b.cum)}`)
+      .join(' L ');
+  }, [bars, bw, plotW, plotH]);
+
+  // The headline the panel exists to give: the share of spend above the
+  // context size where the cumulative curve crosses 50%.
+  const medianEdge = React.useMemo(() => {
+    for (const b of bars) if (b.cum >= 0.5) return b.edge;
+    return null;
+  }, [bars]);
+
+  const fmtTok = t => (t >= 1000 ? `${Math.round(t / 1000)}k` : String(t));
+  const fmtUsd = v => (v >= 1000 ? `$${(v / 1000).toFixed(1)}k` : `$${v.toFixed(v < 10 ? 2 : 0)}`);
+
+  function onMove(e) {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+    const i = Math.floor((mx - padL) / bw);
+    if (i < 0 || i >= bars.length) { setTip(null); return; }
+    const b = bars[i];
+    const lo = fmtTok(b.edge);
+    const hi = b.overflow ? '∞' : fmtTok(b.edge + meta.bucket_width);
+    setTip({
+      x: mx, y: my,
+      title: `${lo}–${hi} ctx tokens`,
+      accent: COL_X ? COL_X[0] : '#7aa2f7',
+      lines: [
+        ['cost', `$${b.cost.toFixed(2)}`],
+        ['share', meta.total_cost_usd
+          ? `${(b.cost / meta.total_cost_usd * 100).toFixed(1)}%` : '0%'],
+        ['cumulative', `${(b.cum * 100).toFixed(1)}% of spend at or below`],
+        ['requests', b.requests.toLocaleString()],
+        ['$/request', b.requests ? `$${(b.cost / b.requests).toFixed(4)}` : '—'],
+      ],
+    });
+  }
+
+  return (
+    <div ref={ref} style={{
+      background: TH_X.bgAxes, border: `1px solid ${TH_X.border}`,
+      borderRadius: 4, padding: 0, position: 'relative',
+      display: 'flex', flexDirection: 'column',
+    }}>
+      <div style={{ padding: '10px 14px 4px', borderBottom: `1px solid ${TH_X.border}`, display: 'flex', alignItems: 'center', gap: 16 }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ color: TH_X.text, fontFamily: 'monospace', fontWeight: 700, fontSize: 14 }}>
+            Cost by Context Size
+          </div>
+          <div style={{ color: TH_X.textDim, fontFamily: 'monospace', fontSize: 10, marginTop: 2 }}>
+            $ per {fmtTok(meta.bucket_width)} context bucket · cumulative share (right axis) · context = fresh + cache-create + cache-read
+            {medianEdge !== null
+              ? ` · half of all spend sits above ${fmtTok(medianEdge)}`
+              : ''}
+          </div>
+        </div>
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontFamily: 'monospace', fontSize: 11, color: TH_X.textDim }}>
+          <span>model:</span>
+          <select
+            value={activeModel}
+            onChange={e => setActiveModel(e.target.value)}
+            style={{
+              background: '#16172e', color: TH_X.text,
+              border: `1px solid ${TH_X.border}`, borderRadius: 4,
+              padding: '3px 6px', fontFamily: 'monospace', fontSize: 11,
+              cursor: 'pointer',
+            }}
+          >
+            <option value="">All</option>
+            {modelOpts.map(o => (
+              <option key={o.key} value={o.key}>{o.key}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      <svg width={w} height={h} onMouseMove={onMove} onMouseLeave={() => setTip(null)}>
+        {[0, 0.25, 0.5, 0.75, 1].map(f => (
+          <g key={f}>
+            <line x1={padL} x2={padL + plotW} y1={yCost(maxCost * f)} y2={yCost(maxCost * f)}
+                  stroke={TH_X.grid} strokeWidth={1} />
+            <text x={padL - 8} y={yCost(maxCost * f) + 4} textAnchor="end"
+                  fill={TH_X.textDim} fontFamily="monospace" fontSize={10}>
+              {fmtUsd(maxCost * f)}
+            </text>
+            <text x={padL + plotW + 8} y={yShare(f) + 4} textAnchor="start"
+                  fill={TH_X.textDim} fontFamily="monospace" fontSize={10}>
+              {Math.round(f * 100)}%
+            </text>
+          </g>
+        ))}
+
+        {bars.map((b, i) => (
+          <rect key={b.edge}
+                x={padL + i * bw + 1} y={yCost(b.cost)}
+                width={Math.max(1, bw - 2)}
+                height={Math.max(0, plotH + padT - yCost(b.cost))}
+                fill={b.overflow ? (COL_X ? COL_X[3] : '#bb9af7') : (COL_X ? COL_X[0] : '#7aa2f7')}
+                opacity={0.85} />
+        ))}
+
+        {cumPath && (
+          <path d={`M ${cumPath}`} fill="none"
+                stroke={COL_X ? COL_X[1] : '#f7768e'} strokeWidth={2}
+                strokeDasharray="4 3" />
+        )}
+
+        {bars.map((b, i) => (
+          (i % Math.max(1, Math.round(bars.length / 10)) === 0 || b.overflow) ? (
+            <text key={`x${b.edge}`} x={padL + i * bw + bw / 2} y={h - 12}
+                  textAnchor="middle" fill={TH_X.textDim}
+                  fontFamily="monospace" fontSize={10}>
+              {b.overflow ? `${fmtTok(b.edge)}+` : fmtTok(b.edge)}
+            </text>
+          ) : null
+        ))}
+      </svg>
+
+      {tip && <window.DashTooltip {...tip} />}
+    </div>
+  );
+}
+
+
 window.CacheTTLPanel = CacheTTLPanel;
 window.ContextGrowthPanel = ContextGrowthPanel;
 window.DashTooltip = DashTooltip;
@@ -3005,3 +3213,4 @@ window.ToolUsagePanel = ToolUsagePanel;
 window.ActivityHeatmapPanel = ActivityHeatmapPanel;
 window.ToolErrorRatePanel = ToolErrorRatePanel;
 window.ReplyLatencyPanel = ReplyLatencyPanel;
+window.CostByContextPanel = CostByContextPanel;

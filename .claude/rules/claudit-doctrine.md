@@ -198,6 +198,21 @@ rebuild or clear it, or reads serve a stale pre-aggregate. Totals are
 verified equal to the equivalent `records` aggregate (requests, tokens,
 cost, distinct sessions) — keep that true.
 
+`ctx_cost_rollup` is the third of the composable kind, grain
+`(hour, project_id, model, ctx_bucket)` holding `requests` + `cost_usd`.
+It exists because `usage_rollup` CANNOT serve a cost-by-context panel:
+that grain sums fresh/create/read across a whole (session, hour, model),
+which destroys the PER-CALL window size the x-axis is made of. Bucketing
+by that window at ingest keeps it, and the stored columns are pure sums,
+so they compose across hours, projects and models alike.
+
+Its bucket edges (`constants.CTX_BUCKET_WIDTH` / `CTX_BUCKET_MAX`) are
+baked into stored rows exactly like `LATENCY_BUCKETS`: a read cannot
+re-bucket to a different width, so changing either constant requires a
+rollup rebuild. It does NOT require a `PARSER_VERSION` bump — the
+context size is derived from stored `records` columns
+(`fresh + cache_creation + cache_read`), not from a reparse.
+
 `records` cascades from `files`; `files` cascades from `projects`.
 Reparse is idempotent: deleting a file's `records` rows and
 re-inserting on the next ingest leaves the table byte-identical.

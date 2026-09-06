@@ -850,6 +850,16 @@ function Dashboard({ synth, models, backendOn, activeProject, activeRange, dashN
       )}
 
       {backendOn && (
+        <div className="dash-ctx-cost">
+          <window.CostByContextPanel
+            models={models}
+            project={activeProject}
+            range={activeRange}
+            nonce={dashNonce} />
+        </div>
+      )}
+
+      {backendOn && (
         <div className="dash-heatmap">
           <window.ActivityHeatmapPanel
             models={models}

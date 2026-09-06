@@ -480,6 +480,73 @@ def test_per_object_failure_still_rebuilds_derived_state(
     assert tool_rollup_after > 0, "tool_rollup was not rebuilt"
 
 
+def test_ctx_cost_rollup_totals_equal_the_live_aggregate(
+    fresh_db, mini_r2_env
+):
+    """SV-ROLLUP: the pre-aggregate stands in for a live pass, so the
+    per-bucket request counts and cost must match it exactly.
+
+    The live expression is written out longhand rather than reusing the
+    builder's, so a wrong bucket expression cannot agree with itself.
+    """
+    ingest.run_ingest(trigger="manual")
+    with db.viz_conn() as c:
+        live = c.execute(
+            """
+            SELECT CASE
+                     WHEN fresh_tokens + cache_creation_tokens
+                          + cache_read_tokens >= 1000000 THEN 1000000
+                     WHEN fresh_tokens + cache_creation_tokens
+                          + cache_read_tokens <= 0 THEN 0
+                     ELSE ((fresh_tokens + cache_creation_tokens
+                            + cache_read_tokens) / 50000) * 50000
+                   END AS ctx_bucket,
+                   COUNT(*), SUM(cost_usd)
+              FROM records
+             WHERE is_canonical AND ts IS NOT NULL
+             GROUP BY 1 ORDER BY 1
+            """
+        ).fetchall()
+        rolled = c.execute(
+            "SELECT ctx_bucket, SUM(requests), SUM(cost_usd) "
+            "FROM ctx_cost_rollup GROUP BY 1 ORDER BY 1"
+        ).fetchall()
+    assert live, "fixture produced no records - the test proves nothing"
+    assert [(int(b), int(n), round(cost, 6)) for b, n, cost in rolled] == \
+           [(int(b), int(n), round(cost, 6)) for b, n, cost in live]
+
+
+def test_ctx_cost_rollup_counts_only_canonical_rows(fresh_db, mini_r2_env):
+    """It reads is_canonical, so the mini mirror's cross-file duplicate
+    must be counted once, not twice."""
+    ingest.run_ingest(trigger="manual")
+    with db.viz_conn() as c:
+        dupes = _scalar(
+            c, "SELECT COUNT(*) FROM records WHERE NOT is_canonical")
+        rolled = _scalar(c, "SELECT SUM(requests) FROM ctx_cost_rollup")
+        canonical = _scalar(
+            c, "SELECT COUNT(*) FROM records "
+               "WHERE is_canonical AND ts IS NOT NULL")
+    assert dupes > 0, "fixture has no duplicates - the test proves nothing"
+    assert rolled == canonical
+
+
+def test_ctx_cost_rollup_is_rebuilt_after_every_run(fresh_db, mini_r2_env):
+    """Derived state: wrecking it and re-running must restore it, the
+    same guarantee usage_rollup and tool_rollup carry."""
+    ingest.run_ingest(trigger="manual")
+    with db.viz_conn() as c:
+        before = _scalar(c, "SELECT COUNT(*) FROM ctx_cost_rollup")
+    assert before > 0, "fixture proves nothing"
+    with db.viz_conn() as c:
+        c.execute("TRUNCATE ctx_cost_rollup")
+        c.commit()
+    ingest.run_ingest(trigger="manual")
+    with db.viz_conn() as c:
+        after = _scalar(c, "SELECT COUNT(*) FROM ctx_cost_rollup")
+    assert after == before, "ctx_cost_rollup was not rebuilt"
+
+
 def test_a_transient_fetch_failure_is_retried_and_recovers(
     fresh_db, mini_r2_env, monkeypatch
 ):

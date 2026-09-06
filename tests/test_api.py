@@ -168,6 +168,47 @@ def _app_with_fresh_data_fixture():
         mp.undo()
 
 
+def test_cost_by_context_buckets_and_cumulative_share(app_with_data):
+    """Bars + cumulative share. The panel's whole reading is 'what
+    fraction of spend sits above N tokens of context', so the cumulative
+    column has to be monotonic and land on 1.0 at the last bucket."""
+    r = app_with_data.get("/api/cost-by-context?range=all")
+    assert r.status_code == 200
+    body = r.json()
+    buckets = body["buckets"]
+    assert buckets, "fixture produced no buckets"
+
+    edges = [b["ctx_bucket"] for b in buckets]
+    assert edges == sorted(edges), "buckets must be ordered by context size"
+    assert all(e % 50_000 == 0 for e in edges), "edges must be 50k-aligned"
+    assert all(b["requests"] > 0 for b in buckets)
+
+    cum = [b["cum_share"] for b in buckets]
+    assert cum == sorted(cum), "cumulative share must be monotonic"
+    assert cum[-1] == pytest.approx(1.0)
+
+    total = sum(b["cost_usd"] for b in buckets)
+    assert body["total_cost_usd"] == pytest.approx(total)
+
+
+def test_cost_by_context_bad_range_400(app_with_data):
+    assert app_with_data.get(
+        "/api/cost-by-context?range=banana").status_code == 400
+
+
+def test_cost_by_context_model_filter_subsets(app_with_data):
+    """A model filter must never widen the result: it selects whole
+    (bucket, model) rows out of the rollup."""
+    allm = app_with_data.get("/api/cost-by-context?range=all").json()
+    models = app_with_data.get("/api/models").json()["models"]
+    assert models, "fixture has no models"
+    top = models[0]["model"]          # rows are {model, n}, not strings
+    one = app_with_data.get(
+        f"/api/cost-by-context?range=all&model={top}").json()
+    assert one["total_cost_usd"] <= allm["total_cost_usd"] + 1e-9
+    assert one["total_cost_usd"] > 0
+
+
 def test_projects(app_with_data):
     r = app_with_data.get("/api/projects")
     assert r.status_code == 200

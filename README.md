@@ -38,6 +38,9 @@ Reply Latency, Tool Error Rate — is based on
 ports those matplotlib-only offline visualisations into a hosted SVG/React app
 with multi-user auth, R2 ingest, and live updates.
 
+Panels with no upstream counterpart — Activity Heatmap, Lines Added/Deleted
+and Cost by Context Size — originate here.
+
 ## Features
 
 - **Cost-by-model** breakdown with the canonical 5-minute / 1-hour
@@ -77,6 +80,14 @@ with multi-user auth, R2 ingest, and live updates.
   Czech local time (`Europe/Prague`, DST-aware via Postgres
   `AT TIME ZONE`), with requests / output-tokens / cost metric toggle
   and a per-panel model filter, plus Σ margin totals per weekday and per hour.
+- **Cost by Context Size** — dollars spent at each 50k-wide
+  context bucket, with a cumulative-share line answering "what
+  fraction of my spend happens above N tokens of context". Context
+  per call is fresh + cache-create + cache-read; the top bucket is
+  open-ended so the `[1m]` variants are not dropped. Precomputed at
+  ingest into `ctx_cost_rollup`, which `usage_rollup` cannot serve —
+  its grain sums tokens across an hour and destroys the per-call
+  window size the x-axis is made of.
 - **Lines Added / Deleted** — per-call line churn read off the
   tool arguments. Edit and Write are the obvious sources; under
   bypass permissions most editing goes through Bash instead, so
@@ -113,6 +124,7 @@ Postgres `claudit`
 FastAPI  →  /api/dashboard, /api/cache, /api/context-growth/*,
             /api/sessions, /api/sessions/{id}/transcript,
             /api/tool-usage, /api/tool-error-rate,
+            /api/cost-by-context,
             /api/reply-latency, /api/models,
             /api/events, /api/export
   ↓

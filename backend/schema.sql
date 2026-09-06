@@ -138,6 +138,36 @@ ALTER TABLE tool_rollup ADD COLUMN IF NOT EXISTS
 CREATE INDEX IF NOT EXISTS tool_rollup_hour_idx ON tool_rollup (hour);
 CREATE INDEX IF NOT EXISTS tool_rollup_project_idx ON tool_rollup (project_id, hour);
 
+-- Pre-aggregated cost-by-context-size for /api/cost-by-context.
+--
+-- `usage_rollup` cannot serve this panel: its grain sums fresh/create/
+-- read across a whole (session, hour, model), which destroys the
+-- PER-CALL window size the x-axis is made of. Bucketing by that window
+-- at ingest keeps it, and what is stored are pure sums, so they compose
+-- across hours, projects and models exactly like tool_rollup's do.
+--
+-- ctx_bucket is the bucket's LOWER EDGE in tokens (0, 50000, ...,
+-- 1000000), from constants.ctx_bucket(); the top bucket is open-ended
+-- and holds every call at or above CTX_BUCKET_MAX, which is not
+-- hypothetical -- the [1m] model variants exceed it.
+--
+-- Derived from stored `records` columns (fresh + cache_creation +
+-- cache_read), so widening the buckets needs a rollup rebuild but NOT a
+-- PARSER_VERSION bump and NOT a reparse.
+CREATE TABLE IF NOT EXISTS ctx_cost_rollup (
+  hour        TIMESTAMPTZ NOT NULL,
+  project_id  TEXT        NOT NULL,
+  model       TEXT        NOT NULL,
+  ctx_bucket  BIGINT      NOT NULL,
+  requests    BIGINT      NOT NULL DEFAULT 0,
+  cost_usd    NUMERIC(18,8) NOT NULL DEFAULT 0,
+  PRIMARY KEY (hour, project_id, model, ctx_bucket)
+);
+CREATE INDEX IF NOT EXISTS ctx_cost_rollup_hour_idx
+  ON ctx_cost_rollup (hour);
+CREATE INDEX IF NOT EXISTS ctx_cost_rollup_project_idx
+  ON ctx_cost_rollup (project_id, hour);
+
 -- Pre-aggregated reply-latency bands + outlier dots for /api/reply-latency.
 --
 -- Percentiles do NOT compose across buckets, so unlike usage_rollup this
