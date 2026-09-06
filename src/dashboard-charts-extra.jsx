@@ -2999,6 +2999,13 @@ function ActivityHeatmapPanel({ models, project, range, nonce }) {
 // Cost by Context Size — where the money goes across the window
 // ──────────────────────────────────────────────────────────────────────
 
+// COL is keyed by SERIES NAME, not indexed — COL_X[0] is undefined, and
+// an SVG rect with fill=undefined renders BLACK while a path with
+// stroke=undefined renders nothing at all. Name the keys.
+const BAR_COLOR      = (COL_X && COL_X.costUSD) || 'oklch(0.85 0.14 90)';
+const OVERFLOW_COLOR = (COL_X && COL_X.cacheCreateTokens) || 'oklch(0.72 0.14 305)';
+const CUM_COLOR      = (COL_X && COL_X.totalTokens) || 'oklch(0.78 0.14 245)';
+
 function CostByContextPanel({ models, project, range, nonce }) {
   const ref = React.useRef(null);
   const [w, setW] = React.useState(1200);
@@ -3105,7 +3112,7 @@ function CostByContextPanel({ models, project, range, nonce }) {
     setTip({
       x: mx, y: my,
       title: `${lo}–${hi} ctx tokens`,
-      accent: COL_X ? COL_X[0] : '#7aa2f7',
+      accent: b.overflow ? OVERFLOW_COLOR : BAR_COLOR,
       lines: [
         ['cost', `$${b.cost.toFixed(2)}`],
         ['share', meta.total_cost_usd
@@ -3176,13 +3183,13 @@ function CostByContextPanel({ models, project, range, nonce }) {
                 x={padL + i * bw + 1} y={yCost(b.cost)}
                 width={Math.max(1, bw - 2)}
                 height={Math.max(0, plotH + padT - yCost(b.cost))}
-                fill={b.overflow ? (COL_X ? COL_X[3] : '#bb9af7') : (COL_X ? COL_X[0] : '#7aa2f7')}
+                fill={b.overflow ? OVERFLOW_COLOR : BAR_COLOR}
                 opacity={0.85} />
         ))}
 
         {cumPath && (
           <path d={`M ${cumPath}`} fill="none"
-                stroke={COL_X ? COL_X[1] : '#f7768e'} strokeWidth={2}
+                stroke={CUM_COLOR} strokeWidth={2}
                 strokeDasharray="4 3" />
         )}
 
@@ -3197,7 +3204,7 @@ function CostByContextPanel({ models, project, range, nonce }) {
         ))}
       </svg>
 
-      {tip && <window.DashTooltip {...tip} />}
+      {tip && <window.DashTooltip tip={tip} />}
     </div>
   );
 }
