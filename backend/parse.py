@@ -35,6 +35,25 @@ _INSTRUMENTATION_USER_PREFIXES = (
     "<command-args>",
 )
 _INTERRUPT_MARKER = "[Request interrupted by user"
+# A `type:"assistant"` record with isApiErrorMessage=True and
+# error="rate_limit" IS an account-cap hit unless its text matches one
+# of these. Matching the exceptions (a deny-list) rather than the
+# wanted wordings is deliberate: the cap wording has already moved
+# twice ("You're out of extra usage" → "You've hit your weekly limit"
+# 2026-08 → "You've hit your session limit" 2026-09), and an allow-list
+# stops counting SILENTLY when it moves again, whereas a missed
+# exception over-counts visibly. Every entry below was found by
+# enumerating each distinct error/text pair in the live corpus, not
+# guessed:
+#   "temporarily limiting"  transient per-minute 429 (n=32)
+#   "request rejected (429)" per-request 429 from a proxy lane (n=1)
+#   "currently unavailable"  model availability, mislabelled
+#                            error="rate_limit" (n=4)
+_TRANSIENT_RATE_LIMIT_MARKERS = (
+    "server is temporarily limiting requests",
+    "request rejected (429)",
+    "currently unavailable",
+)
 
 
 def _merge_usage_max(existing, incoming):
@@ -267,12 +286,11 @@ class _LineWalk:
         the record was consumed — a rate-limit error record carries no
         usage, so there is nothing else to do with it.
 
-        Detection (per analyst, 2026-05-07): hits live on type:"assistant"
-        records with isApiErrorMessage=True and error="rate_limit", and
-        the message text contains "out of extra usage". Per-minute API
-        429s also have error="rate_limit" but say "Server is temporarily
-        limiting requests" — those are ignored (text-match on "out of
-        extra usage" is the reliable signal).
+        Detection: hits live on type:"assistant" records with
+        isApiErrorMessage=True and error="rate_limit". That shape IS
+        the signal; the text is consulted only to drop the transient
+        per-minute 429 (_TRANSIENT_RATE_LIMIT_MARKERS), which is a
+        retry rather than an account cap.
         """
         if not (
             obj.get("type", "") == "assistant"
@@ -286,7 +304,8 @@ class _LineWalk:
             for c in content_list
             if isinstance(c, dict) and c.get("type") == "text"
         )
-        if "out of extra usage" in joined.lower():
+        low = joined.lower()
+        if not any(m in low for m in _TRANSIENT_RATE_LIMIT_MARKERS):
             self.rate_limit_hits.append({
                 "line": line_num,
                 "ts": obj.get("timestamp", "") or "",
@@ -571,9 +590,11 @@ def parse_file(file_key: str, blob: bytes) -> dict:
 
     rate_limit_hits: list of dicts with keys
       line, ts (string ISO), content
-    Detected by mirroring src/parser.js: any `type:"system"` line whose
-    content+subtype lower-cased contains "rate limit", "rate_limit", or
-    "429".
+    Detected on `type:"assistant"` records carrying
+    isApiErrorMessage=True and error="rate_limit" — see
+    _LineWalk.handle_rate_limit. (src/parser.js keys off a different
+    shape, `type:"system"` lines mentioning a rate limit; the two are
+    independent detectors over the same transcripts.)
 
     records + ctx_turns are AFTER Phase 1 within-file requestId max-merge.
     Records WITHOUT a request_id are NOT dedup'd (each kept distinct).

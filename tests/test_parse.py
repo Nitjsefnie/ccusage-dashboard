@@ -308,6 +308,26 @@ def test_reply_latency_terminated_by_rate_limit_reply():
     assert len(out["rate_limit_hits"]) == 1
 
 
+def test_rate_limit_detection_is_shape_based_not_wording_based():
+    """Every `error: "rate_limit"` record is a hit EXCEPT the transient
+    per-minute 429. Regression: the detector allow-listed the single
+    wording "out of extra usage", so when Claude Code switched to
+    "You've hit your weekly limit" the hits stopped being recorded —
+    silently, with the old wording still matching so nothing looked
+    broken. Live corpus: no hit booked after 2026-05-06 despite a real
+    weekly limit on 2026-08-09."""
+    out = parse.parse_file(
+        "k/sess-rlw/sess-rlw.jsonl", _read("rate_limit_weekly.jsonl")
+    )
+    hits = out["rate_limit_hits"]
+    # 1 weekly cap, 3 legacy "out of extra usage", 4 session cap.
+    # 2 transient 429, 5 model-unavailable, 6 proxy 429 are NOT caps.
+    assert [h["line"] for h in hits] == [1, 3, 4]
+    assert "weekly limit" in hits[0]["content"]
+    assert "out of extra usage" in hits[1]["content"]
+    assert "session limit" in hits[2]["content"]
+
+
 def test_edit_call_yields_added_deleted_counts():
     """Edit churn comes from the CALL arguments (old_string/new_string),
     not the result text: 2-line old → 4-line new is deleted=2, added=4.
